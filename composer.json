@@ -1,5 +1,5 @@
 {
-    "name": "leettech/laravel-notification-zapmizer",
+    "name": "zapmizer/laravel-notification-zapmizer",
     "description": "A Laravel package to send notifications using Zapmizer API",
     "homepage": "https://github.com/leettech/laravel-notification-zapmizer",
     "license": "MIT",
@@ -7,7 +7,7 @@
         {
             "name": "Zapmizer",
             "email": "support@zapmizer.com",
-            "homepage": "https://github.com/leettech/laravel-notification-zapmizer",
+            "homepage": "https://github.com/zapmizer/laravel-notification-zapmizer",
             "role": "Developer"
         }
     ],

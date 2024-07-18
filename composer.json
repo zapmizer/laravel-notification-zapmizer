@@ -23,12 +23,12 @@
     },
     "autoload": {
         "psr-4": {
-            "Notification\\Zapmizer\\": "src"
+            "NotificationChannels\\Zapmizer\\": "src"
         }
     },
     "autoload-dev": {
         "psr-4": {
-            "Notification\\Zapmizer\\Test\\": "tests"
+            "NotificationChannels\\Zapmizer\\Test\\": "tests"
         }
     },
     "scripts": {

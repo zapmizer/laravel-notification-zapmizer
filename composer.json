@@ -1,7 +1,7 @@
 {
     "name": "zapmizer/laravel-notification-zapmizer",
     "description": "A Laravel package to send notifications using Zapmizer API",
-    "homepage": "https://github.com/leettech/laravel-notification-zapmizer",
+    "homepage": "https://github.com/zapmizer/laravel-notification-zapmizer",
     "license": "MIT",
     "authors": [
         {
@@ -33,7 +33,8 @@
     },
     "scripts": {
         "test": "phpunit",
-        "test:coverage": "phpunit --coverage-text --coverage-clover=coverage.clover"
+        "test:coverage": "phpunit --coverage-text --coverage-clover=coverage.clover",
+        "post-install-cmd": "php artisan vendor:publish --provider=\"NotificationChannels\\Zapmizer\\ZapmizerServiceProvider\" --tag=config"
     },
     "config": {
         "sort-packages": true

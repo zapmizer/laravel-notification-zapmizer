@@ -1,6 +1,6 @@
 {
     "name": "zapmizer/laravel-notification-zapmizer",
-    "description": "A Laravel package to send notifications using Zapmizer API",
+    "description": "A Laravel package to send WhatsApp notifications using Zapmizer API",
     "homepage": "https://github.com/zapmizer/laravel-notification-zapmizer",
     "license": "MIT",
     "authors": [

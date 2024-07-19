@@ -5,7 +5,7 @@
 You can install the package via composer:
 
 ```bash
-composer require zapmizer/zapmizer-laravel-notification
+composer require zapmizer/laravel-notification-zapmizer
 ```
 
 Now publish config file

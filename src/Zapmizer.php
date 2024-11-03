@@ -4,9 +4,9 @@ namespace NotificationChannels\Zapmizer;
 
 use Exception;
 use GuzzleHttp\Client as HttpClient;
-use Psr\Http\Message\ResponseInterface;
 use GuzzleHttp\Exception\ClientException;
 use NotificationChannels\Zapmizer\Exceptions\CouldNotSendNotification;
+use Psr\Http\Message\ResponseInterface;
 
 /**
  * Class Zapmizer.
@@ -106,9 +106,42 @@ class Zapmizer
         }
 
         try {
-            return $this->httpClient()->post($this->getApiBaseUri() . '/messages', [
+            return $this->httpClient()->post($this->getApiBaseUri().'/messages', [
                 'form_params' => $params,
-                'headers' => ['Authorization' => 'Bearer ' . $this->token],
+                'headers' => ['Authorization' => 'Bearer '.$this->token],
+            ]);
+        } catch (ClientException $exception) {
+            throw CouldNotSendNotification::zapmizerRespondedWithAnError($exception);
+        } catch (Exception $exception) {
+            throw CouldNotSendNotification::couldNotCommunicateWithZapmizer($exception);
+        }
+    }
+
+    public function sendMessageWithFile(array $params, string $filePath): ?ResponseInterface
+    {
+        if (blank($this->token)) {
+            throw CouldNotSendNotification::zapmizerBotTokenNotProvided('You must provide your zapmizer bot token to make any API requests.');
+        }
+
+        try {
+            $multipart = [
+                [
+                    'name' => 'uploaded_media',
+                    'contents' => fopen($filePath, 'r'),
+                    'filename' => basename($filePath),
+                ],
+            ];
+
+            foreach ($params as $key => $value) {
+                $multipart[] = [
+                    'name' => $key,
+                    'contents' => $value,
+                ];
+            }
+
+            return $this->httpClient()->post($this->getApiBaseUri().'/messages', [
+                'multipart' => $multipart,
+                'headers' => ['Authorization' => 'Bearer '.$this->token],
             ]);
         } catch (ClientException $exception) {
             throw CouldNotSendNotification::zapmizerRespondedWithAnError($exception);

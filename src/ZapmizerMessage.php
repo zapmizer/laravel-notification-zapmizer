@@ -10,10 +10,12 @@ class ZapmizerMessage
 
     public array $params;
 
+    public ?string $file = null;
+
     public function __construct(
         public readonly string $from = '',
         public readonly string $to = '',
-        array $params = ['type' => 'text']
+        array $params = ['type' => 'chat']
     ) {
         $this->zapmizer = app(Zapmizer::class);
 
@@ -24,7 +26,7 @@ class ZapmizerMessage
         ]);
     }
 
-    public static function create(string $from = '', string $to = '', array $params = ['type' => 'text']): self
+    public static function create(string $from = '', string $to = '', array $params = ['type' => 'chat']): self
     {
         return new self($from, $to, $params);
     }
@@ -32,6 +34,15 @@ class ZapmizerMessage
     public function type(string $type): self
     {
         $this->params['type'] = $type;
+
+        return $this;
+    }
+
+    public function image(string $file, string $caption): self
+    {
+        $this->file = $file;
+        $this->params['type'] = 'image';
+        $this->params['text'] = $caption;
 
         return $this;
     }
@@ -48,9 +59,11 @@ class ZapmizerMessage
      */
     public function send()
     {
-        $params = $this->params;
-
-        $this->zapmizer->sendMessage($params);
+        if (is_null($this->file)) {
+            $this->zapmizer->sendMessage($this->params);
+        } else {
+            $this->zapmizer->sendMessageWithFile($this->params, $this->file);
+        }
 
         return $this;
     }

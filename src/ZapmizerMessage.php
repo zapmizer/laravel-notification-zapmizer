@@ -47,6 +47,15 @@ class ZapmizerMessage
         return $this;
     }
 
+    public function document(string $file, string $caption): self
+    {
+        $this->file = $file;
+        $this->params['type'] = 'document';
+        $this->params['text'] = $caption;
+
+        return $this;
+    }
+
     public function text(string $text): self
     {
         $this->params['metadata']['text'] = $text;

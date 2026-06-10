@@ -7,14 +7,13 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerVerificationException;
 /**
  * Class VerificationSession.
  *
- * A hosted verification page session (Stripe billing-portal style). Created
- * server-side with the secret key; redirect the end user to `url`, where
- * they complete the whole verification on the Zapbot domain.
+ * A hosted verification page session. Redirect the end user to `url` — a
+ * signed, temporary URL on the Zapmizer domain where the whole verification
+ * happens (wa.me trigger + code input). Nothing else to store.
  */
 final class VerificationSession
 {
     public function __construct(
-        public readonly string $id,
         public readonly string $url,
         public readonly ?string $expiresAt = null,
         public readonly array $raw = [],
@@ -30,12 +29,11 @@ final class VerificationSession
     {
         $data = $payload['data'] ?? $payload;
 
-        if (blank($data['id'] ?? null) || blank($data['url'] ?? null)) {
-            throw ZapmizerVerificationException::unexpectedResponse('missing session id or hosted page url');
+        if (blank($data['url'] ?? null)) {
+            throw ZapmizerVerificationException::unexpectedResponse('missing hosted page url');
         }
 
         return new self(
-            id: (string) $data['id'],
             url: (string) $data['url'],
             expiresAt: $data['expires_at'] ?? null,
             raw: $data,

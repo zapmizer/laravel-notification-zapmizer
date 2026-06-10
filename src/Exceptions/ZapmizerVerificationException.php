@@ -8,16 +8,17 @@ use Exception;
  * Class ZapmizerVerificationException.
  *
  * Base exception for the Zapmizer verification client. Catch this to handle
- * any failure raised while creating or fetching a verification.
+ * any failure raised while creating a verification session or confirming a
+ * code.
  */
 class ZapmizerVerificationException extends Exception
 {
     /**
-     * Thrown when there's no publishable key provided.
+     * Thrown when there's no API token provided.
      */
-    public static function publishableKeyNotProvided(): self
+    public static function apiTokenNotProvided(): self
     {
-        return new self('You must provide your zapmizer publishable key (pk_...) to use the verify-number API. Set ZAPMIZER_PUBLISHABLE_KEY — this is not the same credential as the messages API token.');
+        return new self('You must provide your zapmizer API token to use the verify-number API.');
     }
 
     /**
@@ -26,22 +27,6 @@ class ZapmizerVerificationException extends Exception
     public static function numberNotProvided(): self
     {
         return new self('There is no WhatsApp number to verify. Override getWhatsappNumberForVerification() on your model to point at the right attribute.');
-    }
-
-    /**
-     * Thrown when there's no secret key provided for the hosted sessions API.
-     */
-    public static function secretKeyNotProvided(): self
-    {
-        return new self('You must provide your zapmizer secret key (sk_...) to create hosted verification sessions. Set ZAPMIZER_SECRET_KEY — this is not the same credential as the publishable key or the messages API token.');
-    }
-
-    /**
-     * Thrown when trying to act on a verification that was never started.
-     */
-    public static function verificationNotStarted(): self
-    {
-        return new self('There is no WhatsApp verification in progress. Call startWhatsappVerification() first.');
     }
 
     /**

@@ -10,11 +10,8 @@ return new class extends Migration
     {
         Schema::create('zapmizer_webhook_events', function (Blueprint $table) {
             $table->id();
-            // Zapbot's stable id per terminal transition — the idempotency key.
-            $table->string('event_id')->unique();
-            $table->string('type')->nullable();
-            $table->string('status')->nullable();
-            $table->string('client_reference')->nullable()->index();
+            $table->string('name')->nullable();
+            $table->string('number')->nullable()->index();
             $table->json('payload');
             $table->boolean('handled')->default(false);
             $table->timestamps();

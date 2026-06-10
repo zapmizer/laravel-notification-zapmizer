@@ -21,11 +21,6 @@ php artisan vendor:publish --provider="Notification\Zapmizer\ZapmizerServiceProv
 ```php
     ZAPMIZER_API_TOKEN="your-api-token"
     ZAPMIZER_FROM_NUMBER="558181643260"
-    # Verify-number APIs use their own credentials, not the API token:
-    ZAPMIZER_SECRET_KEY="sk_your-secret-key"          # hosted page sessions (server-side)
-    ZAPMIZER_PUBLISHABLE_KEY="pk_your-publishable-key" # widget API (optional)
-    ZAPMIZER_WEBHOOK_SECRET="whsec_your-webhook-secret"
-    ZAPMIZER_RETURN_URL="https://your-app.com/whatsapp/verified"
 ```
 
 
@@ -58,7 +53,7 @@ In every Notification you wish to notify via WhatsApp, you must add a toZapmizer
 
 ## Number verification
 
-Mirroring Laravel's `MustVerifyEmail`: implement an interface and use a trait on your `User` model, and it gains the verification methods you'd expect. The user verifies through a hosted page on the Zapmizer domain (wa.me link + code happen there) and your app receives the result back via a signed redirect and a signed webhook. State lives in the package's own tables — your `users` table is never touched.
+Mirroring Laravel's `MustVerifyEmail`: implement an interface and use a trait on your `User` model, and it gains the verification methods you'd expect. The user verifies through a hosted page on the Zapmizer domain — they message the team's WhatsApp number via wa.me and type back the code the bot replies with. Your app confirms the code (hosted page or your own input) and/or receives the terminal state on the team's webhooks. State lives in the package's own tables — your `users` table is never touched.
 
 ```php
 use NotificationChannels\Zapmizer\Contracts\MustVerifyWhatsapp as MustVerifyWhatsappContract;

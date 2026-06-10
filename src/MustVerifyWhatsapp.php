@@ -13,10 +13,11 @@ use NotificationChannels\Zapmizer\Models\WhatsappVerified;
  * state lives in the package's own `whatsapp_verifieds` table (1:1 with the
  * model), so the host application's `users` table is never touched.
  *
- * The Zapbot flow is inverted: starting a verification yields a wa.me link
- * the user opens to send the opening message; Zapbot replies with a code the
- * user types back (confirmWhatsappVerification()). Use
- * syncWhatsappVerificationStatus() to poll Zapbot for the current state.
+ * The flow: starting a verification creates a hosted page session on the
+ * Zapmizer domain — the user opens the wa.me trigger and receives a code on
+ * WhatsApp there. The code can be confirmed on the hosted page itself or
+ * through confirmWhatsappVerification() if your app owns the code input.
+ * Terminal states also arrive via the team's registered webhooks.
  */
 trait MustVerifyWhatsapp
 {
@@ -55,25 +56,23 @@ trait MustVerifyWhatsapp
     /**
      * Start a new WhatsApp verification through the hosted page.
      *
-     * Creates a hosted verification session on Zapbot, records the state as
-     * "awaiting" and returns the hosted page link to redirect the user to.
-     * The whole flow (number, wa.me link, code) happens there; when it
-     * completes, the user comes back to $returnUrl with signed query params
-     * (validate with ZapbotSignature::isValidQuery()).
+     * Creates a hosted session on Zapmizer, records the state as "awaiting"
+     * and returns the hosted page link to redirect the user to. The model's
+     * number (when set) prefills the input there; `zapmizer.from_number`
+     * (when set) picks which of the team's WhatsApp numbers receives the
+     * verification.
      *
      * @throws ZapmizerVerificationException
      */
-    public function startWhatsappVerification(?string $returnUrl = null): string
+    public function startWhatsappVerification(): string
     {
         $session = app(VerificationClient::class)->createSession(
             number: $this->getWhatsappNumberForVerification(),
-            returnUrl: $returnUrl ?? config('zapmizer.return_url'),
-            clientReference: (string) $this->getKey(),
+            from: config('zapmizer.from_number'),
         );
 
         $this->whatsappVerification()->updateOrCreate([], [
             'number' => $this->getWhatsappNumberForVerification(),
-            'verification_id' => $session->id,
             'url' => $session->url,
             'status' => WhatsappVerified::STATUS_AWAITING,
             'verified_at' => null,
@@ -85,48 +84,39 @@ trait MustVerifyWhatsapp
     /**
      * Confirm the code the user received on WhatsApp.
      *
-     * Returns true when the code was accepted and the number is verified.
-     * A wrong code raises a VerificationRequestFailed (422).
+     * Returns true when the code was accepted (the number is then marked as
+     * verified, with the canonical number Zapmizer resolved). A wrong code
+     * or an exhausted/expired one returns false — inspect the state record,
+     * or call the VerificationClient directly if you need the attempts left.
      *
      * @throws ZapmizerVerificationException
      */
     public function confirmWhatsappVerification(string $code): bool
     {
         $record = $this->whatsappVerification()->first();
+        $number = $record?->number ?? $this->getWhatsappNumberForVerification();
 
-        if ($record === null || blank($record->number)) {
-            throw ZapmizerVerificationException::verificationNotStarted();
+        if (blank($number)) {
+            throw ZapmizerVerificationException::numberNotProvided();
         }
 
-        $verification = app(VerificationClient::class)->confirm($record->number, $code);
+        $result = app(VerificationClient::class)->confirm($number, $code);
 
-        $this->applyZapbotStatus($record, $verification);
+        if ($result->isVerified()) {
+            $this->whatsappVerification()->updateOrCreate([], [
+                'number' => $result->number ?? $number,
+                'status' => WhatsappVerified::STATUS_VERIFIED,
+                'verified_at' => ($record ?? $this->whatsappVerification()->make())->freshTimestamp(),
+            ]);
 
-        return $verification->isVerified();
-    }
-
-    /**
-     * Poll Zapbot for the current state of the verification and persist it.
-     *
-     * Returns the package-level status (awaiting/verified/failed), or null
-     * when no verification was started yet. This is how the state converges
-     * locally when webhooks can't reach the application.
-     *
-     * @throws ZapmizerVerificationException
-     */
-    public function syncWhatsappVerificationStatus(): ?string
-    {
-        $record = $this->whatsappVerification()->first();
-
-        if ($record === null || blank($record->number)) {
-            return null;
+            return true;
         }
 
-        $verification = app(VerificationClient::class)->get($record->number);
+        if ($result->isFailed() && $record !== null && !$record->isVerified()) {
+            $record->forceFill(['status' => WhatsappVerified::STATUS_FAILED])->save();
+        }
 
-        $this->applyZapbotStatus($record, $verification);
-
-        return $record->status;
+        return false;
     }
 
     /**
@@ -137,24 +127,6 @@ trait MustVerifyWhatsapp
     public function getWhatsappNumberForVerification(): ?string
     {
         return $this->whatsapp_number;
-    }
-
-    /**
-     * Map a Zapbot session onto the local state record and persist it.
-     */
-    protected function applyZapbotStatus(WhatsappVerified $record, Verification $verification): void
-    {
-        $record->forceFill([
-            'status' => match (true) {
-                $verification->isVerified() => WhatsappVerified::STATUS_VERIFIED,
-                $verification->isTerminal() => WhatsappVerified::STATUS_FAILED,
-                default => WhatsappVerified::STATUS_AWAITING,
-            },
-            'verified_at' => $verification->isVerified()
-                ? ($record->verified_at ?? $record->freshTimestamp())
-                : null,
-            'url' => $verification->waLink ?? $record->url,
-        ])->save();
     }
 
     /**

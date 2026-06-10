@@ -34,17 +34,12 @@ interface MustVerifyWhatsapp
      * Start a new WhatsApp verification and return the hosted page link to
      * redirect the user to.
      */
-    public function startWhatsappVerification(?string $returnUrl = null): string;
+    public function startWhatsappVerification(): string;
 
     /**
      * Confirm the code the user received on WhatsApp.
      */
     public function confirmWhatsappVerification(string $code): bool;
-
-    /**
-     * Poll Zapbot for the current verification state and persist it locally.
-     */
-    public function syncWhatsappVerificationStatus(): ?string;
 
     /**
      * Get the WhatsApp number that should be verified.

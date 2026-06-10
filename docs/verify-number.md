@@ -1,39 +1,29 @@
 # WhatsApp number verification
 
-This guide walks through wiring the Zapmizer number verification into a Laravel application, end to end: preparing the `User` model, starting a verification through the hosted page, and receiving the confirmation back (signed return + webhook).
+This guide walks through wiring the Zapmizer number verification into a Laravel application, end to end: preparing the `User` model, starting a verification through the hosted page, confirming the code and receiving the terminal state via webhook.
 
 ## How it works
 
-The default flow uses the **hosted verification page** (Stripe billing-portal style):
-
 ```
-your app                          zapmizer                         user
-   │  1. create session (sk_)        │                               │
-   ├────────────────────────────────►│                               │
-   │  ◄── hosted page url ───────────┤                               │
-   │  2. redirect user ──────────────┼──────────────────────────────►│
-   │                                 │  3. wa.me link + code happen  │
-   │                                 │     on the hosted page        │
-   │  4. signed return redirect ◄────┤                               │
-   │  5. signed webhook ◄────────────┤  (server-to-server)           │
+your app ──(API token)──> POST /api/verify-number/sessions ──> { url }   [signed, temporary]
+your app redirects the user ──> hosted page on the Zapmizer domain
+user ──wa.me──> sends the trigger phrase to the team's WhatsApp number
+bot replies with a 6-digit code in the chat
+user types the code ──> on the hosted page, or in your app (confirm endpoint)
+terminal state (verified|failed) ──> webhook ──> the team's registered webhooks
 ```
 
-The user never leaves a Zapmizer-branded page to do the WhatsApp part; your app only starts the session and consumes the result. State is tracked locally in the package's `whatsapp_verifieds` table — 1:1 with your user, your `users` table is never touched.
+The end user proves ownership by messaging the team's WhatsApp number and typing back the code the bot replies with. Your app only starts the session and consumes the result. State is tracked locally in the package's `whatsapp_verifieds` table — 1:1 with your user, your `users` table is never touched.
 
 ## 1. Zapmizer-side setup
 
-In your Zapmizer dashboard, open **Settings → Verifications** and create a verification. You'll need a bot instance with a connected number. From the verification screen, collect three credentials (they are all different things):
+You need:
 
-| Credential | Looks like | Used for |
-|---|---|---|
-| Secret key | `sk_...` | Creating hosted page sessions, server-side. Shown **once** when created. |
-| Webhook secret | `whsec_...` | Validating the signed return redirect and the webhook. |
-| Publishable key | `pk_...` | Only for the embedded-widget flow (optional, see below). |
+- a **bot instance online** (a connected WhatsApp number) — it receives the trigger message and replies with the code;
+- your team's **API token** (the same Sanctum token used by the messages API);
+- optionally, a **webhook** registered in the app's webhooks resource pointing at your application (see [§6](#6-the-webhook)).
 
-Also configure on the verification:
-
-- the **webhook URL**, pointing at your app's `https://your-app.com/zapmizer/webhook` (must be public https — Zapmizer won't deliver to local/private URLs);
-- the **allowed origins**, only needed for the widget flow (`pk_` is public, the origin allowlist is what protects it).
+There are no verification-specific credentials: the API token authenticates everything, and the tenant is resolved from it.
 
 ## 2. Package setup
 
@@ -45,19 +35,15 @@ php artisan vendor:publish --provider="NotificationChannels\Zapmizer\ZapmizerSer
 php artisan migrate
 ```
 
-This creates two tables: `whatsapp_verifieds` (verification state, 1:1 with the user) and `zapmizer_webhook_events` (audit/idempotency of received webhooks).
+This creates two tables: `whatsapp_verifieds` (verification state, 1:1 with the user) and `zapmizer_webhook_events` (audit of received webhooks).
 
 Set the environment variables:
 
 ```env
-ZAPMIZER_SECRET_KEY=sk_...                  # hosted sessions (server-side)
-ZAPMIZER_WEBHOOK_SECRET=whsec_...           # signed return + webhook validation
-ZAPMIZER_RETURN_URL=https://your-app.com/whatsapp/verified
-
-# optional
+ZAPMIZER_API_TOKEN=...                       # the team's API token
 ZAPMIZER_BASE_URI=https://app.zapmizer.com/api/
-ZAPMIZER_PUBLISHABLE_KEY=pk_...             # widget flow only
-ZAPMIZER_ORIGIN=                            # widget flow only, defaults to app.url
+ZAPMIZER_FROM_NUMBER=                        # optional: which team number receives the
+                                             # verification (default: first online bot)
 ```
 
 ## 3. Preparing the User model
@@ -80,11 +66,11 @@ That's the whole model setup. The trait gives you:
 | Method | What it does |
 |---|---|
 | `hasVerifiedWhatsapp()` | Whether the number is verified. |
-| `startWhatsappVerification(?string $returnUrl = null)` | Creates a hosted session, records the state as `awaiting` and returns the hosted page URL to redirect the user to. |
-| `markWhatsappAsVerified()` | Marks as verified (used by the webhook / your signed-return handler). |
+| `startWhatsappVerification()` | Creates a hosted session, records the state as `awaiting` and returns the hosted page URL to redirect the user to. |
+| `confirmWhatsappVerification($code)` | Confirms the code server-side (when your app owns the code input). |
+| `markWhatsappAsVerified()` | Marks as verified (used by the webhook handler, or wherever you trust). |
 | `whatsappVerification()` | `HasOne` relation to the state record (`status`, `url`, `number`, `verified_at`). |
 | `getWhatsappNumberForVerification()` | Where the number to verify is read from. |
-| `confirmWhatsappVerification($code)` / `syncWhatsappVerificationStatus()` | Widget-flow helpers (see below). |
 
 By default the number is read from a `whatsapp_number` attribute. If yours lives somewhere else, override the getter:
 
@@ -95,7 +81,7 @@ public function getWhatsappNumberForVerification(): ?string
 }
 ```
 
-> **Note:** in the hosted flow the model's number is sent along when creating the session and **prefills the input on the hosted page** — the user just confirms (or corrects) it there. The verified number comes back in the webhook payload. The model doesn't need a number set to start a verification; without one, the user types it on the page.
+> **Note:** the model's number is sent along when creating the session and **prefills the input on the hosted page** — the user just confirms (or corrects) it there. The canonical verified number comes back in the confirm response / webhook payload. The model doesn't need a number set to start a verification.
 
 ## 4. Starting a verification
 
@@ -108,53 +94,47 @@ The package auto-registers a named GET route, `zapmizer.verify_number` (at `/zap
 Prefix and middleware are configurable, and the routes can be disabled entirely (`zapmizer.routes` config) if you'd rather mount your own:
 
 ```php
-$url = $user->startWhatsappVerification();   // uses config('zapmizer.return_url')
+$url = $user->startWhatsappVerification();
 
 return redirect()->away($url);
 ```
 
-The verification is correlated by `client_reference = $user->getKey()`, sent automatically — that's how the return redirect and the webhook find their way back to the right user.
+The hosted page URL is signed and temporary (default 1 hour; Zapmizer caps it at 24h). On the page, the user opens the wa.me link, sends the trigger phrase, receives the code on WhatsApp and can type it right there — nothing else for your app to do besides checking the state afterwards.
 
-## 5. Handling the signed return
+## 5. Confirming the code in your app (optional)
 
-When the user completes the hosted page, Zapmizer redirects them to your `return_url` with signed query params:
-
-```
-GET /whatsapp/verified?verify_session=42&status=verified&sig=t=1781...,v1=ab12...
-```
-
-`verify_session` is the `client_reference` (the user id) and `sig` is an HMAC-SHA256 over the other params with your **webhook secret**. The signature is what authenticates this request — don't rely on the browser session being alive:
+If you'd rather own the code-input UX (the user receives the code on WhatsApp and types it into *your* screen), use the server-side confirm path:
 
 ```php
-use Illuminate\Support\Facades\Auth;
-use NotificationChannels\Zapmizer\Support\ZapbotSignature;
-
-Route::get('/whatsapp/verified', function (Request $request) {
-    abort_unless(
-        ZapbotSignature::isValidQuery($request->query(), config('zapmizer.webhook_secret')),
-        403
-    );
-
-    if ($request->query('status') === 'verified') {
-        $user = User::findOrFail($request->query('verify_session'));
-        $user->markWhatsappAsVerified();
-        Auth::login($user); // optional: restore the session after the round-trip
-    }
-
-    return redirect()->route('dashboard');
-});
+if ($user->confirmWhatsappVerification($request->input('code'))) {
+    // verified — the canonical number was stored on the state record
+}
 ```
 
-## 6. The confirmation webhook
+For finer-grained outcomes, call the client directly:
 
-The redirect above is a UX nicety; the **webhook is the source of truth** (the user can close the tab before being redirected). The package registers a public, stateless `POST /zapmizer/webhook` route that does everything for you:
+```php
+use NotificationChannels\Zapmizer\VerificationClient;
 
-- the `VerifyWebhookSignature` middleware rejects anything not signed with your webhook secret;
-- deliveries are recorded in `zapmizer_webhook_events` — the unique `event_id` makes redeliveries (in any order) idempotent;
-- the event is correlated by `client_reference`, never by phone number;
-- a confirmation marks the user's number as verified and fires an event; failures/expirations move the state to `failed`.
+$result = app(VerificationClient::class)->confirm($number, $code);
 
-React to the confirmation in your app:
+$result->status;       // verified | invalid | failed | not_found
+$result->number;       // canonical WhatsApp number (when verified)
+$result->from;         // the team number that received the message
+$result->attemptsLeft; // when invalid (5 attempts by default)
+```
+
+`not_found` also covers the short window while the code is still propagating after the user sent the message — treat it as "retry in a few seconds", not a hard error. Codes are single-use and expire in 5 minutes.
+
+## 6. The webhook
+
+Terminal states (`verified` / `failed`) are also delivered to the **team's registered webhooks** (the same webhooks resource bot notifications use — register your URL there once). The package's public `POST /zapmizer/webhook` route handles them Cashier-style:
+
+- each event name maps to a `handle{StudlyName}` method (`verify_number.verified` → `handleVerifyNumberVerified`) — extend the controller to customize;
+- deliveries are recorded in `zapmizer_webhook_events` for auditing;
+- the event is correlated to the state record by the **canonical phone number** (tolerant to the Brazilian extra-9);
+- effects are idempotent: redeliveries are no-ops and a late `failed` never downgrades an already-verified number;
+- a confirmation fires `NotificationChannels\Zapmizer\Events\WhatsappVerified`; `WebhookReceived`/`WebhookHandled` fire around the handling.
 
 ```php
 use NotificationChannels\Zapmizer\Events\WhatsappVerified;
@@ -165,7 +145,16 @@ Event::listen(function (WhatsappVerified $event) {
 });
 ```
 
-`WebhookReceived` and `WebhookHandled` events (Cashier-style) also fire around the handling. To customize handling, extend `NotificationChannels\Zapmizer\Http\Controllers\WebhookController` — each event type maps to a `handle{StudlyType}` method (`verify_number.verified` → `handleVerifyNumberVerified`).
+> **Security note:** Zapmizer does **not** sign webhook deliveries — they arrive like any team-webhook notification (`User-Agent: Zapmizer`). The handlers only ever upgrade state idempotently, but if you want to harden the endpoint, add a throttle/IP allowlist via `zapmizer.routes.webhook_middleware`, or disable the package routes and mount the controller behind your own protection (e.g. an unguessable URL prefix).
+
+Payload shapes, for reference:
+
+```json
+{ "name": "verify_number.verified", "data": { "number": "5511912345678", "from": "5511333334444" } }
+{ "name": "verify_number.failed",   "data": { "number": "...", "from": "...", "reason": "too_many_attempts" } }
+```
+
+Only `verified` and `failed` fire — expiry is passive (the code just stops existing), so there is no `expired` webhook.
 
 ## 7. Checking the state
 
@@ -174,8 +163,8 @@ $user->hasVerifiedWhatsapp();              // bool
 
 $record = $user->whatsappVerification()->first();
 $record->status;       // awaiting | verified | failed
-$record->number;       // the verified number (from the webhook payload)
-$record->url;          // hosted page link while awaiting
+$record->number;       // canonical number once verified
+$record->url;          // hosted page link while awaiting (signed, temporary)
 $record->verified_at;
 ```
 
@@ -184,10 +173,6 @@ Gate anything on it — middleware, policies, or a simple check before the actio
 ```php
 abort_unless($user->hasVerifiedWhatsapp(), 403, 'Verify your WhatsApp first.');
 ```
-
-## Alternative: embedded widget flow
-
-If you embed Zapmizer's `verify.js` widget instead of using the hosted page, the package's `VerificationClient` also speaks that API (publishable key + origin allowlist): `create($number)` returns the wa.me link, `get($number)` polls the state, `confirm($number, $code)` submits the code the user received. On the model, `confirmWhatsappVerification($code)` and `syncWhatsappVerificationStatus()` wrap those against the state record.
 
 ## Error handling
 
@@ -199,19 +184,19 @@ use NotificationChannels\Zapmizer\Exceptions\VerificationRequestFailed;    // 4x
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerVerificationException; // base of all of the above
 ```
 
+Notable API errors when creating a session: `503` when the team has no online bot, `422` when the `from` number doesn't match any of the team's WhatsApp accounts.
+
 ## Local development notes
 
-- Zapmizer only delivers webhooks to **public https URLs**. Locally, rely on the signed return redirect, or tunnel the webhook route (e.g. `ngrok http 8000` and point the verification's webhook URL at `https://<tunnel>/zapmizer/webhook`).
-- The signed return works fine on localhost — it goes through the user's browser.
+- Outside production, Zapmizer's anti-SSRF guard is off — webhooks **are** delivered to local URLs, so registering `http://localhost:8000/zapmizer/webhook` in the team's webhooks works against a local Zapmizer.
+- Without the webhook, the in-app confirm path (`confirmWhatsappVerification`) closes the loop on its own.
 
 ## Customization summary
 
 | Config key | Purpose |
 |---|---|
-| `zapmizer.secret_key` | `sk_` for hosted sessions |
-| `zapmizer.webhook_secret` | validates signed return + webhook |
-| `zapmizer.return_url` | default return URL for hosted sessions |
-| `zapmizer.publishable_key` / `zapmizer.origin` | widget flow |
+| `zapmizer.api_token` | the team's API token (shared with the messages API) |
+| `zapmizer.from_number` | which team number receives the verification (optional) |
 | `zapmizer.routes.*` | enable/prefix/middleware of the package routes |
 | `zapmizer.models.whatsapp_verified` | subclass the state model |
 | `zapmizer.models.webhook_event` | subclass the webhook audit model |

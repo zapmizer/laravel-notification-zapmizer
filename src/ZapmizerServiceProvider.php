@@ -27,12 +27,10 @@ class ZapmizerServiceProvider extends ServiceProvider
         ));
 
         $this->app->bind(VerificationClient::class, fn (Application $app, $config) => new VerificationClient(
-            Arr::get($config, 'publishable_key', config('zapmizer.publishable_key')),
+            Arr::get($config, 'api_token', config('zapmizer.api_token')),
             app(HttpClient::class),
             Arr::get($config, 'base_uri', config('zapmizer.base_uri')),
-            Arr::get($config, 'api_version'),
-            Arr::get($config, 'origin', config('zapmizer.origin') ?? config('app.url')),
-            Arr::get($config, 'secret_key', config('zapmizer.secret_key'))
+            Arr::get($config, 'api_version')
         ));
 
         Notification::resolved(static function (ChannelManager $service) {

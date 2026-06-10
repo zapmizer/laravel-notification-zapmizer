@@ -8,7 +8,6 @@ use Illuminate\Support\Str;
 use NotificationChannels\Zapmizer\Events\WebhookHandled;
 use NotificationChannels\Zapmizer\Events\WebhookReceived;
 use NotificationChannels\Zapmizer\Events\WhatsappVerified as WhatsappVerifiedEvent;
-use NotificationChannels\Zapmizer\Http\Middleware\VerifyWebhookSignature;
 use NotificationChannels\Zapmizer\Models\WebhookEvent;
 use NotificationChannels\Zapmizer\Models\WhatsappVerified;
 use Symfony\Component\HttpFoundation\Response;
@@ -16,16 +15,22 @@ use Symfony\Component\HttpFoundation\Response;
 /**
  * Class WebhookController.
  *
- * Receives Zapbot's verify-number webhooks, Cashier-style: signature
- * verification lives in the VerifyWebhookSignature middleware, and each
- * event type is routed to a `handle{StudlyType}` method — extend the
- * controller and add/override handlers to customize behavior.
+ * Receives Zapmizer's webhooks, Cashier-style: each event name is routed to
+ * a `handle{StudlyName}` method — extend the controller and add/override
+ * handlers to customize behavior. Payloads follow the team-webhook shape:
+ * `{ "name": "verify_number.verified", "data": { "number": ..., "from": ... } }`.
  *
- * Every verified delivery is recorded in the zapmizer_webhook_events table,
- * whose unique event_id is the idempotency key: redeliveries (in any order)
- * are acknowledged without reapplying the effect. Correlation uses the
- * `client_reference` the package sent when starting the verification (the
- * owner model's key) — never the phone number.
+ * Deliveries are NOT signed by Zapmizer — they arrive on the team's
+ * registered webhooks like any bot notification. Protect the route through
+ * `zapmizer.routes.webhook_middleware` (throttle, IP allowlist, a shared
+ * token segment in the URL, ...) and keep the handlers idempotent, which
+ * they are by default: marking verified twice is a no-op and a `failed`
+ * event never downgrades an already-verified number.
+ *
+ * Every delivery is recorded in the zapmizer_webhook_events table as an
+ * audit trail. Correlation uses the (canonical) phone number from the
+ * payload, matched against the state records with the Brazilian extra-9
+ * tolerance.
  */
 class WebhookController extends Controller
 {
@@ -35,17 +40,7 @@ class WebhookController extends Controller
     protected ?WebhookEvent $event = null;
 
     /**
-     * Create a new WebhookController instance.
-     */
-    public function __construct()
-    {
-        if (config('zapmizer.webhook_secret')) {
-            $this->middleware(VerifyWebhookSignature::class);
-        }
-    }
-
-    /**
-     * Handle a Zapbot webhook call.
+     * Handle a Zapmizer webhook call.
      */
     public function handleWebhook(Request $request): Response
     {
@@ -55,28 +50,13 @@ class WebhookController extends Controller
 
         WebhookReceived::dispatch($payload);
 
-        $eventId = (string) ($payload['event_id'] ?? '');
+        $this->event = $this->webhookEventModel()::query()->create([
+            'name' => $payload['name'] ?? null,
+            'number' => $payload['data']['number'] ?? null,
+            'payload' => $payload,
+        ]);
 
-        if (blank($eventId)) {
-            return $this->missingMethod($payload);
-        }
-
-        $this->event = $this->webhookEventModel()::query()->firstOrCreate(
-            ['event_id' => $eventId],
-            [
-                'type' => $payload['type'] ?? null,
-                'status' => $payload['status'] ?? null,
-                'client_reference' => isset($payload['client_reference']) ? (string) $payload['client_reference'] : null,
-                'payload' => $payload,
-            ],
-        );
-
-        // Idempotency: a redelivery of an already-recorded event is just acknowledged.
-        if (!$this->event->wasRecentlyCreated) {
-            return new Response('Webhook Duplicate', 200);
-        }
-
-        $method = 'handle' . Str::studly(str_replace('.', '_', (string) ($payload['type'] ?? '')));
+        $method = 'handle' . Str::studly(str_replace('.', '_', (string) ($payload['name'] ?? '')));
 
         if (method_exists($this, $method)) {
             $response = $this->{$method}($payload);
@@ -101,9 +81,9 @@ class WebhookController extends Controller
         }
 
         $record->forceFill([
-            'number' => $payload['number'] ?? $record->number,
+            'number' => $payload['data']['number'] ?? $record->number,
             'status' => WhatsappVerified::STATUS_VERIFIED,
-            'verified_at' => $payload['verified_at'] ?? $record->freshTimestamp(),
+            'verified_at' => $record->verified_at ?? $record->freshTimestamp(),
         ])->save();
 
         event(new WhatsappVerifiedEvent($record));
@@ -112,29 +92,15 @@ class WebhookController extends Controller
     }
 
     /**
-     * Handle an expired verification.
-     */
-    protected function handleVerifyNumberExpired(array $payload): Response
-    {
-        return $this->markAsFailed($payload);
-    }
-
-    /**
-     * Handle a failed verification.
+     * Handle a failed verification (attempts exhausted).
      */
     protected function handleVerifyNumberFailed(array $payload): Response
     {
-        return $this->markAsFailed($payload);
-    }
-
-    /**
-     * Move the matching verification to the failed state.
-     */
-    protected function markAsFailed(array $payload): Response
-    {
         $record = $this->findVerification($payload);
 
-        if ($record === null) {
+        // Never downgrade an already-verified number — a late or redelivered
+        // failed event must not undo a confirmed verification.
+        if ($record === null || $record->isVerified()) {
             return $this->missingMethod($payload);
         }
 
@@ -147,19 +113,52 @@ class WebhookController extends Controller
     }
 
     /**
-     * Find the verification the payload refers to, by client_reference.
+     * Find the verification the payload refers to, by phone number.
      */
     protected function findVerification(array $payload): ?WhatsappVerified
     {
-        $clientReference = $payload['client_reference'] ?? null;
+        $candidates = $this->numberCandidates((string) ($payload['data']['number'] ?? ''));
 
-        if (blank($clientReference)) {
+        if ($candidates === []) {
             return null;
         }
 
         return $this->verificationModel()::query()
-            ->where('user_id', $clientReference)
+            ->whereIn('number', $candidates)
+            ->latest('id')
             ->first();
+    }
+
+    /**
+     * Lookup candidates for a number: digits, +-prefixed, and the Brazilian
+     * with/without-extra-9 variants — Zapmizer reports the canonical number,
+     * which may differ from how the application stored it.
+     *
+     * @return array<int, string>
+     */
+    protected function numberCandidates(string $number): array
+    {
+        $digits = preg_replace('/\D/', '', $number);
+
+        if ($digits === '') {
+            return [];
+        }
+
+        $candidates = [$digits];
+
+        if (str_starts_with($digits, '55') && strlen($digits) === 13 && $digits[4] === '9') {
+            $candidates[] = substr($digits, 0, 4) . substr($digits, 5); // drop the extra 9
+        }
+
+        if (str_starts_with($digits, '55') && strlen($digits) === 12) {
+            $candidates[] = substr($digits, 0, 4) . '9' . substr($digits, 4); // add the extra 9
+        }
+
+        foreach ($candidates as $candidate) {
+            $candidates[] = '+' . $candidate;
+        }
+
+        return $candidates;
     }
 
     /**

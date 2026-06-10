@@ -11,8 +11,7 @@ return new class extends Migration
         Schema::create('whatsapp_verifieds', function (Blueprint $table) {
             $table->id();
             $table->foreignId('user_id')->unique()->constrained()->cascadeOnDelete();
-            $table->string('number')->nullable();
-            $table->string('verification_id')->nullable()->index();
+            $table->string('number')->nullable()->index();
             $table->string('url')->nullable();
             $table->string('status')->default('awaiting');
             $table->timestamp('verified_at')->nullable();

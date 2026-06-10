@@ -64,19 +64,18 @@ class VerifyNumberRouteTest extends TestCase
     public function testRouteStartsVerificationAndRedirectsToHostedPage()
     {
         $this->mockClientReturning(new VerificationSession(
-            id: 'vps_abc123',
-            url: 'http://localhost/verify/vps_abc123',
+            url: 'http://localhost/verify-number/1?number=5511999999999&signature=abc',
         ));
 
         $user = User::create(['name' => 'Test', 'whatsapp_number' => '5511999999999']);
 
         $response = $this->actingAs($user)->get(route('zapmizer.verify_number'));
 
-        $response->assertRedirect('http://localhost/verify/vps_abc123');
+        $response->assertRedirect('http://localhost/verify-number/1?number=5511999999999&signature=abc');
 
         $verification = $user->whatsappVerification()->first();
         $this->assertEquals(WhatsappVerified::STATUS_AWAITING, $verification->status);
-        $this->assertEquals('vps_abc123', $verification->verification_id);
+        $this->assertEquals('5511999999999', $verification->number);
     }
 
     public function testGuestsAreRejectedByDefault()

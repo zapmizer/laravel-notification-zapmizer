@@ -13,8 +13,9 @@ use NotificationChannels\Zapmizer\Exceptions\VerificationConnectionFailed;
 use NotificationChannels\Zapmizer\Exceptions\VerificationRequestFailed;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerVerificationException;
 use NotificationChannels\Zapmizer\Test\TestCase;
-use NotificationChannels\Zapmizer\Verification;
 use NotificationChannels\Zapmizer\VerificationClient;
+use NotificationChannels\Zapmizer\VerificationResult;
+use NotificationChannels\Zapmizer\VerificationSession;
 
 class VerificationClientTest extends TestCase
 {
@@ -27,12 +28,9 @@ class VerificationClientTest extends TestCase
         $stack->push(Middleware::history($this->history));
 
         return new VerificationClient(
-            'pk_test',
+            'team-api-token',
             new HttpClient(['handler' => $stack]),
             'http://localhost/api',
-            null,
-            'http://localhost:8000',
-            'sk_test',
         );
     }
 
@@ -40,202 +38,138 @@ class VerificationClientTest extends TestCase
     {
         $client = $this->makeClient(new MockHandler([
             new Response(201, [], json_encode([
-                'id' => 'vps_abc123',
-                'url' => 'http://localhost/verify/vps_abc123',
+                'url' => 'http://localhost/verify-number/1?number=5511999999999&expires=123&signature=abc',
                 'expires_at' => '2026-06-10T01:00:00.000000Z',
             ])),
         ]));
 
-        $session = $client->createSession('5511999999999', 'http://localhost:8000/return', '42', 900);
+        $session = $client->createSession('5511999999999', '5581999999999', 900);
 
-        $this->assertEquals('vps_abc123', $session->id);
-        $this->assertEquals('http://localhost/verify/vps_abc123', $session->url);
+        $this->assertInstanceOf(VerificationSession::class, $session);
+        $this->assertStringContainsString('/verify-number/1', $session->url);
         $this->assertEquals('2026-06-10T01:00:00.000000Z', $session->expiresAt);
 
         $request = $this->history[0]['request'];
         $this->assertEquals('POST', $request->getMethod());
         $this->assertEquals('http://localhost/api/verify-number/sessions', (string) $request->getUri());
-        $this->assertEquals('Bearer sk_test', $request->getHeaderLine('Authorization'));
-        $this->assertFalse($request->hasHeader('X-Publishable-Key'));
+        $this->assertEquals('Bearer team-api-token', $request->getHeaderLine('Authorization'));
         $this->assertEquals(
-            // number goes along to prefill the hosted page input
-            ['number' => '5511999999999', 'return_url' => 'http://localhost:8000/return', 'client_reference' => '42', 'expires_in' => 900],
+            // number prefills the hosted page; from picks the receiving bot
+            ['number' => '5511999999999', 'from' => '5581999999999', 'expires_in' => 900],
             json_decode((string) $request->getBody(), true)
         );
     }
 
-    public function testCreateSessionWithoutNumberOmitsTheParam()
+    public function testCreateSessionWithNoArgumentsSendsEmptyBody()
     {
         $client = $this->makeClient(new MockHandler([
-            new Response(201, [], json_encode([
-                'id' => 'vps_abc123',
-                'url' => 'http://localhost/verify/vps_abc123',
-            ])),
+            new Response(201, [], json_encode(['url' => 'http://localhost/verify-number/1?signature=abc'])),
         ]));
-
-        $client->createSession(returnUrl: 'http://localhost:8000/return');
-
-        $this->assertEquals(
-            ['return_url' => 'http://localhost:8000/return'],
-            json_decode((string) $this->history[0]['request']->getBody(), true)
-        );
-    }
-
-    public function testCreateSessionWithoutSecretKeyThrows()
-    {
-        $client = new VerificationClient('pk_test', new HttpClient());
-
-        $this->expectException(ZapmizerVerificationException::class);
-        $this->expectExceptionMessageMatches('/secret key/');
 
         $client->createSession();
+
+        $this->assertEquals([], json_decode((string) $this->history[0]['request']->getBody(), true));
     }
 
-    public function testCreateVerificationReturnsSessionWithWaLink()
+    public function testConfirmVerifiedReturnsCanonicalNumberAndBot()
     {
         $client = $this->makeClient(new MockHandler([
-            new Response(201, [], json_encode([
+            new Response(200, [], json_encode([
+                'status' => 'verified',
                 'number' => '5511999999999',
-                'status' => 'pending',
-                'verified_at' => null,
-                'expires_at' => '2026-06-10T00:00:00.000000Z',
-                'failure_reason' => null,
-                'client_reference' => '42',
-                'wa_link' => 'https://wa.me/5581999999999?text=ABC123',
-                'code_length' => 6,
+                'from' => '5581999999999',
+                'attempts_left' => null,
             ])),
         ]));
 
-        $verification = $client->create('+55 11 99999-9999', clientReference: '42');
+        $result = $client->confirm('+55 11 99999-9999', '123456');
 
-        $this->assertInstanceOf(Verification::class, $verification);
-        $this->assertEquals('5511999999999', $verification->number);
-        $this->assertEquals('pending', $verification->status);
-        $this->assertEquals('https://wa.me/5581999999999?text=ABC123', $verification->waLink);
-        $this->assertEquals(6, $verification->codeLength);
-        $this->assertEquals('42', $verification->clientReference);
-        $this->assertFalse($verification->isVerified());
-        $this->assertFalse($verification->isTerminal());
+        $this->assertInstanceOf(VerificationResult::class, $result);
+        $this->assertTrue($result->isVerified());
+        $this->assertEquals('5511999999999', $result->number);
+        $this->assertEquals('5581999999999', $result->from);
 
         $request = $this->history[0]['request'];
         $this->assertEquals('POST', $request->getMethod());
-        $this->assertEquals('http://localhost/api/verify-number', (string) $request->getUri());
-        $this->assertEquals('pk_test', $request->getHeaderLine('X-Publishable-Key'));
-        $this->assertEquals('http://localhost:8000', $request->getHeaderLine('Origin'));
+        $this->assertEquals('http://localhost/api/verify-number/confirm', (string) $request->getUri());
         $this->assertEquals(
-            ['number' => '+55 11 99999-9999', 'client_reference' => '42'],
+            ['number' => '+55 11 99999-9999', 'code' => '123456'],
             json_decode((string) $request->getBody(), true)
         );
     }
 
-    public function testCreateWhileResolvingHasNoWaLink()
-    {
-        $client = $this->makeClient(new MockHandler([
-            new Response(201, [], json_encode([
-                'number' => '5511999999999',
-                'status' => 'resolving',
-                'code_length' => 6,
-            ])),
-        ]));
-
-        $verification = $client->create('5511999999999');
-
-        $this->assertEquals('resolving', $verification->status);
-        $this->assertNull($verification->waLink);
-    }
-
-    public function testGetVerificationByNumber()
+    public function testConfirmInvalidCarriesAttemptsLeft()
     {
         $client = $this->makeClient(new MockHandler([
             new Response(200, [], json_encode([
-                'number' => '5511999999999',
-                'status' => 'verified',
-                'verified_at' => '2026-06-10T00:00:00.000000Z',
+                'status' => 'invalid',
+                'number' => null,
+                'from' => null,
+                'attempts_left' => 3,
             ])),
         ]));
 
-        $verification = $client->get('5511999999999');
+        $result = $client->confirm('5511999999999', '000000');
 
-        $this->assertEquals('verified', $verification->status);
-        $this->assertTrue($verification->isVerified());
-        $this->assertTrue($verification->isTerminal());
-
-        $request = $this->history[0]['request'];
-        $this->assertEquals('GET', $request->getMethod());
-        $this->assertEquals('http://localhost/api/verify-number/5511999999999', (string) $request->getUri());
+        $this->assertTrue($result->isInvalid());
+        $this->assertFalse($result->isVerified());
+        $this->assertEquals(3, $result->attemptsLeft);
     }
 
-    public function testConfirmSendsCodeAndReturnsSession()
+    public function testConfirmNotFoundIsARetryableResult()
     {
         $client = $this->makeClient(new MockHandler([
             new Response(200, [], json_encode([
-                'number' => '5511999999999',
-                'status' => 'verified',
-                'verified_at' => '2026-06-10T00:00:00.000000Z',
+                'status' => 'not_found',
+                'number' => null,
+                'from' => null,
+                'attempts_left' => null,
             ])),
         ]));
 
-        $verification = $client->confirm('5511999999999', '123456');
+        $result = $client->confirm('5511999999999', '123456');
 
-        $this->assertTrue($verification->isVerified());
-
-        $request = $this->history[0]['request'];
-        $this->assertEquals('POST', $request->getMethod());
-        $this->assertEquals('http://localhost/api/verify-number/5511999999999/confirm', (string) $request->getUri());
-        $this->assertEquals(['code' => '123456'], json_decode((string) $request->getBody(), true));
+        $this->assertTrue($result->isNotFound());
+        $this->assertFalse($result->isVerified());
     }
 
     public function testNetworkFailureBecomesTypedException()
     {
         $client = $this->makeClient(new MockHandler([
-            new ConnectException('Connection timed out', new Request('POST', 'verify-number')),
+            new ConnectException('Connection timed out', new Request('POST', 'verify-number/sessions')),
         ]));
 
         $this->expectException(VerificationConnectionFailed::class);
 
-        $client->create('5511999999999');
+        $client->createSession('5511999999999');
     }
 
-    public function testErrorResponseBecomesTypedExceptionWithStatusCodeAndBody()
+    public function testNoOnlineBotBecomesTypedException()
     {
         $client = $this->makeClient(new MockHandler([
-            new Response(422, [], json_encode(['message' => 'Esse número não tem WhatsApp.'])),
+            new Response(503, [], json_encode(['message' => 'Nenhum número de WhatsApp conectado pra receber a verificação.'])),
         ]));
 
         try {
-            $client->create('not-a-number');
+            $client->createSession('5511999999999');
             $this->fail('Expected VerificationRequestFailed to be thrown.');
         } catch (VerificationRequestFailed $exception) {
-            $this->assertEquals(422, $exception->getStatusCode());
-            $this->assertStringContainsString('Esse número não tem WhatsApp.', $exception->getMessage());
+            $this->assertEquals(503, $exception->getStatusCode());
+            $this->assertStringContainsString('Nenhum número de WhatsApp conectado', $exception->getMessage());
         }
     }
 
-    public function testWrongCodeBecomesTypedException()
+    public function testUnknownFromNumberBecomesTypedException()
     {
         $client = $this->makeClient(new MockHandler([
-            new Response(422, [], json_encode(['message' => 'Código inválido.'])),
+            new Response(422, [], json_encode(['message' => 'Nenhuma conta de WhatsApp da equipe com esse número.'])),
         ]));
 
         try {
-            $client->confirm('5511999999999', '000000');
+            $client->createSession('5511999999999', from: '5599999999999');
             $this->fail('Expected VerificationRequestFailed to be thrown.');
         } catch (VerificationRequestFailed $exception) {
             $this->assertEquals(422, $exception->getStatusCode());
-        }
-    }
-
-    public function testServerErrorBecomesTypedException()
-    {
-        $client = $this->makeClient(new MockHandler([
-            new Response(500, [], 'Internal Server Error'),
-        ]));
-
-        try {
-            $client->get('5511999999999');
-            $this->fail('Expected VerificationRequestFailed to be thrown.');
-        } catch (VerificationRequestFailed $exception) {
-            $this->assertEquals(500, $exception->getStatusCode());
         }
     }
 
@@ -245,7 +179,7 @@ class VerificationClientTest extends TestCase
 
         $this->expectException(ZapmizerVerificationException::class);
 
-        $client->create('5511999999999');
+        $client->createSession('5511999999999');
     }
 
     public function testTypedExceptionsShareACommonBase()
@@ -256,21 +190,14 @@ class VerificationClientTest extends TestCase
 
         $this->expectException(ZapmizerVerificationException::class);
 
-        $client->create('5511999999999');
+        $client->createSession('5511999999999');
     }
 
     public function testContainerResolvesClientWithConfig()
     {
-        config()->set('zapmizer.api_token', 'messages-token');
-        config()->set('zapmizer.publishable_key', 'pk_config');
-        config()->set('app.url', 'http://demo.test');
+        config()->set('zapmizer.api_token', 'config-token');
 
-        // The verify-number client uses the publishable key, never the messages API token.
-        $this->assertEquals('pk_config', app(VerificationClient::class)->getPublishableKey());
-        $this->assertEquals('http://demo.test', app(VerificationClient::class)->getOrigin());
-        $this->assertEquals('pk_runtime', app(VerificationClient::class, ['publishable_key' => 'pk_runtime'])->getPublishableKey());
-
-        config()->set('zapmizer.origin', 'http://configured.test');
-        $this->assertEquals('http://configured.test', app(VerificationClient::class)->getOrigin());
+        $this->assertEquals('config-token', app(VerificationClient::class)->getToken());
+        $this->assertEquals('runtime-token', app(VerificationClient::class, ['api_token' => 'runtime-token'])->getToken());
     }
 }

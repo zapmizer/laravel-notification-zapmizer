@@ -21,6 +21,14 @@ class ZapmizerVerificationException extends Exception
     }
 
     /**
+     * Thrown when the model has no WhatsApp number to verify.
+     */
+    public static function numberNotProvided(): self
+    {
+        return new self('There is no WhatsApp number to verify. Override getWhatsappNumberForVerification() on your model to point at the right attribute.');
+    }
+
+    /**
      * Thrown when Zapmizer responds with a payload we can't make sense of.
      */
     public static function unexpectedResponse(string $reason): self

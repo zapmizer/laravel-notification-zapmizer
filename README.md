@@ -54,6 +54,53 @@ In every Notification you wish to notify via WhatsApp, you must add a toZapmizer
 
 ## Number verification
 
+Mirroring Laravel's `MustVerifyEmail`, add an interface and a trait to your `User` model and you get the methods you'd expect. The verification state lives in the package's own `whatsapp_verifieds` table (1:1 with the user) — your `users` table is never touched.
+
+First publish and run the migration:
+
+```bash
+php artisan vendor:publish --provider="NotificationChannels\Zapmizer\ZapmizerServiceProvider" --tag=migrations
+php artisan migrate
+```
+
+Then set up your model:
+
+```php
+use NotificationChannels\Zapmizer\Contracts\MustVerifyWhatsapp as MustVerifyWhatsappContract;
+use NotificationChannels\Zapmizer\MustVerifyWhatsapp;
+
+class User extends Authenticatable implements MustVerifyWhatsappContract
+{
+    use MustVerifyWhatsapp;
+
+    // By default the number is read from the `whatsapp_number` attribute.
+    // Override this if it lives somewhere else:
+    public function getWhatsappNumberForVerification(): ?string
+    {
+        return $this->phone;
+    }
+}
+```
+
+And use it:
+
+```php
+// Start a verification: records the state as "awaiting" and
+// returns the hosted page link where the user completes it.
+$url = $user->startWhatsappVerification();
+
+$user->hasVerifiedWhatsapp(); // false while awaiting
+
+// Typically called from the webhook that confirms the verification:
+$user->markWhatsappAsVerified();
+
+$user->hasVerifiedWhatsapp(); // true
+```
+
+The state record is available through `$user->whatsappVerification()` (a `WhatsappVerified` model with `status`, `verification_id`, `url`, `number` and `verified_at`). To extend the model, subclass `NotificationChannels\Zapmizer\Models\WhatsappVerified` and point the `zapmizer.models.whatsapp_verified` config key at your subclass.
+
+### Verification client
+
 The package also ships a client for the Zapmizer verification API. It can request a new verification for a phone number (returning the verification identifier, the hosted page link and the initial state) and fetch the state of an existing verification.
 
 The client is registered in the container, so you can inject it or resolve it directly:

@@ -99,6 +99,25 @@ $user->hasVerifiedWhatsapp(); // true
 
 The state record is available through `$user->whatsappVerification()` (a `WhatsappVerified` model with `status`, `verification_id`, `url`, `number` and `verified_at`). To extend the model, subclass `NotificationChannels\Zapmizer\Models\WhatsappVerified` and point the `zapmizer.models.whatsapp_verified` config key at your subclass.
 
+### Built-in verification route
+
+The package auto-registers a named GET route, `zapmizer.verify_number` (at `/zapmizer/verify-number` by default, behind the `web` and `auth` middleware). When an authenticated user hits it, a verification is started — recorded as "awaiting" — and they are redirected straight to the hosted page. So in the frontend all you need is a link:
+
+```blade
+<a href="{{ route('zapmizer.verify_number') }}">Verify your WhatsApp</a>
+```
+
+Prefix and middleware are configurable, and you can disable the routes entirely to mount your own:
+
+```php
+// config/zapmizer.php
+'routes' => [
+    'enabled' => env('ZAPMIZER_ROUTES_ENABLED', true),
+    'prefix' => 'zapmizer',
+    'middleware' => ['web', 'auth'],
+],
+```
+
 ### Verification client
 
 The package also ships a client for the Zapmizer verification API. It can request a new verification for a phone number (returning the verification identifier, the hosted page link and the initial state) and fetch the state of an existing verification.

@@ -8,6 +8,7 @@ use Illuminate\Support\ServiceProvider;
 use Illuminate\Notifications\ChannelManager;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Notification;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Contracts\Foundation\Application;
 
 
@@ -44,6 +45,36 @@ class ZapmizerServiceProvider extends ServiceProvider
         if ($this->isLumen() === false) {
             $this->mergeConfigFrom(__DIR__ . '/../config/zapmizer.php', 'zapmizer');
         }
+    }
+
+    /**
+     * Bootstrap the application services.
+     */
+    public function boot()
+    {
+        $this->registerRoutes();
+    }
+
+    /**
+     * Register the package routes.
+     *
+     * Disable via `zapmizer.routes.enabled` to mount your own instead.
+     *
+     * @return void
+     */
+    public function registerRoutes()
+    {
+        if (config('zapmizer.routes.enabled', true) === false) {
+            return;
+        }
+
+        Route::group([
+            'prefix' => config('zapmizer.routes.prefix', 'zapmizer'),
+            'middleware' => config('zapmizer.routes.middleware', ['web', 'auth']),
+            'as' => 'zapmizer.',
+        ], function () {
+            $this->loadRoutesFrom(__DIR__ . '/../routes/web.php');
+        });
     }
 
     /**

@@ -8,4 +8,9 @@ return [
     'models' => [
         'whatsapp_verified' => \NotificationChannels\Zapmizer\Models\WhatsappVerified::class,
     ],
+    'routes' => [
+        'enabled' => env('ZAPMIZER_ROUTES_ENABLED', true),
+        'prefix' => 'zapmizer',
+        'middleware' => ['web', 'auth'],
+    ],
 ];

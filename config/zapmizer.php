@@ -19,6 +19,7 @@ return [
     'origin' => env('ZAPMIZER_ORIGIN'),
     'models' => [
         'whatsapp_verified' => \NotificationChannels\Zapmizer\Models\WhatsappVerified::class,
+        'webhook_event' => \NotificationChannels\Zapmizer\Models\WebhookEvent::class,
     ],
     'routes' => [
         'enabled' => env('ZAPMIZER_ROUTES_ENABLED', true),

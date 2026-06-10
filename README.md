@@ -116,9 +116,11 @@ The same `ZapbotSignature::isValid($header, $rawBody, $secret)` validates the `X
 The package also registers a public, stateless `POST /zapmizer/webhook` route (named `zapmizer.webhook`) that receives Zapbot's server-to-server confirmations — point the verification's webhook URL at it. The endpoint:
 
 - rejects anything not signed with your webhook secret (`X-Zapbot-Signature`);
+- records every accepted delivery in its own `zapmizer_webhook_events` table (payload included) — an audit trail whose unique `event_id` is the idempotency key, so redeliveries in any order are acknowledged without applying the effect twice;
 - correlates the event to the verification by the `client_reference` the package sent when starting it (the user's key) — never by phone number;
-- is idempotent: redeliveries of the same `event_id` are acknowledged without applying the effect twice;
 - on confirmation, marks the number as verified and fires the `NotificationChannels\Zapmizer\Events\WhatsappVerified` event; failure/expiration events update the state to `failed`.
+
+The `whatsapp_verifieds` table stays purely about the verification state; received webhooks live in `zapmizer_webhook_events` (model `NotificationChannels\Zapmizer\Models\WebhookEvent`, extensible via `zapmizer.models.webhook_event`). Both migrations are published by the `migrations` tag.
 
 Listen to the event to react in your app:
 

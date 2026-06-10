@@ -6,6 +6,7 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Schema;
 use NotificationChannels\Zapmizer\Events\WhatsappVerified as WhatsappVerifiedEvent;
+use NotificationChannels\Zapmizer\Models\WebhookEvent;
 use NotificationChannels\Zapmizer\Models\WhatsappVerified;
 use NotificationChannels\Zapmizer\Test\Fixtures\User;
 use NotificationChannels\Zapmizer\Test\TestCase;
@@ -29,6 +30,9 @@ class WebhookTest extends TestCase
         });
 
         $migration = include __DIR__ . '/../../database/migrations/create_whatsapp_verifieds_table.php.stub';
+        $migration->up();
+
+        $migration = include __DIR__ . '/../../database/migrations/create_zapmizer_webhook_events_table.php.stub';
         $migration->up();
     }
 
@@ -121,10 +125,16 @@ class WebhookTest extends TestCase
 
         $record = $user->whatsappVerification()->first();
         $this->assertEquals('5511999999999', $record->number);
-        $this->assertEquals('evt_1_verified', $record->last_event_id);
         $this->assertNotNull($record->verified_at);
 
-        Event::assertDispatched(WhatsappVerifiedEvent::class, fn ($event) => $event->verification->is($record));
+        // The delivery is recorded in its own table, payload included.
+        $event = WebhookEvent::firstWhere('event_id', 'evt_1_verified');
+        $this->assertNotNull($event);
+        $this->assertTrue($event->handled);
+        $this->assertEquals('verify_number.verified', $event->type);
+        $this->assertEquals('5511999999999', $event->payload['number']);
+
+        Event::assertDispatched(WhatsappVerifiedEvent::class, fn ($e) => $e->verification->is($record));
     }
 
     public function testRedeliveryOfSameEventHasNoDuplicateEffect()
@@ -135,10 +145,29 @@ class WebhookTest extends TestCase
         $payload = $this->verifiedPayload($user);
 
         $this->deliver($payload)->assertOk();
-        $this->deliver($payload)->assertOk()->assertJson(['duplicate' => true]);
+        $this->deliver($payload)->assertOk()->assertJson(['handled' => true, 'duplicate' => true]);
 
         $this->assertTrue($user->hasVerifiedWhatsapp());
         $this->assertEquals(1, WhatsappVerified::count());
+        $this->assertEquals(1, WebhookEvent::count());
+        Event::assertDispatchedTimes(WhatsappVerifiedEvent::class, 1);
+    }
+
+    public function testOutOfOrderRedeliveryIsStillDeduplicated()
+    {
+        Event::fake([WhatsappVerifiedEvent::class]);
+
+        $user = $this->makeAwaitingUser();
+        $verified = $this->verifiedPayload($user);
+        $expired = [...$verified, 'event_id' => 'evt_1_expired', 'type' => 'verify_number.expired', 'status' => 'expired'];
+
+        // expired arrives first, then verified, then expired is REDELIVERED:
+        // it must be deduplicated, not re-applied over the verified state.
+        $this->deliver($expired)->assertOk();
+        $this->deliver($verified)->assertOk();
+        $this->deliver($expired)->assertOk()->assertJson(['duplicate' => true]);
+
+        $this->assertTrue($user->hasVerifiedWhatsapp());
         Event::assertDispatchedTimes(WhatsappVerifiedEvent::class, 1);
     }
 
@@ -172,6 +201,9 @@ class WebhookTest extends TestCase
         $this->deliver($payload)->assertOk()->assertJson(['received' => true, 'handled' => false]);
 
         $this->assertFalse($user->hasVerifiedWhatsapp());
+
+        // Still recorded for auditing, flagged as unhandled.
+        $this->assertFalse(WebhookEvent::firstWhere('event_id', $payload['event_id'])->handled);
     }
 
     public function testWebhookRouteIsPublic()

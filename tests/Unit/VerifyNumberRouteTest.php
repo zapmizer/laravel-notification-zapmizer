@@ -9,8 +9,8 @@ use Mockery;
 use NotificationChannels\Zapmizer\Models\WhatsappVerified;
 use NotificationChannels\Zapmizer\Test\Fixtures\User;
 use NotificationChannels\Zapmizer\Test\TestCase;
-use NotificationChannels\Zapmizer\Verification;
 use NotificationChannels\Zapmizer\VerificationClient;
+use NotificationChannels\Zapmizer\VerificationSession;
 use Orchestra\Testbench\Attributes\DefineEnvironment;
 
 class VerifyNumberRouteTest extends TestCase
@@ -44,28 +44,12 @@ class VerifyNumberRouteTest extends TestCase
         $app['config']->set('zapmizer.routes.enabled', false);
     }
 
-    protected function mockClientReturning(Verification $verification): void
+    protected function mockClientReturning(VerificationSession $session): void
     {
         $client = Mockery::mock(VerificationClient::class);
-        $client->shouldReceive('create')->andReturn($verification);
+        $client->shouldReceive('createSession')->andReturn($session);
 
         $this->instance(VerificationClient::class, $client);
-    }
-
-    public function testRouteRedirectsBackWhileNumberIsStillResolving()
-    {
-        $this->mockClientReturning(new Verification(number: '5511999999999', status: 'resolving'));
-
-        $user = User::create(['name' => 'Test', 'whatsapp_number' => '5511999999999']);
-
-        $response = $this->actingAs($user)
-            ->from('/checkout')
-            ->get(route('zapmizer.verify_number'));
-
-        $response->assertRedirect('/checkout');
-        $response->assertSessionHas('zapmizer.resolving', true);
-
-        $this->assertEquals(WhatsappVerified::STATUS_AWAITING, $user->whatsappVerification()->first()->status);
     }
 
     public function testNamedRouteExistsWithAuthMiddlewareAndDefaultPrefix()
@@ -77,23 +61,22 @@ class VerifyNumberRouteTest extends TestCase
         $this->assertContains('auth', $route->gatherMiddleware());
     }
 
-    public function testRouteStartsVerificationAndRedirectsToWaLink()
+    public function testRouteStartsVerificationAndRedirectsToHostedPage()
     {
-        $this->mockClientReturning(new Verification(
-            number: '5511999999999',
-            status: 'pending',
-            waLink: 'https://wa.me/5581999999999?text=ABC123',
+        $this->mockClientReturning(new VerificationSession(
+            id: 'vps_abc123',
+            url: 'http://localhost/verify/vps_abc123',
         ));
 
         $user = User::create(['name' => 'Test', 'whatsapp_number' => '5511999999999']);
 
         $response = $this->actingAs($user)->get(route('zapmizer.verify_number'));
 
-        $response->assertRedirect('https://wa.me/5581999999999?text=ABC123');
+        $response->assertRedirect('http://localhost/verify/vps_abc123');
 
         $verification = $user->whatsappVerification()->first();
         $this->assertEquals(WhatsappVerified::STATUS_AWAITING, $verification->status);
-        $this->assertEquals('5511999999999', $verification->number);
+        $this->assertEquals('vps_abc123', $verification->verification_id);
     }
 
     public function testGuestsAreRejectedByDefault()

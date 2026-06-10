@@ -32,7 +32,45 @@ class VerificationClientTest extends TestCase
             'http://localhost/api',
             null,
             'http://localhost:8000',
+            'sk_test',
         );
+    }
+
+    public function testCreateSessionReturnsHostedPageUrl()
+    {
+        $client = $this->makeClient(new MockHandler([
+            new Response(201, [], json_encode([
+                'id' => 'vps_abc123',
+                'url' => 'http://localhost/verify/vps_abc123',
+                'expires_at' => '2026-06-10T01:00:00.000000Z',
+            ])),
+        ]));
+
+        $session = $client->createSession('http://localhost:8000/return', '42', 900);
+
+        $this->assertEquals('vps_abc123', $session->id);
+        $this->assertEquals('http://localhost/verify/vps_abc123', $session->url);
+        $this->assertEquals('2026-06-10T01:00:00.000000Z', $session->expiresAt);
+
+        $request = $this->history[0]['request'];
+        $this->assertEquals('POST', $request->getMethod());
+        $this->assertEquals('http://localhost/api/verify-number/sessions', (string) $request->getUri());
+        $this->assertEquals('Bearer sk_test', $request->getHeaderLine('Authorization'));
+        $this->assertFalse($request->hasHeader('X-Publishable-Key'));
+        $this->assertEquals(
+            ['return_url' => 'http://localhost:8000/return', 'client_reference' => '42', 'expires_in' => 900],
+            json_decode((string) $request->getBody(), true)
+        );
+    }
+
+    public function testCreateSessionWithoutSecretKeyThrows()
+    {
+        $client = new VerificationClient('pk_test', new HttpClient());
+
+        $this->expectException(ZapmizerVerificationException::class);
+        $this->expectExceptionMessageMatches('/secret key/');
+
+        $client->createSession();
     }
 
     public function testCreateVerificationReturnsSessionWithWaLink()

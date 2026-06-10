@@ -31,10 +31,10 @@ interface MustVerifyWhatsapp
     public function markWhatsappAsVerified(): bool;
 
     /**
-     * Start a new WhatsApp verification and return the wa.me link the user
-     * must open (null while Zapbot is still resolving the number).
+     * Start a new WhatsApp verification and return the hosted page link to
+     * redirect the user to.
      */
-    public function startWhatsappVerification(): ?string;
+    public function startWhatsappVerification(?string $returnUrl = null): string;
 
     /**
      * Confirm the code the user received on WhatsApp.

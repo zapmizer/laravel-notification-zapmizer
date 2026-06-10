@@ -29,6 +29,14 @@ class ZapmizerVerificationException extends Exception
     }
 
     /**
+     * Thrown when there's no secret key provided for the hosted sessions API.
+     */
+    public static function secretKeyNotProvided(): self
+    {
+        return new self('You must provide your zapmizer secret key (sk_...) to create hosted verification sessions. Set ZAPMIZER_SECRET_KEY — this is not the same credential as the publishable key or the messages API token.');
+    }
+
+    /**
      * Thrown when trying to act on a verification that was never started.
      */
     public static function verificationNotStarted(): self

@@ -53,35 +53,32 @@ trait MustVerifyWhatsapp
     }
 
     /**
-     * Start a new WhatsApp verification.
+     * Start a new WhatsApp verification through the hosted page.
      *
-     * Asks Zapbot for a verification session of the model's number, records
-     * the state as "awaiting" and returns the wa.me link the user must open
-     * to send the opening message. While Zapbot is still resolving the
-     * number the link is not available yet and null is returned — sync later
-     * to pick it up.
+     * Creates a hosted verification session on Zapbot, records the state as
+     * "awaiting" and returns the hosted page link to redirect the user to.
+     * The whole flow (number, wa.me link, code) happens there; when it
+     * completes, the user comes back to $returnUrl with signed query params
+     * (validate with ZapbotSignature::isValidQuery()).
      *
      * @throws ZapmizerVerificationException
      */
-    public function startWhatsappVerification(): ?string
+    public function startWhatsappVerification(?string $returnUrl = null): string
     {
-        $number = $this->getWhatsappNumberForVerification();
+        $session = app(VerificationClient::class)->createSession(
+            returnUrl: $returnUrl ?? config('zapmizer.return_url'),
+            clientReference: (string) $this->getKey(),
+        );
 
-        if (blank($number)) {
-            throw ZapmizerVerificationException::numberNotProvided();
-        }
-
-        $verification = app(VerificationClient::class)->create($number, clientReference: (string) $this->getKey());
-
-        $record = $this->whatsappVerification()->firstOrNew([]);
-        $record->forceFill([
-            'number' => $verification->number,
-            'verification_id' => $verification->number,
+        $this->whatsappVerification()->updateOrCreate([], [
+            'number' => $this->getWhatsappNumberForVerification(),
+            'verification_id' => $session->id,
+            'url' => $session->url,
+            'status' => WhatsappVerified::STATUS_AWAITING,
             'verified_at' => null,
         ]);
-        $this->applyZapbotStatus($record, $verification);
 
-        return $verification->waLink;
+        return $session->url;
     }
 
     /**

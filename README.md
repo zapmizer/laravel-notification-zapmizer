@@ -21,9 +21,11 @@ php artisan vendor:publish --provider="Notification\Zapmizer\ZapmizerServiceProv
 ```php
     ZAPMIZER_API_TOKEN="your-api-token"
     ZAPMIZER_FROM_NUMBER="558181643260"
-    # Verify-number API uses its own credential (pk_...), not the API token:
-    ZAPMIZER_PUBLISHABLE_KEY="pk_your-publishable-key"
-    ZAPMIZER_WEBHOOK_SECRET="your-webhook-secret"
+    # Verify-number APIs use their own credentials, not the API token:
+    ZAPMIZER_SECRET_KEY="sk_your-secret-key"          # hosted page sessions (server-side)
+    ZAPMIZER_PUBLISHABLE_KEY="pk_your-publishable-key" # widget API (optional)
+    ZAPMIZER_WEBHOOK_SECRET="whsec_your-webhook-secret"
+    ZAPMIZER_RETURN_URL="https://your-app.com/whatsapp/verified"
 ```
 
 
@@ -84,30 +86,32 @@ class User extends Authenticatable implements MustVerifyWhatsappContract
 }
 ```
 
-The flow is inverted compared to e-mail verification: the user opens a wa.me link, sends the opening message, receives a code on WhatsApp and types it back into your app.
+The default flow uses the hosted verification page (Stripe billing-portal style): you create a session server-side with the secret key, redirect the user to the hosted page on the Zapmizer domain — where the whole thing happens (wa.me link, code) — and they come back to your `return_url` with signed query params.
 
 ```php
-// 1. Start a verification: records the state as "awaiting" and returns the
-//    wa.me link the user must open. While Zapbot is still resolving the
-//    number this returns null — call syncWhatsappVerificationStatus()
-//    shortly after to pick the link up from the state record.
-$waLink = $user->startWhatsappVerification();
+// 1. Start a verification: creates a hosted session, records the state as
+//    "awaiting" and returns the hosted page link to redirect the user to.
+//    The return URL defaults to config('zapmizer.return_url').
+$url = $user->startWhatsappVerification();
 
 $user->hasVerifiedWhatsapp(); // false while awaiting
 
-// 2. The user sent the message and received a code on WhatsApp.
-//    A wrong code raises VerificationRequestFailed (422).
-$user->confirmWhatsappVerification($request->input('code')); // true when verified
+// 2. The user completed the hosted page and came back to your return_url
+//    with ?verify_session=...&status=verified&sig=t=...,v1=...
+//    Validate the signature with your webhook secret, then mark verified:
+use NotificationChannels\Zapmizer\Support\ZapbotSignature;
 
-// Polling alternative — converge the local state with Zapbot (useful when
-// webhooks can't reach you, e.g. local development):
-$user->syncWhatsappVerificationStatus(); // 'awaiting' | 'verified' | 'failed' | null
-
-// Or, from a webhook handler you trust:
-$user->markWhatsappAsVerified();
+if (ZapbotSignature::isValidQuery($request->query(), config('zapmizer.webhook_secret'))
+    && $request->query('status') === 'verified') {
+    $user->markWhatsappAsVerified();
+}
 
 $user->hasVerifiedWhatsapp(); // true
 ```
+
+The same `ZapbotSignature::isValid($header, $rawBody, $secret)` validates the `X-Zapbot-Signature` header of server-to-server webhooks (note: Zapbot only delivers webhooks to public https URLs).
+
+For the embedded-widget flow (pk_ key), the trait also exposes `confirmWhatsappVerification($code)` and `syncWhatsappVerificationStatus()` for polling.
 
 The state record is available through `$user->whatsappVerification()` (a `WhatsappVerified` model with `status`, `verification_id`, `url`, `number` and `verified_at`). To extend the model, subclass `NotificationChannels\Zapmizer\Models\WhatsappVerified` and point the `zapmizer.models.whatsapp_verified` config key at your subclass.
 

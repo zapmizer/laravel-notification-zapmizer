@@ -38,6 +38,7 @@ class VerificationClient
         ?string $apiBaseUri = null,
         protected ?string $apiVersion = null,
         protected ?string $origin = null,
+        protected ?string $secretKey = null,
     ) {
         $this->token = $token;
         $this->http = $httpClient ?? new HttpClient();
@@ -114,6 +115,65 @@ class VerificationClient
         $this->http = $http;
 
         return $this;
+    }
+
+    /**
+     * Secret key getter.
+     */
+    public function getSecretKey(): ?string
+    {
+        return $this->secretKey;
+    }
+
+    /**
+     * Secret key setter.
+     *
+     * @return $this
+     */
+    public function setSecretKey(?string $secretKey): self
+    {
+        $this->secretKey = $secretKey;
+
+        return $this;
+    }
+
+    /**
+     * Create a hosted verification page session.
+     *
+     * Server-side call authenticated with the secret key (sk_...). Returns
+     * the session whose `url` the end user must be redirected to — the whole
+     * verification happens there, on the Zapbot domain. When it completes,
+     * the user is sent back to `returnUrl` with signed query params (see
+     * ZapbotSignature::isValidQuery()).
+     *
+     * @throws ZapmizerVerificationException
+     */
+    public function createSession(?string $returnUrl = null, ?string $clientReference = null, ?int $expiresIn = null): VerificationSession
+    {
+        if (blank($this->secretKey)) {
+            throw ZapmizerVerificationException::secretKeyNotProvided();
+        }
+
+        try {
+            $response = $this->http->request('POST', $this->getApiBaseUri() . '/verify-number/sessions', [
+                'json' => array_filter([
+                    'return_url' => $returnUrl,
+                    'client_reference' => $clientReference,
+                    'expires_in' => $expiresIn,
+                ]),
+                'headers' => array_filter([
+                    'Authorization' => 'Bearer ' . $this->secretKey,
+                    'Accept' => 'application/json',
+                    'api-version' => $this->apiVersion,
+                ]),
+            ]);
+        } catch (BadResponseException $exception) {
+            throw VerificationRequestFailed::fromResponse($exception);
+        } catch (GuzzleException $exception) {
+            throw VerificationConnectionFailed::dueTo($exception);
+        }
+
+        return VerificationSession::fromPayload($this->decode($response));
     }
 
     /**

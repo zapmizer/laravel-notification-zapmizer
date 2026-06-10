@@ -4,6 +4,9 @@ return [
     'api_token' => env('ZAPMIZER_API_TOKEN'),
     'base_uri' => env('ZAPMIZER_BASE_URI', 'https://app.zapmizer.com/api/'),
     'from_number' => env('ZAPMIZER_FROM_NUMBER'),
+    // "Back to the site" button on the hosted verification page. Plain
+    // navigation — it does not prove the outcome (webhook/confirm do).
+    'return_url' => env('ZAPMIZER_RETURN_URL'),
     'models' => [
         'whatsapp_verified' => \NotificationChannels\Zapmizer\Models\WhatsappVerified::class,
     ],

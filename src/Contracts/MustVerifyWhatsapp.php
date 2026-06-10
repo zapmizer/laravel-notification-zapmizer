@@ -34,7 +34,7 @@ interface MustVerifyWhatsapp
      * Start a new WhatsApp verification and return the hosted page link to
      * redirect the user to.
      */
-    public function startWhatsappVerification(): string;
+    public function startWhatsappVerification(?string $returnUrl = null): string;
 
     /**
      * Confirm the code the user received on WhatsApp.

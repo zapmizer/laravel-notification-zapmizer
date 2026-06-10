@@ -60,15 +60,17 @@ trait MustVerifyWhatsapp
      * and returns the hosted page link to redirect the user to. The model's
      * number (when set) prefills the input there; `zapmizer.from_number`
      * (when set) picks which of the team's WhatsApp numbers receives the
-     * verification.
+     * verification; $returnUrl (or `zapmizer.return_url`) becomes the
+     * page's "back to the site" button.
      *
      * @throws ZapmizerVerificationException
      */
-    public function startWhatsappVerification(): string
+    public function startWhatsappVerification(?string $returnUrl = null): string
     {
         $session = app(VerificationClient::class)->createSession(
             number: $this->getWhatsappNumberForVerification(),
             from: config('zapmizer.from_number'),
+            returnUrl: $returnUrl ?? config('zapmizer.return_url'),
         );
 
         $this->whatsappVerification()->updateOrCreate([], [

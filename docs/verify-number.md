@@ -44,6 +44,8 @@ ZAPMIZER_API_TOKEN=...                       # the team's API token
 ZAPMIZER_BASE_URI=https://app.zapmizer.com/api/
 ZAPMIZER_FROM_NUMBER=                        # optional: which team number receives the
                                              # verification (default: first online bot)
+ZAPMIZER_RETURN_URL=                         # optional: "back to the site" button on the
+                                             # hosted page (e.g. https://your-app.com/account)
 ```
 
 ## 3. Preparing the User model
@@ -100,6 +102,8 @@ return redirect()->away($url);
 ```
 
 The hosted page URL is signed and temporary (default 1 hour; Zapmizer caps it at 24h). On the page, the user opens the wa.me link, sends the trigger phrase, receives the code on WhatsApp and can type it right there — nothing else for your app to do besides checking the state afterwards.
+
+When a return URL is set (`zapmizer.return_url`, or per call: `$user->startWhatsappVerification($returnUrl)`), the hosted page shows a "back to the site" button pointing at it. It rides the signed URL, so it's tamper-proof — but the redirect is plain navigation and does **not** prove the verification outcome; rely on the webhook or the confirm call for that.
 
 ## 5. Confirming the code in your app (optional)
 
@@ -197,5 +201,6 @@ Notable API errors when creating a session: `503` when the team has no online bo
 |---|---|
 | `zapmizer.api_token` | the team's API token (shared with the messages API) |
 | `zapmizer.from_number` | which team number receives the verification (optional) |
+| `zapmizer.return_url` | "back to the site" button on the hosted page (optional) |
 | `zapmizer.routes.*` | enable/prefix/middleware of the package routes |
 | `zapmizer.models.whatsapp_verified` | subclass the state model |

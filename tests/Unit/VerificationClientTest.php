@@ -43,7 +43,7 @@ class VerificationClientTest extends TestCase
             ])),
         ]));
 
-        $session = $client->createSession('5511999999999', '5581999999999', 900);
+        $session = $client->createSession('5511999999999', '5581999999999', 'http://localhost:8000/checkout', 900);
 
         $this->assertInstanceOf(VerificationSession::class, $session);
         $this->assertStringContainsString('/verify-number/1', $session->url);
@@ -54,8 +54,14 @@ class VerificationClientTest extends TestCase
         $this->assertEquals('http://localhost/api/verify-number/sessions', (string) $request->getUri());
         $this->assertEquals('Bearer team-api-token', $request->getHeaderLine('Authorization'));
         $this->assertEquals(
-            // number prefills the hosted page; from picks the receiving bot
-            ['number' => '5511999999999', 'from' => '5581999999999', 'expires_in' => 900],
+            // number prefills the hosted page; from picks the receiving bot;
+            // return_url becomes the page's "back to the site" button
+            [
+                'number' => '5511999999999',
+                'from' => '5581999999999',
+                'return_url' => 'http://localhost:8000/checkout',
+                'expires_in' => 900,
+            ],
             json_decode((string) $request->getBody(), true)
         );
     }

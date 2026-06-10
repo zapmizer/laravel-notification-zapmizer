@@ -71,20 +71,37 @@ class MustVerifyWhatsappTest extends TestCase
         $this->assertFalse($user->hasVerifiedWhatsapp());
     }
 
-    public function testStartVerificationPassesNumberAndConfiguredFrom()
+    public function testStartVerificationPassesNumberConfiguredFromAndReturnUrl()
     {
         config()->set('zapmizer.from_number', '5581999999999');
+        config()->set('zapmizer.return_url', 'http://app.test/account');
 
         $client = Mockery::mock(VerificationClient::class);
         $client->shouldReceive('createSession')
-            ->withArgs(function (?string $number, ?string $from) {
-                return $number === '5511999999999' && $from === '5581999999999';
+            ->withArgs(function (?string $number, ?string $from, ?string $returnUrl) {
+                return $number === '5511999999999'
+                    && $from === '5581999999999'
+                    && $returnUrl === 'http://app.test/account';
             })
             ->andReturn(new VerificationSession(url: 'http://localhost/verify-number/1?signature=abc'));
 
         $this->instance(VerificationClient::class, $client);
 
         $this->assertNotEmpty($this->makeUser()->startWhatsappVerification());
+    }
+
+    public function testStartVerificationReturnUrlArgumentOverridesConfig()
+    {
+        config()->set('zapmizer.return_url', 'http://app.test/account');
+
+        $client = Mockery::mock(VerificationClient::class);
+        $client->shouldReceive('createSession')
+            ->withArgs(fn (?string $number, ?string $from, ?string $returnUrl) => $returnUrl === 'http://app.test/checkout')
+            ->andReturn(new VerificationSession(url: 'http://localhost/verify-number/1?signature=abc'));
+
+        $this->instance(VerificationClient::class, $client);
+
+        $this->assertNotEmpty($this->makeUser()->startWhatsappVerification('http://app.test/checkout'));
     }
 
     public function testStartVerificationWorksWithoutANumberSet()

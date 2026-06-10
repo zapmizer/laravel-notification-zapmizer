@@ -95,18 +95,21 @@ class VerificationClient
      *
      * Returns the signed, temporary URL to redirect the end user to — the
      * wa.me trigger and the code input live there. Pass `$number` to prefill
-     * the number input, and `$from` to pick which of the team's WhatsApp
-     * numbers receives the verification (omitted, Zapmizer uses the first
-     * online one).
+     * the number input, `$from` to pick which of the team's WhatsApp numbers
+     * receives the verification (omitted, Zapmizer uses the first online
+     * one), and `$returnUrl` to give the page a "back to the site" button.
+     * The return redirect is plain navigation — it does NOT prove the
+     * verification outcome; rely on the webhook or on confirm() for that.
      *
      * @throws ZapmizerVerificationException
      */
-    public function createSession(?string $number = null, ?string $from = null, ?int $expiresIn = null): VerificationSession
+    public function createSession(?string $number = null, ?string $from = null, ?string $returnUrl = null, ?int $expiresIn = null): VerificationSession
     {
         $response = $this->request('POST', '/verify-number/sessions', [
             'json' => array_filter([
                 'number' => $number,
                 'from' => $from,
+                'return_url' => $returnUrl,
                 'expires_in' => $expiresIn,
             ]),
         ]);

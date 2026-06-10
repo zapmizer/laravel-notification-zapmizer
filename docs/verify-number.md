@@ -95,7 +95,7 @@ public function getWhatsappNumberForVerification(): ?string
 }
 ```
 
-> **Note:** in the hosted flow the number is informative — the user types/confirms it on the hosted page, and the verified number comes back in the webhook payload. The model doesn't even need a number set to start a verification.
+> **Note:** in the hosted flow the model's number is sent along when creating the session and **prefills the input on the hosted page** — the user just confirms (or corrects) it there. The verified number comes back in the webhook payload. The model doesn't need a number set to start a verification; without one, the user types it on the page.
 
 ## 4. Starting a verification
 

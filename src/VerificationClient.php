@@ -142,13 +142,14 @@ class VerificationClient
      *
      * Server-side call authenticated with the secret key (sk_...). Returns
      * the session whose `url` the end user must be redirected to — the whole
-     * verification happens there, on the Zapbot domain. When it completes,
-     * the user is sent back to `returnUrl` with signed query params (see
+     * verification happens there, on the Zapbot domain. Pass `$number` to
+     * prefill the number input on the hosted page. When it completes, the
+     * user is sent back to `returnUrl` with signed query params (see
      * ZapbotSignature::isValidQuery()).
      *
      * @throws ZapmizerVerificationException
      */
-    public function createSession(?string $returnUrl = null, ?string $clientReference = null, ?int $expiresIn = null): VerificationSession
+    public function createSession(?string $number = null, ?string $returnUrl = null, ?string $clientReference = null, ?int $expiresIn = null): VerificationSession
     {
         if (blank($this->secretKey)) {
             throw ZapmizerVerificationException::secretKeyNotProvided();
@@ -157,6 +158,7 @@ class VerificationClient
         try {
             $response = $this->http->request('POST', $this->getApiBaseUri() . '/verify-number/sessions', [
                 'json' => array_filter([
+                    'number' => $number,
                     'return_url' => $returnUrl,
                     'client_reference' => $clientReference,
                     'expires_in' => $expiresIn,

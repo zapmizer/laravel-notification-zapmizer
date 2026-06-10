@@ -66,6 +66,7 @@ trait MustVerifyWhatsapp
     public function startWhatsappVerification(?string $returnUrl = null): string
     {
         $session = app(VerificationClient::class)->createSession(
+            number: $this->getWhatsappNumberForVerification(),
             returnUrl: $returnUrl ?? config('zapmizer.return_url'),
             clientReference: (string) $this->getKey(),
         );

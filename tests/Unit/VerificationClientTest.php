@@ -46,7 +46,7 @@ class VerificationClientTest extends TestCase
             ])),
         ]));
 
-        $session = $client->createSession('http://localhost:8000/return', '42', 900);
+        $session = $client->createSession('5511999999999', 'http://localhost:8000/return', '42', 900);
 
         $this->assertEquals('vps_abc123', $session->id);
         $this->assertEquals('http://localhost/verify/vps_abc123', $session->url);
@@ -58,8 +58,26 @@ class VerificationClientTest extends TestCase
         $this->assertEquals('Bearer sk_test', $request->getHeaderLine('Authorization'));
         $this->assertFalse($request->hasHeader('X-Publishable-Key'));
         $this->assertEquals(
-            ['return_url' => 'http://localhost:8000/return', 'client_reference' => '42', 'expires_in' => 900],
+            // number goes along to prefill the hosted page input
+            ['number' => '5511999999999', 'return_url' => 'http://localhost:8000/return', 'client_reference' => '42', 'expires_in' => 900],
             json_decode((string) $request->getBody(), true)
+        );
+    }
+
+    public function testCreateSessionWithoutNumberOmitsTheParam()
+    {
+        $client = $this->makeClient(new MockHandler([
+            new Response(201, [], json_encode([
+                'id' => 'vps_abc123',
+                'url' => 'http://localhost/verify/vps_abc123',
+            ])),
+        ]));
+
+        $client->createSession(returnUrl: 'http://localhost:8000/return');
+
+        $this->assertEquals(
+            ['return_url' => 'http://localhost:8000/return'],
+            json_decode((string) $this->history[0]['request']->getBody(), true)
         );
     }
 

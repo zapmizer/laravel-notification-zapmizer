@@ -78,8 +78,10 @@ class MustVerifyWhatsappTest extends TestCase
 
         $client = Mockery::mock(VerificationClient::class);
         $client->shouldReceive('createSession')
-            ->withArgs(function (?string $returnUrl, ?string $clientReference) {
-                return $returnUrl === 'http://app.test/verified' && $clientReference !== null;
+            ->withArgs(function (?string $number, ?string $returnUrl, ?string $clientReference) {
+                return $number === '5511999999999'
+                    && $returnUrl === 'http://app.test/verified'
+                    && $clientReference !== null;
             })
             ->andReturn(new VerificationSession(id: 'vps_1', url: 'http://localhost/verify/vps_1'));
 

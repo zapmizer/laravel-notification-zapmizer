@@ -27,15 +27,15 @@ class MustVerifyWhatsappTest extends TestCase
         $migration->up();
     }
 
-    protected function makeUser(?string $number = '+5511999999999'): User
+    protected function makeUser(?string $number = '5511999999999'): User
     {
         return User::create(['name' => 'Test', 'whatsapp_number' => $number]);
     }
 
-    protected function mockClientReturning(Verification $verification): void
+    protected function mockClient(string $method, Verification $verification): void
     {
         $client = Mockery::mock(VerificationClient::class);
-        $client->shouldReceive('create')->andReturn($verification);
+        $client->shouldReceive($method)->andReturn($verification);
 
         $this->instance(VerificationClient::class, $client);
     }
@@ -49,23 +49,104 @@ class MustVerifyWhatsappTest extends TestCase
         );
     }
 
-    public function testStartVerificationRecordsAwaitingStateAndReturnsHostedPageLink()
+    public function testStartVerificationRecordsAwaitingStateAndReturnsWaLink()
     {
-        $this->mockClientReturning(new Verification('ver_123', 'pending', 'https://app.zapmizer.com/verify/ver_123'));
+        $this->mockClient('create', new Verification(
+            number: '5511999999999',
+            status: 'pending',
+            waLink: 'https://wa.me/5581999999999?text=ABC123',
+        ));
 
         $user = $this->makeUser();
 
-        $url = $user->startWhatsappVerification();
+        $waLink = $user->startWhatsappVerification();
 
-        $this->assertEquals('https://app.zapmizer.com/verify/ver_123', $url);
+        $this->assertEquals('https://wa.me/5581999999999?text=ABC123', $waLink);
 
         $verification = $user->whatsappVerification()->first();
         $this->assertEquals(WhatsappVerified::STATUS_AWAITING, $verification->status);
         $this->assertTrue($verification->isAwaiting());
-        $this->assertEquals('ver_123', $verification->verification_id);
-        $this->assertEquals('+5511999999999', $verification->number);
+        $this->assertEquals('5511999999999', $verification->number);
+        $this->assertEquals('https://wa.me/5581999999999?text=ABC123', $verification->url);
         $this->assertNull($verification->verified_at);
         $this->assertFalse($user->hasVerifiedWhatsapp());
+    }
+
+    public function testStartVerificationWhileResolvingReturnsNullLink()
+    {
+        $this->mockClient('create', new Verification(number: '5511999999999', status: 'resolving'));
+
+        $user = $this->makeUser();
+
+        $this->assertNull($user->startWhatsappVerification());
+        $this->assertEquals(WhatsappVerified::STATUS_AWAITING, $user->whatsappVerification()->first()->status);
+    }
+
+    public function testConfirmVerificationWithCorrectCodeMarksAsVerified()
+    {
+        $user = $this->makeUser();
+        $user->whatsappVerification()->create([
+            'number' => '5511999999999',
+            'status' => WhatsappVerified::STATUS_AWAITING,
+        ]);
+
+        $this->mockClient('confirm', new Verification(
+            number: '5511999999999',
+            status: 'verified',
+            verifiedAt: '2026-06-10T00:00:00.000000Z',
+        ));
+
+        $this->assertTrue($user->confirmWhatsappVerification('123456'));
+        $this->assertTrue($user->hasVerifiedWhatsapp());
+        $this->assertNotNull($user->whatsappVerification()->first()->verified_at);
+    }
+
+    public function testConfirmWithoutStartedVerificationThrows()
+    {
+        $user = $this->makeUser();
+
+        $this->expectException(ZapmizerVerificationException::class);
+
+        $user->confirmWhatsappVerification('123456');
+    }
+
+    public function testSyncUpdatesStateFromZapbot()
+    {
+        $user = $this->makeUser();
+        $user->whatsappVerification()->create([
+            'number' => '5511999999999',
+            'status' => WhatsappVerified::STATUS_AWAITING,
+        ]);
+
+        $this->mockClient('get', new Verification(
+            number: '5511999999999',
+            status: 'verified',
+            verifiedAt: '2026-06-10T00:00:00.000000Z',
+        ));
+
+        $this->assertEquals(WhatsappVerified::STATUS_VERIFIED, $user->syncWhatsappVerificationStatus());
+        $this->assertTrue($user->hasVerifiedWhatsapp());
+    }
+
+    public function testSyncMapsTerminalFailuresToFailed()
+    {
+        $user = $this->makeUser();
+        $user->whatsappVerification()->create([
+            'number' => '5511999999999',
+            'status' => WhatsappVerified::STATUS_AWAITING,
+        ]);
+
+        $this->mockClient('get', new Verification(number: '5511999999999', status: 'expired'));
+
+        $this->assertEquals(WhatsappVerified::STATUS_FAILED, $user->syncWhatsappVerificationStatus());
+        $this->assertFalse($user->hasVerifiedWhatsapp());
+    }
+
+    public function testSyncWithoutStartedVerificationReturnsNull()
+    {
+        $user = $this->makeUser();
+
+        $this->assertNull($user->syncWhatsappVerificationStatus());
     }
 
     public function testMarkWhatsappAsVerified()
@@ -83,7 +164,11 @@ class MustVerifyWhatsappTest extends TestCase
 
     public function testRestartingVerificationResetsVerifiedState()
     {
-        $this->mockClientReturning(new Verification('ver_456', 'pending', 'https://app.zapmizer.com/verify/ver_456'));
+        $this->mockClient('create', new Verification(
+            number: '5511999999999',
+            status: 'pending',
+            waLink: 'https://wa.me/5581999999999?text=DEF456',
+        ));
 
         $user = $this->makeUser();
         $user->markWhatsappAsVerified();
@@ -92,7 +177,7 @@ class MustVerifyWhatsappTest extends TestCase
 
         $this->assertFalse($user->hasVerifiedWhatsapp());
         $this->assertEquals(1, WhatsappVerified::count());
-        $this->assertEquals('ver_456', $user->whatsappVerification()->first()->verification_id);
+        $this->assertEquals('https://wa.me/5581999999999?text=DEF456', $user->whatsappVerification()->first()->url);
     }
 
     public function testStartVerificationWithoutNumberThrows()

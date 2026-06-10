@@ -7,14 +7,24 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerVerificationException;
 /**
  * Class Verification.
  *
- * Immutable representation of a verification as returned by the Zapmizer API.
+ * Immutable representation of a verify-number session as returned by the
+ * Zapbot API. The flow is inverted: the end user opens the wa.me link
+ * (`waLink`), sends the opening message, receives a code on WhatsApp and
+ * types it back (see VerificationClient::confirm()).
+ *
+ * Statuses: resolving → pending → received → verified | expired | failed.
  */
 final class Verification
 {
     public function __construct(
-        public readonly string $id,
+        public readonly string $number,
         public readonly string $status,
-        public readonly ?string $url = null,
+        public readonly ?string $waLink = null,
+        public readonly ?string $verifiedAt = null,
+        public readonly ?string $expiresAt = null,
+        public readonly ?string $failureReason = null,
+        public readonly ?string $clientReference = null,
+        public readonly ?int $codeLength = null,
         public readonly array $raw = [],
     ) {
     }
@@ -28,17 +38,32 @@ final class Verification
     {
         $data = $payload['data'] ?? $payload;
 
-        $id = $data['id'] ?? null;
+        $number = $data['number'] ?? null;
 
-        if (blank($id)) {
-            throw ZapmizerVerificationException::unexpectedResponse('missing verification identifier');
+        if (blank($number)) {
+            throw ZapmizerVerificationException::unexpectedResponse('missing verification number');
         }
 
         return new self(
-            id: (string) $id,
+            number: (string) $number,
             status: (string) ($data['status'] ?? 'pending'),
-            url: $data['url'] ?? $data['hosted_page_url'] ?? null,
+            waLink: $data['wa_link'] ?? null,
+            verifiedAt: $data['verified_at'] ?? null,
+            expiresAt: $data['expires_at'] ?? null,
+            failureReason: $data['failure_reason'] ?? null,
+            clientReference: $data['client_reference'] ?? null,
+            codeLength: isset($data['code_length']) ? (int) $data['code_length'] : null,
             raw: $data,
         );
+    }
+
+    public function isVerified(): bool
+    {
+        return $this->status === 'verified';
+    }
+
+    public function isTerminal(): bool
+    {
+        return in_array($this->status, ['verified', 'expired', 'failed'], true);
     }
 }

@@ -30,7 +30,8 @@ class ZapmizerServiceProvider extends ServiceProvider
             Arr::get($config, 'api_token', config('zapmizer.api_token')),
             app(HttpClient::class),
             Arr::get($config, 'base_uri', config('zapmizer.base_uri')),
-            Arr::get($config, 'api_version')
+            Arr::get($config, 'api_version'),
+            Arr::get($config, 'origin', config('zapmizer.origin') ?? config('app.url'))
         ));
 
         Notification::resolved(static function (ChannelManager $service) {

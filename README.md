@@ -82,16 +82,26 @@ class User extends Authenticatable implements MustVerifyWhatsappContract
 }
 ```
 
-And use it:
+The flow is inverted compared to e-mail verification: the user opens a wa.me link, sends the opening message, receives a code on WhatsApp and types it back into your app.
 
 ```php
-// Start a verification: records the state as "awaiting" and
-// returns the hosted page link where the user completes it.
-$url = $user->startWhatsappVerification();
+// 1. Start a verification: records the state as "awaiting" and returns the
+//    wa.me link the user must open. While Zapbot is still resolving the
+//    number this returns null — call syncWhatsappVerificationStatus()
+//    shortly after to pick the link up from the state record.
+$waLink = $user->startWhatsappVerification();
 
 $user->hasVerifiedWhatsapp(); // false while awaiting
 
-// Typically called from the webhook that confirms the verification:
+// 2. The user sent the message and received a code on WhatsApp.
+//    A wrong code raises VerificationRequestFailed (422).
+$user->confirmWhatsappVerification($request->input('code')); // true when verified
+
+// Polling alternative — converge the local state with Zapbot (useful when
+// webhooks can't reach you, e.g. local development):
+$user->syncWhatsappVerificationStatus(); // 'awaiting' | 'verified' | 'failed' | null
+
+// Or, from a webhook handler you trust:
 $user->markWhatsappAsVerified();
 
 $user->hasVerifiedWhatsapp(); // true
@@ -101,7 +111,7 @@ The state record is available through `$user->whatsappVerification()` (a `Whatsa
 
 ### Built-in verification route
 
-The package auto-registers a named GET route, `zapmizer.verify_number` (at `/zapmizer/verify-number` by default, behind the `web` and `auth` middleware). When an authenticated user hits it, a verification is started — recorded as "awaiting" — and they are redirected straight to the hosted page. So in the frontend all you need is a link:
+The package auto-registers a named GET route, `zapmizer.verify_number` (at `/zapmizer/verify-number` by default, behind the `web` and `auth` middleware). When an authenticated user hits it, a verification is started — recorded as "awaiting" — and they are redirected straight to the wa.me link (or back to the previous page with a `zapmizer.resolving` flash while the number is still resolving). So in the frontend all you need is a link:
 
 ```blade
 <a href="{{ route('zapmizer.verify_number') }}">Verify your WhatsApp</a>
@@ -120,7 +130,7 @@ Prefix and middleware are configurable, and you can disable the routes entirely 
 
 ### Verification client
 
-The package also ships a client for the Zapmizer verification API. It can request a new verification for a phone number (returning the verification identifier, the hosted page link and the initial state) and fetch the state of an existing verification.
+The package also ships a client for the Zapbot verify-number API. Authentication uses the publishable key (`pk_...`) sent as `X-Publishable-Key`, plus an `Origin` header that must be in the verification's allowed origins on the Zapbot side (defaults to your `app.url`; override with `ZAPMIZER_ORIGIN`).
 
 The client is registered in the container, so you can inject it or resolve it directly:
 
@@ -129,22 +139,26 @@ use NotificationChannels\Zapmizer\VerificationClient;
 
 $client = app(VerificationClient::class);
 
-// Request a new verification for a number
-$verification = $client->create('558181643260');
+// Start a verification session for a number (idempotent while active)
+$verification = $client->create('5511999999999');
 
-$verification->id;     // verification identifier
-$verification->url;    // hosted page link to complete the verification
-$verification->status; // initial state, e.g. "pending"
+$verification->number;     // normalized number, used as the session identifier
+$verification->status;     // resolving | pending | received | verified | expired | failed
+$verification->waLink;     // wa.me link the user opens (null while resolving)
+$verification->codeLength; // length of the code the user will receive
 
-// Check the state of an existing verification
-$verification = $client->get($verification->id);
-$verification->status; // e.g. "verified"
+// Poll the latest session state for a number
+$verification = $client->get('5511999999999');
+
+// Confirm the code the user received on WhatsApp
+$verification = $client->confirm('5511999999999', '123456');
+$verification->isVerified(); // true
 ```
 
 You can also override the configuration at runtime:
 
 ```php
-$client = app(VerificationClient::class, ['api_token' => $tenant->zapmizer_token]);
+$client = app(VerificationClient::class, ['api_token' => $tenant->zapmizer_token, 'origin' => 'https://tenant.example.com']);
 ```
 
 ### Error handling

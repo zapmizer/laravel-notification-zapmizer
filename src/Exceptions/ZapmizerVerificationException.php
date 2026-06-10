@@ -29,6 +29,14 @@ class ZapmizerVerificationException extends Exception
     }
 
     /**
+     * Thrown when trying to act on a verification that was never started.
+     */
+    public static function verificationNotStarted(): self
+    {
+        return new self('There is no WhatsApp verification in progress. Call startWhatsappVerification() first.');
+    }
+
+    /**
      * Thrown when Zapmizer responds with a payload we can't make sense of.
      */
     public static function unexpectedResponse(string $reason): self

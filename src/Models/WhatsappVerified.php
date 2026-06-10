@@ -20,6 +20,9 @@ class WhatsappVerified extends Model
     /** Number confirmed. */
     public const STATUS_VERIFIED = 'verified';
 
+    /** Verification ended without success (expired or too many wrong codes). */
+    public const STATUS_FAILED = 'failed';
+
     protected $table = 'whatsapp_verifieds';
 
     protected $guarded = [];

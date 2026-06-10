@@ -52,6 +52,22 @@ class VerifyNumberRouteTest extends TestCase
         $this->instance(VerificationClient::class, $client);
     }
 
+    public function testRouteRedirectsBackWhileNumberIsStillResolving()
+    {
+        $this->mockClientReturning(new Verification(number: '5511999999999', status: 'resolving'));
+
+        $user = User::create(['name' => 'Test', 'whatsapp_number' => '5511999999999']);
+
+        $response = $this->actingAs($user)
+            ->from('/checkout')
+            ->get(route('zapmizer.verify_number'));
+
+        $response->assertRedirect('/checkout');
+        $response->assertSessionHas('zapmizer.resolving', true);
+
+        $this->assertEquals(WhatsappVerified::STATUS_AWAITING, $user->whatsappVerification()->first()->status);
+    }
+
     public function testNamedRouteExistsWithAuthMiddlewareAndDefaultPrefix()
     {
         $route = Route::getRoutes()->getByName('zapmizer.verify_number');
@@ -61,19 +77,23 @@ class VerifyNumberRouteTest extends TestCase
         $this->assertContains('auth', $route->gatherMiddleware());
     }
 
-    public function testRouteStartsVerificationAndRedirectsToHostedPage()
+    public function testRouteStartsVerificationAndRedirectsToWaLink()
     {
-        $this->mockClientReturning(new Verification('ver_123', 'pending', 'https://app.zapmizer.com/verify/ver_123'));
+        $this->mockClientReturning(new Verification(
+            number: '5511999999999',
+            status: 'pending',
+            waLink: 'https://wa.me/5581999999999?text=ABC123',
+        ));
 
-        $user = User::create(['name' => 'Test', 'whatsapp_number' => '+5511999999999']);
+        $user = User::create(['name' => 'Test', 'whatsapp_number' => '5511999999999']);
 
         $response = $this->actingAs($user)->get(route('zapmizer.verify_number'));
 
-        $response->assertRedirect('https://app.zapmizer.com/verify/ver_123');
+        $response->assertRedirect('https://wa.me/5581999999999?text=ABC123');
 
         $verification = $user->whatsappVerification()->first();
         $this->assertEquals(WhatsappVerified::STATUS_AWAITING, $verification->status);
-        $this->assertEquals('ver_123', $verification->verification_id);
+        $this->assertEquals('5511999999999', $verification->number);
     }
 
     public function testGuestsAreRejectedByDefault()

@@ -8,7 +8,6 @@ use Illuminate\Support\Facades\Schema;
 use NotificationChannels\Zapmizer\Events\WebhookHandled;
 use NotificationChannels\Zapmizer\Events\WebhookReceived;
 use NotificationChannels\Zapmizer\Events\WhatsappVerified as WhatsappVerifiedEvent;
-use NotificationChannels\Zapmizer\Models\WebhookEvent;
 use NotificationChannels\Zapmizer\Models\WhatsappVerified;
 use NotificationChannels\Zapmizer\Test\Fixtures\User;
 use NotificationChannels\Zapmizer\Test\TestCase;
@@ -25,9 +24,6 @@ class WebhookTest extends TestCase
         });
 
         $migration = include __DIR__ . '/../../database/migrations/create_whatsapp_verifieds_table.php.stub';
-        $migration->up();
-
-        $migration = include __DIR__ . '/../../database/migrations/create_zapmizer_webhook_events_table.php.stub';
         $migration->up();
     }
 
@@ -68,13 +64,6 @@ class WebhookTest extends TestCase
         $record = $user->whatsappVerification()->first();
         $this->assertEquals('5511999999999', $record->number);
         $this->assertNotNull($record->verified_at);
-
-        // The delivery is recorded for auditing, payload included.
-        $event = WebhookEvent::first();
-        $this->assertTrue($event->handled);
-        $this->assertEquals('verify_number.verified', $event->name);
-        $this->assertEquals('5511999999999', $event->number);
-        $this->assertEquals('5581999999999', $event->payload['data']['from']);
 
         Event::assertDispatched(WhatsappVerifiedEvent::class, fn ($e) => $e->verification->is($record));
         Event::assertDispatched(WebhookReceived::class);
@@ -149,9 +138,6 @@ class WebhookTest extends TestCase
             ->assertOk()->assertSeeText('Webhook Received');
 
         $this->assertFalse($user->hasVerifiedWhatsapp());
-
-        // Still recorded for auditing, flagged as unhandled.
-        $this->assertFalse(WebhookEvent::first()->handled);
     }
 
     public function testUnknownEventNameFallsThroughToMissingMethod()

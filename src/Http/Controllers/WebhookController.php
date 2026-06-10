@@ -8,7 +8,6 @@ use Illuminate\Support\Str;
 use NotificationChannels\Zapmizer\Events\WebhookHandled;
 use NotificationChannels\Zapmizer\Events\WebhookReceived;
 use NotificationChannels\Zapmizer\Events\WhatsappVerified as WhatsappVerifiedEvent;
-use NotificationChannels\Zapmizer\Models\WebhookEvent;
 use NotificationChannels\Zapmizer\Models\WhatsappVerified;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -20,25 +19,21 @@ use Symfony\Component\HttpFoundation\Response;
  * handlers to customize behavior. Payloads follow the team-webhook shape:
  * `{ "name": "verify_number.verified", "data": { "number": ..., "from": ... } }`.
  *
+ * Like Cashier, nothing about the delivery itself is persisted — listen to
+ * the WebhookReceived event if you want to log them. Handlers are
+ * idempotent by design: marking verified twice is a no-op and a `failed`
+ * event never downgrades an already-verified number, so redeliveries are
+ * harmless.
+ *
  * Deliveries are NOT signed by Zapmizer — they arrive on the team's
  * registered webhooks like any bot notification. Protect the route through
  * `zapmizer.routes.webhook_middleware` (throttle, IP allowlist, a shared
- * token segment in the URL, ...) and keep the handlers idempotent, which
- * they are by default: marking verified twice is a no-op and a `failed`
- * event never downgrades an already-verified number.
- *
- * Every delivery is recorded in the zapmizer_webhook_events table as an
- * audit trail. Correlation uses the (canonical) phone number from the
- * payload, matched against the state records with the Brazilian extra-9
- * tolerance.
+ * token segment in the URL, ...). Correlation uses the (canonical) phone
+ * number from the payload, matched against the state records with the
+ * Brazilian extra-9 tolerance.
  */
 class WebhookController extends Controller
 {
-    /**
-     * The webhook event record for the delivery being handled.
-     */
-    protected ?WebhookEvent $event = null;
-
     /**
      * Handle a Zapmizer webhook call.
      */
@@ -49,12 +44,6 @@ class WebhookController extends Controller
         abort_unless(is_array($payload), 400, 'Malformed webhook payload.');
 
         WebhookReceived::dispatch($payload);
-
-        $this->event = $this->webhookEventModel()::query()->create([
-            'name' => $payload['name'] ?? null,
-            'number' => $payload['data']['number'] ?? null,
-            'payload' => $payload,
-        ]);
 
         $method = 'handle' . Str::studly(str_replace('.', '_', (string) ($payload['name'] ?? '')));
 
@@ -168,8 +157,6 @@ class WebhookController extends Controller
      */
     protected function successMethod($parameters = []): Response
     {
-        $this->event?->forceFill(['handled' => true])->save();
-
         return new Response('Webhook Handled', 200);
     }
 
@@ -189,13 +176,5 @@ class WebhookController extends Controller
     protected function verificationModel(): string
     {
         return config('zapmizer.models.whatsapp_verified', WhatsappVerified::class);
-    }
-
-    /**
-     * @return class-string<WebhookEvent>
-     */
-    protected function webhookEventModel(): string
-    {
-        return config('zapmizer.models.webhook_event', WebhookEvent::class);
     }
 }

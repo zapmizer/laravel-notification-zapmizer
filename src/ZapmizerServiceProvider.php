@@ -101,7 +101,6 @@ class ZapmizerServiceProvider extends ServiceProvider
 
             $this->publishes([
                 __DIR__ . '/../database/migrations/create_whatsapp_verifieds_table.php.stub' => database_path('migrations/' . date('Y_m_d_His') . '_create_whatsapp_verifieds_table.php'),
-                __DIR__ . '/../database/migrations/create_zapmizer_webhook_events_table.php.stub' => database_path('migrations/' . date('Y_m_d_His', time() + 1) . '_create_zapmizer_webhook_events_table.php'),
             ], 'migrations');
         }
     }

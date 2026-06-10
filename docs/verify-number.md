@@ -35,7 +35,7 @@ php artisan vendor:publish --provider="NotificationChannels\Zapmizer\ZapmizerSer
 php artisan migrate
 ```
 
-This creates two tables: `whatsapp_verifieds` (verification state, 1:1 with the user) and `zapmizer_webhook_events` (audit of received webhooks).
+This creates the `whatsapp_verifieds` table (verification state, 1:1 with the user).
 
 Set the environment variables:
 
@@ -131,10 +131,10 @@ $result->attemptsLeft; // when invalid (5 attempts by default)
 Terminal states (`verified` / `failed`) are also delivered to the **team's registered webhooks** (the same webhooks resource bot notifications use — register your URL there once). The package's public `POST /zapmizer/webhook` route handles them Cashier-style:
 
 - each event name maps to a `handle{StudlyName}` method (`verify_number.verified` → `handleVerifyNumberVerified`) — extend the controller to customize;
-- deliveries are recorded in `zapmizer_webhook_events` for auditing;
 - the event is correlated to the state record by the **canonical phone number** (tolerant to the Brazilian extra-9);
 - effects are idempotent: redeliveries are no-ops and a late `failed` never downgrades an already-verified number;
-- a confirmation fires `NotificationChannels\Zapmizer\Events\WhatsappVerified`; `WebhookReceived`/`WebhookHandled` fire around the handling.
+- a confirmation fires `NotificationChannels\Zapmizer\Events\WhatsappVerified`; `WebhookReceived`/`WebhookHandled` fire around the handling;
+- like Cashier, the deliveries themselves are not persisted — listen to `WebhookReceived` if you want to log them.
 
 ```php
 use NotificationChannels\Zapmizer\Events\WhatsappVerified;
@@ -199,4 +199,3 @@ Notable API errors when creating a session: `503` when the team has no online bo
 | `zapmizer.from_number` | which team number receives the verification (optional) |
 | `zapmizer.routes.*` | enable/prefix/middleware of the package routes |
 | `zapmizer.models.whatsapp_verified` | subclass the state model |
-| `zapmizer.models.webhook_event` | subclass the webhook audit model |

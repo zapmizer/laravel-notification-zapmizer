@@ -25,6 +25,13 @@ class ZapmizerServiceProvider extends ServiceProvider
             Arr::get($config, 'api_version')
         ));
 
+        $this->app->bind(VerificationClient::class, fn (Application $app, $config) => new VerificationClient(
+            Arr::get($config, 'api_token', config('zapmizer.api_token')),
+            app(HttpClient::class),
+            Arr::get($config, 'base_uri', config('zapmizer.base_uri')),
+            Arr::get($config, 'api_version')
+        ));
+
         Notification::resolved(static function (ChannelManager $service) {
             $service->extend('zapmizer', static fn ($app) => $app->make(ZapmizerChannel::class));
         });

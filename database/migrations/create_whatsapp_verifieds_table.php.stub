@@ -15,6 +15,7 @@ return new class extends Migration
             $table->string('verification_id')->nullable()->index();
             $table->string('url')->nullable();
             $table->string('status')->default('awaiting');
+            $table->string('last_event_id')->nullable();
             $table->timestamp('verified_at')->nullable();
             $table->timestamps();
         });

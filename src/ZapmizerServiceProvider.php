@@ -77,6 +77,16 @@ class ZapmizerServiceProvider extends ServiceProvider
         ], function () {
             $this->loadRoutesFrom(__DIR__ . '/../routes/web.php');
         });
+
+        // The webhook is public (Zapbot signs it; the controller validates) and
+        // stateless — registered outside the user-facing middleware on purpose.
+        Route::group([
+            'prefix' => config('zapmizer.routes.prefix', 'zapmizer'),
+            'middleware' => config('zapmizer.routes.webhook_middleware', []),
+            'as' => 'zapmizer.',
+        ], function () {
+            $this->loadRoutesFrom(__DIR__ . '/../routes/webhook.php');
+        });
     }
 
     /**

@@ -24,5 +24,7 @@ return [
         'enabled' => env('ZAPMIZER_ROUTES_ENABLED', true),
         'prefix' => 'zapmizer',
         'middleware' => ['web', 'auth'],
+        // The webhook route is public and stateless; add e.g. a throttle here.
+        'webhook_middleware' => [],
     ],
 ];

@@ -111,6 +111,28 @@ $user->hasVerifiedWhatsapp(); // true
 
 The same `ZapbotSignature::isValid($header, $rawBody, $secret)` validates the `X-Zapbot-Signature` header of server-to-server webhooks (note: Zapbot only delivers webhooks to public https URLs).
 
+### Confirmation webhook
+
+The package also registers a public, stateless `POST /zapmizer/webhook` route (named `zapmizer.webhook`) that receives Zapbot's server-to-server confirmations — point the verification's webhook URL at it. The endpoint:
+
+- rejects anything not signed with your webhook secret (`X-Zapbot-Signature`);
+- correlates the event to the verification by the `client_reference` the package sent when starting it (the user's key) — never by phone number;
+- is idempotent: redeliveries of the same `event_id` are acknowledged without applying the effect twice;
+- on confirmation, marks the number as verified and fires the `NotificationChannels\Zapmizer\Events\WhatsappVerified` event; failure/expiration events update the state to `failed`.
+
+Listen to the event to react in your app:
+
+```php
+use NotificationChannels\Zapmizer\Events\WhatsappVerified;
+
+Event::listen(function (WhatsappVerified $event) {
+    $event->verification;        // the WhatsappVerified state record
+    $event->verification->user;  // the verified user
+});
+```
+
+Add a throttle (or anything else) to the webhook route via `zapmizer.routes.webhook_middleware`.
+
 For the embedded-widget flow (pk_ key), the trait also exposes `confirmWhatsappVerification($code)` and `syncWhatsappVerificationStatus()` for polling.
 
 The state record is available through `$user->whatsappVerification()` (a `WhatsappVerified` model with `status`, `verification_id`, `url`, `number` and `verified_at`). To extend the model, subclass `NotificationChannels\Zapmizer\Models\WhatsappVerified` and point the `zapmizer.models.whatsapp_verified` config key at your subclass.

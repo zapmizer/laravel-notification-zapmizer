@@ -205,12 +205,14 @@ class VerificationClientTest extends TestCase
 
     public function testContainerResolvesClientWithConfig()
     {
-        config()->set('zapmizer.api_token', 'config-token');
+        config()->set('zapmizer.api_token', 'messages-token');
+        config()->set('zapmizer.publishable_key', 'pk_config');
         config()->set('app.url', 'http://demo.test');
 
-        $this->assertEquals('config-token', app(VerificationClient::class)->getToken());
+        // The verify-number client uses the publishable key, never the messages API token.
+        $this->assertEquals('pk_config', app(VerificationClient::class)->getPublishableKey());
         $this->assertEquals('http://demo.test', app(VerificationClient::class)->getOrigin());
-        $this->assertEquals('runtime-token', app(VerificationClient::class, ['api_token' => 'runtime-token'])->getToken());
+        $this->assertEquals('pk_runtime', app(VerificationClient::class, ['publishable_key' => 'pk_runtime'])->getPublishableKey());
 
         config()->set('zapmizer.origin', 'http://configured.test');
         $this->assertEquals('http://configured.test', app(VerificationClient::class)->getOrigin());

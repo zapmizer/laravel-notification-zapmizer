@@ -45,21 +45,21 @@ class VerificationClient
     }
 
     /**
-     * Token getter.
+     * Publishable key getter.
      */
-    public function getToken(): ?string
+    public function getPublishableKey(): ?string
     {
         return $this->token;
     }
 
     /**
-     * Token setter.
+     * Publishable key setter.
      *
      * @return $this
      */
-    public function setToken(string $token): self
+    public function setPublishableKey(string $publishableKey): self
     {
-        $this->token = $token;
+        $this->token = $publishableKey;
 
         return $this;
     }
@@ -176,7 +176,7 @@ class VerificationClient
     protected function request(string $method, string $path, array $options = []): ResponseInterface
     {
         if (blank($this->token)) {
-            throw ZapmizerVerificationException::apiTokenNotProvided();
+            throw ZapmizerVerificationException::publishableKeyNotProvided();
         }
 
         $options['headers'] = array_merge($options['headers'] ?? [], array_filter([

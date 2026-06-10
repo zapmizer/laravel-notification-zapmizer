@@ -13,11 +13,11 @@ use Exception;
 class ZapmizerVerificationException extends Exception
 {
     /**
-     * Thrown when there's no API token provided.
+     * Thrown when there's no publishable key provided.
      */
-    public static function apiTokenNotProvided(): self
+    public static function publishableKeyNotProvided(): self
     {
-        return new self('You must provide your zapmizer API token to make any API requests.');
+        return new self('You must provide your zapmizer publishable key (pk_...) to use the verify-number API. Set ZAPMIZER_PUBLISHABLE_KEY — this is not the same credential as the messages API token.');
     }
 
     /**

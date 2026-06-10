@@ -21,6 +21,8 @@ php artisan vendor:publish --provider="Notification\Zapmizer\ZapmizerServiceProv
 ```php
     ZAPMIZER_API_TOKEN="your-api-token"
     ZAPMIZER_FROM_NUMBER="558181643260"
+    # Verify-number API uses its own credential (pk_...), not the API token:
+    ZAPMIZER_PUBLISHABLE_KEY="pk_your-publishable-key"
     ZAPMIZER_WEBHOOK_SECRET="your-webhook-secret"
 ```
 
@@ -130,7 +132,7 @@ Prefix and middleware are configurable, and you can disable the routes entirely 
 
 ### Verification client
 
-The package also ships a client for the Zapbot verify-number API. Authentication uses the publishable key (`pk_...`) sent as `X-Publishable-Key`, plus an `Origin` header that must be in the verification's allowed origins on the Zapbot side (defaults to your `app.url`; override with `ZAPMIZER_ORIGIN`).
+The package also ships a client for the Zapbot verify-number API. Authentication uses the publishable key (`pk_...`, config `zapmizer.publishable_key` / `ZAPMIZER_PUBLISHABLE_KEY` — a different credential from the messages API token) sent as `X-Publishable-Key`, plus an `Origin` header that must be in the verification's allowed origins on the Zapbot side (defaults to your `app.url`; override with `ZAPMIZER_ORIGIN`).
 
 The client is registered in the container, so you can inject it or resolve it directly:
 
@@ -158,7 +160,7 @@ $verification->isVerified(); // true
 You can also override the configuration at runtime:
 
 ```php
-$client = app(VerificationClient::class, ['api_token' => $tenant->zapmizer_token, 'origin' => 'https://tenant.example.com']);
+$client = app(VerificationClient::class, ['publishable_key' => $tenant->zapmizer_pk, 'origin' => 'https://tenant.example.com']);
 ```
 
 ### Error handling

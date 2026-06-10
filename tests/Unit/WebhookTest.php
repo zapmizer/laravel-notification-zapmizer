@@ -5,6 +5,8 @@ namespace NotificationChannels\Zapmizer\Test\Unit;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Schema;
+use NotificationChannels\Zapmizer\Events\WebhookHandled;
+use NotificationChannels\Zapmizer\Events\WebhookReceived;
 use NotificationChannels\Zapmizer\Events\WhatsappVerified as WhatsappVerifiedEvent;
 use NotificationChannels\Zapmizer\Models\WebhookEvent;
 use NotificationChannels\Zapmizer\Models\WhatsappVerified;
@@ -77,17 +79,19 @@ class WebhookTest extends TestCase
         ];
     }
 
-    public function testInvalidSignatureIsRejectedAndMarksNothing()
+    public function testInvalidSignatureIsRejectedByMiddlewareAndMarksNothing()
     {
-        Event::fake([WhatsappVerifiedEvent::class]);
+        Event::fake([WhatsappVerifiedEvent::class, WebhookReceived::class]);
 
         $user = $this->makeAwaitingUser();
 
         $response = $this->deliver($this->verifiedPayload($user), secret: 'whsec_wrong');
 
-        $response->assertStatus(401);
+        $response->assertStatus(403);
         $this->assertFalse($user->hasVerifiedWhatsapp());
+        $this->assertEquals(0, WebhookEvent::count());
         Event::assertNotDispatched(WhatsappVerifiedEvent::class);
+        Event::assertNotDispatched(WebhookReceived::class);
     }
 
     public function testTamperedBodyIsRejected()
@@ -105,21 +109,21 @@ class WebhookTest extends TestCase
         $this->call('POST', '/zapmizer/webhook', [], [], [], [
             'HTTP_X-Zapbot-Signature' => $signature,
             'CONTENT_TYPE' => 'application/json',
-        ], $tampered)->assertStatus(401);
+        ], $tampered)->assertStatus(403);
 
         $this->assertFalse($user->hasVerifiedWhatsapp());
     }
 
-    public function testValidConfirmationMarksAsVerifiedAndFiresEvent()
+    public function testValidConfirmationMarksAsVerifiedAndFiresEvents()
     {
-        Event::fake([WhatsappVerifiedEvent::class]);
+        Event::fake([WhatsappVerifiedEvent::class, WebhookReceived::class, WebhookHandled::class]);
 
         $user = $this->makeAwaitingUser();
 
         $response = $this->deliver($this->verifiedPayload($user));
 
         $response->assertOk();
-        $response->assertJson(['received' => true, 'handled' => true]);
+        $response->assertSeeText('Webhook Handled');
 
         $this->assertTrue($user->hasVerifiedWhatsapp());
 
@@ -135,22 +139,25 @@ class WebhookTest extends TestCase
         $this->assertEquals('5511999999999', $event->payload['number']);
 
         Event::assertDispatched(WhatsappVerifiedEvent::class, fn ($e) => $e->verification->is($record));
+        Event::assertDispatched(WebhookReceived::class, fn ($e) => $e->payload['event_id'] === 'evt_1_verified');
+        Event::assertDispatched(WebhookHandled::class);
     }
 
     public function testRedeliveryOfSameEventHasNoDuplicateEffect()
     {
-        Event::fake([WhatsappVerifiedEvent::class]);
+        Event::fake([WhatsappVerifiedEvent::class, WebhookHandled::class]);
 
         $user = $this->makeAwaitingUser();
         $payload = $this->verifiedPayload($user);
 
         $this->deliver($payload)->assertOk();
-        $this->deliver($payload)->assertOk()->assertJson(['handled' => true, 'duplicate' => true]);
+        $this->deliver($payload)->assertOk()->assertSeeText('Webhook Duplicate');
 
         $this->assertTrue($user->hasVerifiedWhatsapp());
         $this->assertEquals(1, WhatsappVerified::count());
         $this->assertEquals(1, WebhookEvent::count());
         Event::assertDispatchedTimes(WhatsappVerifiedEvent::class, 1);
+        Event::assertDispatchedTimes(WebhookHandled::class, 1);
     }
 
     public function testOutOfOrderRedeliveryIsStillDeduplicated()
@@ -165,7 +172,7 @@ class WebhookTest extends TestCase
         // it must be deduplicated, not re-applied over the verified state.
         $this->deliver($expired)->assertOk();
         $this->deliver($verified)->assertOk();
-        $this->deliver($expired)->assertOk()->assertJson(['duplicate' => true]);
+        $this->deliver($expired)->assertOk()->assertSeeText('Webhook Duplicate');
 
         $this->assertTrue($user->hasVerifiedWhatsapp());
         Event::assertDispatchedTimes(WhatsappVerifiedEvent::class, 1);
@@ -185,7 +192,7 @@ class WebhookTest extends TestCase
             'verified_at' => null,
             'failure_reason' => 'ttl',
             'client_reference' => (string) $user->id,
-        ])->assertOk();
+        ])->assertOk()->assertSeeText('Webhook Handled');
 
         $this->assertFalse($user->hasVerifiedWhatsapp());
         $this->assertEquals(WhatsappVerified::STATUS_FAILED, $user->whatsappVerification()->first()->status);
@@ -198,12 +205,26 @@ class WebhookTest extends TestCase
 
         $payload = [...$this->verifiedPayload($user), 'client_reference' => '424242'];
 
-        $this->deliver($payload)->assertOk()->assertJson(['received' => true, 'handled' => false]);
+        $this->deliver($payload)->assertOk()->assertSeeText('Webhook Received');
 
         $this->assertFalse($user->hasVerifiedWhatsapp());
 
         // Still recorded for auditing, flagged as unhandled.
         $this->assertFalse(WebhookEvent::firstWhere('event_id', $payload['event_id'])->handled);
+    }
+
+    public function testUnknownEventTypeFallsThroughToMissingMethod()
+    {
+        Event::fake([WebhookHandled::class]);
+
+        $user = $this->makeAwaitingUser();
+
+        $payload = [...$this->verifiedPayload($user), 'type' => 'verify_number.something_new'];
+
+        $this->deliver($payload)->assertOk()->assertSeeText('Webhook Received');
+
+        $this->assertFalse($user->hasVerifiedWhatsapp());
+        Event::assertNotDispatched(WebhookHandled::class);
     }
 
     public function testWebhookRouteIsPublic()

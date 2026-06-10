@@ -113,12 +113,14 @@ The same `ZapbotSignature::isValid($header, $rawBody, $secret)` validates the `X
 
 ### Confirmation webhook
 
-The package also registers a public, stateless `POST /zapmizer/webhook` route (named `zapmizer.webhook`) that receives Zapbot's server-to-server confirmations — point the verification's webhook URL at it. The endpoint:
+The package also registers a public, stateless `POST /zapmizer/webhook` route (named `zapmizer.webhook`) that receives Zapbot's server-to-server confirmations — point the verification's webhook URL at it. It follows the same design as Laravel Cashier's webhook controller:
 
-- rejects anything not signed with your webhook secret (`X-Zapbot-Signature`);
-- records every accepted delivery in its own `zapmizer_webhook_events` table (payload included) — an audit trail whose unique `event_id` is the idempotency key, so redeliveries in any order are acknowledged without applying the effect twice;
-- correlates the event to the verification by the `client_reference` the package sent when starting it (the user's key) — never by phone number;
-- on confirmation, marks the number as verified and fires the `NotificationChannels\Zapmizer\Events\WhatsappVerified` event; failure/expiration events update the state to `failed`.
+- signature verification lives in the `VerifyWebhookSignature` middleware, applied automatically whenever a webhook secret is configured — unsigned or tampered deliveries are rejected with a 403 before any handling;
+- each event type is routed to a `handle{StudlyType}` method (`verify_number.verified` → `handleVerifyNumberVerified`), so you can extend the controller and add or override handlers;
+- `NotificationChannels\Zapmizer\Events\WebhookReceived` fires for every verified delivery and `WebhookHandled` after a handler ran, just like Cashier;
+- every delivery is recorded in the `zapmizer_webhook_events` table (payload included) — an audit trail whose unique `event_id` is the idempotency key, so redeliveries in any order are acknowledged without applying the effect twice;
+- correlation uses the `client_reference` the package sent when starting the verification (the user's key) — never the phone number;
+- a confirmation marks the number as verified and fires the `NotificationChannels\Zapmizer\Events\WhatsappVerified` event; failure/expiration events update the state to `failed`.
 
 The `whatsapp_verifieds` table stays purely about the verification state; received webhooks live in `zapmizer_webhook_events` (model `NotificationChannels\Zapmizer\Models\WebhookEvent`, extensible via `zapmizer.models.webhook_event`). Both migrations are published by the `migrations` tag.
 

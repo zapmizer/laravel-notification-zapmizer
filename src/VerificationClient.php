@@ -137,6 +137,27 @@ class VerificationClient
     }
 
     /**
+     * Check whether the bot signal for a number has already landed.
+     *
+     * Returns `pending: true` only once a live, non-expired code exists for the
+     * number — i.e. the OTP the bot generated finished propagating. A UI should
+     * keep the code input locked until this is true, so the end user never
+     * confirms during the propagation window and hits a spurious `not_found`.
+     *
+     * Read-only: it never expires a code nor consumes an attempt.
+     *
+     * @throws ZapmizerVerificationException
+     */
+    public function pending(string $number): VerificationStatus
+    {
+        $response = $this->request('POST', '/verify-number/pending', [
+            'json' => ['number' => $number],
+        ]);
+
+        return VerificationStatus::fromPayload($this->decode($response));
+    }
+
+    /**
      * Perform an authenticated request against the verify-number API.
      *
      * @throws ZapmizerVerificationException

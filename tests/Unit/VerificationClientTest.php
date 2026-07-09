@@ -16,6 +16,7 @@ use NotificationChannels\Zapmizer\Test\TestCase;
 use NotificationChannels\Zapmizer\VerificationClient;
 use NotificationChannels\Zapmizer\VerificationResult;
 use NotificationChannels\Zapmizer\VerificationSession;
+use NotificationChannels\Zapmizer\VerificationStatus;
 
 class VerificationClientTest extends TestCase
 {
@@ -137,6 +138,46 @@ class VerificationClientTest extends TestCase
 
         $this->assertTrue($result->isNotFound());
         $this->assertFalse($result->isVerified());
+    }
+
+    public function testPendingReportsTheSignalArrivedWithTtlLeft()
+    {
+        $client = $this->makeClient(new MockHandler([
+            new Response(200, [], json_encode([
+                'pending' => true,
+                'seconds_left' => 273,
+            ])),
+        ]));
+
+        $status = $client->pending('+55 11 99999-9999');
+
+        $this->assertInstanceOf(VerificationStatus::class, $status);
+        $this->assertTrue($status->isPending());
+        $this->assertEquals(273, $status->secondsLeft);
+
+        $request = $this->history[0]['request'];
+        $this->assertEquals('POST', $request->getMethod());
+        $this->assertEquals('http://localhost/api/verify-number/pending', (string) $request->getUri());
+        $this->assertEquals('Bearer team-api-token', $request->getHeaderLine('Authorization'));
+        $this->assertEquals(
+            ['number' => '+55 11 99999-9999'],
+            json_decode((string) $request->getBody(), true)
+        );
+    }
+
+    public function testPendingReportsNotReadyWhileTheSignalIsStillPropagating()
+    {
+        $client = $this->makeClient(new MockHandler([
+            new Response(200, [], json_encode([
+                'pending' => false,
+                'seconds_left' => null,
+            ])),
+        ]));
+
+        $status = $client->pending('5511999999999');
+
+        $this->assertFalse($status->isPending());
+        $this->assertNull($status->secondsLeft);
     }
 
     public function testNetworkFailureBecomesTypedException()

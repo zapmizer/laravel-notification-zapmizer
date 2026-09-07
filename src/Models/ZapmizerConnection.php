@@ -1,0 +1,306 @@
+<?php
+
+namespace NotificationChannels\Zapmizer\Models;
+
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Casts\Attribute;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\MorphTo;
+use Illuminate\Support\Str;
+use NotificationChannels\Zapmizer\Connect\InstanceClient;
+use NotificationChannels\Zapmizer\Connect\WebhookRegistration;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
+use NotificationChannels\Zapmizer\Support\PhoneNumber;
+use NotificationChannels\Zapmizer\Zapmizer;
+use NotificationChannels\Zapmizer\ZapmizerMessage;
+use Throwable;
+
+/**
+ * Class ZapmizerConnection.
+ *
+ * The Zapmizer account authorized by a Connectable model — one per model.
+ * Extend it and point `zapmizer.models.connection` at your subclass to
+ * customize.
+ *
+ * The three credentials are `encrypted` casts and `hidden` from
+ * serialization — deliberately with no accessor on top of them: an
+ * `Attribute` accessor for `api_token` would win over the cast and return
+ * the ciphertext. For screens there is `api_token_masked`, a separate
+ * attribute.
+ *
+ * `$casts` is a property, not the `casts()` method: the method only exists
+ * on Laravel 11+, and on 10 the credentials would be written in the clear.
+ */
+class ZapmizerConnection extends Model
+{
+    protected $table = 'zapmizer_connections';
+
+    protected $guarded = [];
+
+    protected $hidden = [
+        'api_token',
+        'webhook_secret',
+        'webhook_previous_secret',
+    ];
+
+    protected $appends = [
+        'api_token_masked',
+    ];
+
+    protected $casts = [
+        'api_token' => 'encrypted',
+        'webhook_secret' => 'encrypted',
+        'webhook_previous_secret' => 'encrypted',
+        'zapmizer_team_id' => 'integer',
+        'bot_instance_id' => 'integer',
+        'webhook_id' => 'integer',
+        'connected_at' => 'datetime',
+        'is_active' => 'boolean',
+    ];
+
+    /**
+     * The model that owns the connection (team, user, ...).
+     */
+    public function connectable(): MorphTo
+    {
+        return $this->morphTo();
+    }
+
+    public function scopeActive(Builder $query): Builder
+    {
+        return $query->where('is_active', true);
+    }
+
+    public function scopeWithWebhookSecret(Builder $query): Builder
+    {
+        return $query->whereNotNull('webhook_secret');
+    }
+
+    /**
+     * Last 4 characters of the token, so a screen can say "has credentials"
+     * without leaking them. A token that no longer decrypts (APP_KEY
+     * changed) shows as `••••`: serializing the model — every `toArray()`,
+     * every Inertia prop — must not throw because of it.
+     */
+    protected function apiTokenMasked(): Attribute
+    {
+        return Attribute::get(function (): ?string {
+            if (!$this->hasApiToken()) {
+                return null;
+            }
+
+            try {
+                return '••••' . Str::substr((string) $this->api_token, -4);
+            } catch (Throwable) {
+                return '••••';
+            }
+        });
+    }
+
+    /**
+     * Whether a token is stored — checked on the raw (encrypted) attribute,
+     * so it never decrypts.
+     */
+    public function hasApiToken(): bool
+    {
+        return filled($this->getAttributes()['api_token'] ?? null);
+    }
+
+    /**
+     * Active with a paired number: ready to send and receive.
+     */
+    public function isConnected(): bool
+    {
+        return $this->is_active && filled($this->phone_number) && $this->hasApiToken();
+    }
+
+    /**
+     * The secrets that may have signed an in-flight delivery: the current
+     * one and, during a rotation, the previous one.
+     *
+     * @return array<int, string>
+     */
+    public function signingSecrets(): array
+    {
+        return array_values(array_filter([
+            $this->webhook_secret,
+            $this->webhook_previous_secret,
+        ], fn (?string $secret) => filled($secret)));
+    }
+
+    /**
+     * Messages client authenticated as this connection.
+     */
+    public function zapmizer(): Zapmizer
+    {
+        return app(Zapmizer::class, [
+            'api_token' => $this->api_token,
+            'api_version' => config('zapmizer.api_version'),
+        ]);
+    }
+
+    /**
+     * Instance/webhook client authenticated as this connection. The token
+     * is mandatory: without it the client would fall back to the
+     * single-tenant credentials and act in another account's name.
+     *
+     * @throws ZapmizerUnauthorizedException
+     */
+    public function instanceClient(): InstanceClient
+    {
+        if (!$this->hasApiToken()) {
+            throw new ZapmizerUnauthorizedException('There is no Zapmizer token for this connection.');
+        }
+
+        return app(InstanceClient::class, [
+            'api_token' => $this->api_token,
+            'api_version' => config('zapmizer.api_version'),
+        ]);
+    }
+
+    /**
+     * A message from this connection's paired number — the analogue of
+     * Cashier's `$user->charge()`.
+     *
+     * @throws ZapmizerConnectException
+     */
+    public function message(string $to): ZapmizerMessage
+    {
+        if (!$this->isConnected()) {
+            throw ZapmizerConnectException::notConnected();
+        }
+
+        return ZapmizerMessage::create(
+            from: PhoneNumber::digits($this->phone_number),
+            to: PhoneNumber::digits($to),
+            zapmizer: $this->zapmizer(),
+        );
+    }
+
+    /**
+     * Register the package's webhook route on Zapmizer and store the secret.
+     * No-op when a secret is already stored — Zapmizer only hands the secret
+     * out on creation, so re-registering would orphan the current one.
+     *
+     * The check is made on a row locked for update, inside a transaction:
+     * the wizard's `instance` call and its `connection` poll can both reach
+     * here within the same seconds, and two registrations would leave the
+     * first webhook delivering with a secret nobody stored.
+     *
+     * @throws ZapmizerConnectException
+     */
+    public function registerWebhook(?string $url = null): ?WebhookRegistration
+    {
+        if (!$this->exists) {
+            throw ZapmizerConnectException::unexpectedResponse('the connection must be saved before registering its webhook');
+        }
+
+        return $this->getConnection()->transaction(function () use ($url) {
+            $locked = static::query()->whereKey($this->getKey())->lockForUpdate()->first();
+
+            if ($locked === null) {
+                return null;
+            }
+
+            if (filled($locked->webhook_secret)) {
+                $this->syncWebhookAttributes($locked);
+
+                return null;
+            }
+
+            $registration = $this->instanceClient()->createWebhook($url ?? route('zapmizer.webhook'));
+
+            if (blank($registration->secret)) {
+                return $registration;
+            }
+
+            $this->storeWebhookSecrets($registration);
+
+            return $registration;
+        });
+    }
+
+    /**
+     * Rotate the webhook secret on Zapmizer and keep both: deliveries in
+     * flight signed with the old one still validate. Rotating once does NOT
+     * revoke a leaked secret — Zapmizer signs with both until the next
+     * rotation. Rotate twice to retire it.
+     *
+     * @throws ZapmizerConnectException
+     */
+    public function rotateWebhookSecret(): WebhookRegistration
+    {
+        if (blank($this->webhook_id)) {
+            throw ZapmizerConnectException::unexpectedResponse('there is no registered webhook to rotate');
+        }
+
+        $registration = $this->instanceClient()->rotateWebhookSecret((int) $this->webhook_id);
+
+        $this->storeWebhookSecrets($registration);
+
+        return $registration;
+    }
+
+    /**
+     * Delete the webhook on Zapmizer's side. Without it the webhook keeps
+     * delivering to this application — every delivery a 401 in the log —
+     * for as long as the team exists over there. Returns false when there
+     * is nothing registered.
+     *
+     * @throws ZapmizerConnectException
+     */
+    public function deleteRemoteWebhook(): bool
+    {
+        if (blank($this->webhook_id)) {
+            return false;
+        }
+
+        $this->instanceClient()->deleteWebhook((int) $this->webhook_id);
+
+        return true;
+    }
+
+    /**
+     * Forget everything tied to the current Zapmizer team: the paired
+     * number, the instance and the webhook. Used when the model re-authorizes
+     * a DIFFERENT team — keeping them would send from a number the new token
+     * cannot use, and never register a webhook on the new team.
+     */
+    public function forgetPairing(): static
+    {
+        return $this->forceFill([
+            'phone_number' => null,
+            'bot_instance_id' => null,
+            'connected_at' => null,
+            'webhook_id' => null,
+            'webhook_secret' => null,
+            'webhook_previous_secret' => null,
+            'is_active' => false,
+        ]);
+    }
+
+    protected function storeWebhookSecrets(WebhookRegistration $registration): void
+    {
+        $this->forceFill([
+            'webhook_id' => $registration->id ?? $this->webhook_id,
+            'webhook_secret' => $registration->secret,
+            'webhook_previous_secret' => $registration->previousSecret ?? $this->webhook_secret,
+        ])->save();
+    }
+
+    /**
+     * Copy the webhook columns from a freshly loaded row — raw, so the
+     * ciphertext is not decrypted and re-encrypted on the way.
+     */
+    protected function syncWebhookAttributes(self $source): void
+    {
+        $attributes = ['webhook_id', 'webhook_secret', 'webhook_previous_secret'];
+        $raw = $source->getAttributes();
+
+        foreach ($attributes as $attribute) {
+            $this->attributes[$attribute] = $raw[$attribute] ?? null;
+            $this->syncOriginalAttribute($attribute);
+        }
+    }
+}

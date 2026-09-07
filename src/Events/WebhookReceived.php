@@ -3,6 +3,8 @@
 namespace NotificationChannels\Zapmizer\Events;
 
 use Illuminate\Foundation\Events\Dispatchable;
+use Illuminate\Queue\SerializesModels;
+use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
 
 /**
  * Class WebhookReceived.
@@ -12,12 +14,13 @@ use Illuminate\Foundation\Events\Dispatchable;
  */
 class WebhookReceived
 {
-    use Dispatchable;
+    use Dispatchable, SerializesModels;
 
     /**
      * @param array $payload The decoded webhook payload.
+     * @param ZapmizerConnection|null $connection The connection whose secret signed the delivery, when known.
      */
-    public function __construct(public array $payload)
+    public function __construct(public array $payload, public ?ZapmizerConnection $connection = null)
     {
     }
 }

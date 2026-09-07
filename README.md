@@ -74,3 +74,32 @@ $user->hasVerifiedWhatsapp(); // true after the user completes the hosted page
 ```
 
 **See the full setup guide — credentials, env vars, migrations, User model, signed return URL, confirmation webhook and events — in [docs/verify-number.md](docs/verify-number.md).**
+
+## Connecting a number per team (multi-tenant)
+
+Mirroring Cashier's `Billable`: put the `Connectable` trait on the model that owns a WhatsApp number (a `Team`, a `User`, ...) and it gets its own Zapmizer connection. The package ships the whole hosted connect flow — authorization popup, QR code pairing, webhook registration — plus a publishable Inertia + Vue wizard. Inbound messages arrive signed on the package's webhook and fire `MessageReceived` with the connection that received them.
+
+```php
+use NotificationChannels\Zapmizer\Connectable as ConnectsZapmizer;
+use NotificationChannels\Zapmizer\Contracts\Connectable;
+
+class Team extends Model implements Connectable
+{
+    use ConnectsZapmizer;
+}
+
+$team->zapmizerMessage('5511999999999')->text('Hello')->send();
+```
+
+```php
+Event::listen(function (MessageReceived $event) {
+    $event->message->fromPhone;       // who wrote
+    $event->message->body;
+    $event->connection?->connectable; // the Team — null when the delivery was
+                                      // signed with the single-tenant secret
+});
+```
+
+Bot events (`message`, ...) are only accepted signed. Single-tenant applications set `ZAPMIZER_WEBHOOK_SECRET` to the secret of the webhook they registered on Zapmizer; connected models store their own.
+
+**See [docs/connect.md](docs/connect.md) for the setup: partner credentials, the resolver, routes and response codes, the wizard stubs, the signed webhook and secret rotation.**

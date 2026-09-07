@@ -11,6 +11,7 @@ use Illuminate\Support\Str;
 use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Connect\MediaDownload;
 use NotificationChannels\Zapmizer\Connect\WebhookRegistration;
+use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\InboundMessage;
@@ -209,6 +210,12 @@ class ZapmizerConnection extends Model
      * `unavailable` as soon as it shows up, or `downloading` when the list
      * ran out (`isDownloading()` then means "give up or try later").
      *
+     * A 429 (`MediaRateLimitedException`) is treated like `downloading`
+     * instead of propagating: the wait is Zapmizer's `Retry-After` or the
+     * next entry of the list, whichever is longer. A 422
+     * (`MediaRejectedException`) still propagates — asking again would not
+     * help.
+     *
      * It blocks the caller for up to the sum of the waits (67 s by default).
      * That is fine in a command or a simple listener; in a queued job it is
      * better to call `media()` and `$this->release($delay)` on `downloading`
@@ -224,19 +231,32 @@ class ZapmizerConnection extends Model
     {
         $sleep ??= static fn (int|float $seconds) => usleep((int) ($seconds * 1_000_000));
 
-        $download = $this->media($message);
+        $answer = $this->mediaOrRateLimit($message);
 
         foreach ($waitsSeconds as $seconds) {
-            if (!$download->isDownloading()) {
+            if ($answer instanceof MediaDownload && !$answer->isDownloading()) {
                 break;
             }
 
-            $sleep($seconds);
+            $sleep($answer instanceof MediaRateLimitedException ? max($seconds, $answer->retryAfter() ?? 0) : $seconds);
 
-            $download = $this->media($message);
+            $answer = $this->mediaOrRateLimit($message);
         }
 
-        return $download;
+        return $answer instanceof MediaDownload ? $answer : MediaDownload::downloading();
+    }
+
+    /**
+     * `media()` with the 429 returned instead of thrown, so `awaitMedia()`
+     * can wait it out like a `downloading`.
+     */
+    private function mediaOrRateLimit(InboundMessage $message): MediaDownload|MediaRateLimitedException
+    {
+        try {
+            return $this->media($message);
+        } catch (MediaRateLimitedException $exception) {
+            return $exception;
+        }
     }
 
     /**

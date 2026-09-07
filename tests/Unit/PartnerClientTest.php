@@ -38,7 +38,7 @@ class PartnerClientTest extends TestCase
             new Response(201, [], json_encode(['url' => 'http://localhost/connect/1?signature=abc', 'expires_at' => '2026-09-07T01:00:00.000000Z'])),
         ]));
 
-        $session = $client->createSession('http://app.test/zapmizer/connect/callback', 'state-123');
+        $session = $client->createSession('http://app.test/zapmizer/connect/callback', 'state-123', 'http://app.test/zapmizer/webhook');
 
         $this->assertInstanceOf(ConnectSession::class, $session);
         $this->assertEquals('http://localhost/connect/1?signature=abc', $session->url);
@@ -51,15 +51,45 @@ class PartnerClientTest extends TestCase
         $this->assertEquals('partner-id|partner-secret', $request->getHeaderLine('X-Partner-Key'));
         $this->assertFalse($request->hasHeader('Authorization'));
         $this->assertEquals(
-            ['redirect_uri' => 'http://app.test/zapmizer/connect/callback', 'state' => 'state-123'],
+            ['redirect_uri' => 'http://app.test/zapmizer/connect/callback', 'state' => 'state-123', 'webhook_url' => 'http://app.test/zapmizer/webhook'],
             json_decode((string) $request->getBody(), true)
         );
     }
 
-    public function testExchangeCodeReturnsTheTeamToken()
+    public function testCreateSessionWithoutAWebhookSendsNone()
+    {
+        $client = $this->makeClient(new MockHandler([new Response(201, [], json_encode(['url' => 'http://localhost/connect/1']))]));
+
+        $client->createSession('http://app.test/cb', 'state');
+
+        $this->assertEquals(['redirect_uri' => 'http://app.test/cb', 'state' => 'state'], json_decode((string) $this->history[0]['request']->getBody(), true));
+    }
+
+    #[DataProvider('expiresIn')]
+    public function testCreateSessionNeverAsksForLessThanZapmizerAllows(int $requested, int $sent)
+    {
+        // Below 900 the signed session dies while the user is still reading
+        // the QR code — Zapmizer refuses it, so the floor is applied here.
+        $client = $this->makeClient(new MockHandler([new Response(201, [], json_encode(['url' => 'http://localhost/connect/1']))]));
+
+        $client->createSession('http://app.test/cb', 'state', null, $requested);
+
+        $this->assertEquals($sent, json_decode((string) $this->history[0]['request']->getBody(), true)['expires_in']);
+        $this->assertGreaterThanOrEqual(PartnerClient::MIN_EXPIRES_IN, $sent);
+    }
+
+    public static function expiresIn(): array
+    {
+        return ['below the floor' => [300, 900], 'at the floor' => [900, 900], 'above' => [3600, 3600]];
+    }
+
+    public function testExchangeCodeReturnsTheTeamTokenWithThePairing()
     {
         $client = $this->makeClient(new MockHandler([
-            new Response(200, [], json_encode(['token' => '1|sanctum', 'team_id' => 7, 'team_name' => 'Acme'])),
+            new Response(200, [], json_encode([
+                'token' => '1|sanctum', 'team_id' => 7, 'team_name' => 'Acme',
+                'phone_number' => '5511999990000', 'bot_instance_id' => 42, 'webhook_id' => 9, 'webhook_secret' => 'whsec_x',
+            ])),
         ]));
 
         $token = $client->exchangeCode('12.secret');
@@ -68,7 +98,31 @@ class PartnerClientTest extends TestCase
         $this->assertEquals('1|sanctum', $token->token);
         $this->assertEquals(7, $token->teamId);
         $this->assertEquals('Acme', $token->teamName);
+        $this->assertEquals('5511999990000', $token->phoneNumber);
+        $this->assertEquals(42, $token->botInstanceId);
+        $this->assertEquals(9, $token->webhookId);
+        $this->assertEquals('whsec_x', $token->webhookSecret);
+        $this->assertFalse($token->needsWebhookSecret());
         $this->assertEquals(['code' => '12.secret'], json_decode((string) $this->history[0]['request']->getBody(), true));
+    }
+
+    public function testExchangeCodeTellsAReusedWebhookApart()
+    {
+        $client = $this->makeClient(new MockHandler([
+            // Webhook reused on the team: id comes, secret does not.
+            new Response(200, [], json_encode(['token' => '1|sanctum', 'team_id' => 7, 'phone_number' => '5511999990000', 'bot_instance_id' => 42, 'webhook_id' => 9, 'webhook_secret' => null])),
+            // No webhook_url was sent: nothing to rotate.
+            new Response(200, [], json_encode(['token' => '1|sanctum', 'team_id' => 7, 'phone_number' => '5511999990000', 'bot_instance_id' => 42, 'webhook_id' => null, 'webhook_secret' => null])),
+        ]));
+
+        $reused = $client->exchangeCode('c');
+        $this->assertEquals(9, $reused->webhookId);
+        $this->assertNull($reused->webhookSecret);
+        $this->assertTrue($reused->needsWebhookSecret());
+
+        $none = $client->exchangeCode('c');
+        $this->assertNull($none->webhookId);
+        $this->assertFalse($none->needsWebhookSecret());
     }
 
     public function testExchangeCodeReturnsNullForUnknownCode()

@@ -8,50 +8,51 @@ use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
-use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use NotificationChannels\Zapmizer\Connect\ConnectToken;
-use NotificationChannels\Zapmizer\Connect\InstanceClient;
-use NotificationChannels\Zapmizer\Connect\InstanceConnection;
-use NotificationChannels\Zapmizer\Connect\InstanceSummary;
 use NotificationChannels\Zapmizer\Connect\PartnerClient;
 use NotificationChannels\Zapmizer\Contracts\Connectable;
 use NotificationChannels\Zapmizer\Contracts\ResolvesConnectable;
-use NotificationChannels\Zapmizer\Exceptions\InstanceBootingException;
 use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;
-use NotificationChannels\Zapmizer\Exceptions\InstancePlanLimitException;
 use NotificationChannels\Zapmizer\Exceptions\NoConnectableException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
 use Throwable;
 
 /**
  * Class ConnectController.
  *
- * The hosted connect flow: authorization in a popup (start → callback),
- * instance creation/adoption and pairing polling. Which model is being
- * connected comes from the configured `zapmizer.connect.resolver`; the
- * model implements Contracts\Connectable (through the Connectable trait).
+ * The hosted connect flow: `start` opens Zapmizer's page in a popup, where
+ * the user authorizes a team AND pairs the WhatsApp number; `callback`
+ * exchanges the code and lands with everything — token, number, instance,
+ * webhook. There is no wizard on this side. Which model is being connected
+ * comes from the configured `zapmizer.connect.resolver`; the model
+ * implements Contracts\Connectable (through the Connectable trait).
  *
- * Every JSON answer the wizard branches on carries a stable `code`:
- * `reauth_required`, `choice_required`, `booting` (202), `not_connected`
- * (409), `no_instance` (409), `plan_limit` (422), `instance_unavailable`
- * (422), `qr_not_available` (422), `zapmizer_unavailable` (503),
- * `partner_unauthorized` (503), `no_connectable` (403) — the last three
- * rendered by their exceptions.
+ * The popup reports its outcome through postMessage with a stable `status`:
+ * `ok`, `denied`, `plan_limit`, `qr_unavailable`, `invalid_state`,
+ * `exchange_failed`, `webhook_failed`, `team_already_connected`,
+ * `no_connectable`. The JSON endpoints answer `zapmizer_unavailable` (503),
+ * `partner_unauthorized` (503) and `no_connectable` (403) through their
+ * exceptions.
  */
 class ConnectController extends Controller
 {
     public const SESSION_KEY = 'zapmizer_connect';
 
     /**
-     * Instance states from which Zapmizer boots the SAME instance again
-     * (POST /bot-instances with its id) instead of needing a new one.
+     * What the hosted page reports in `?error=` when it ends without a code,
+     * and the postMessage status each one becomes.
      */
-    protected const REBOOTABLE_STATES = ['off', 'disconnected'];
+    protected const POPUP_ERRORS = [
+        'access_denied' => 'denied',
+        'plan_limit' => 'plan_limit',
+        'qr_unavailable' => 'qr_unavailable',
+    ];
 
     public function __construct(
         protected PartnerClient $partnerClient,
@@ -61,14 +62,26 @@ class ConnectController extends Controller
 
     /**
      * The current connection state, so the screen opens knowing where it is.
+     * With `?live=1` the paired instance is queried on Zapmizer and the
+     * connection carries `state` (`connected`, `disconnected`, ... or the
+     * package's `reauth_required`, `instance_gone`, `zapmizer_unavailable`)
+     * and `is_online` — a panel showing whether the number is up.
      */
     public function show(Request $request): JsonResponse
     {
-        return new JsonResponse(['connection' => $this->connectable($request)->zapmizerConnection]);
+        $connection = $this->connectable($request)->zapmizerConnection;
+
+        if ($connection === null || !$request->boolean('live')) {
+            return new JsonResponse(['connection' => $connection]);
+        }
+
+        return new JsonResponse(['connection' => $connection->toArray() + $this->liveState($connection)]);
     }
 
     /**
-     * Create the authorization session and return the popup URL.
+     * Create the authorization session and return the popup URL. The
+     * webhook route goes along: Zapmizer registers it on the team once the
+     * number pairs, and the id/secret come back with the token.
      */
     public function start(Request $request): JsonResponse
     {
@@ -81,24 +94,28 @@ class ConnectController extends Controller
             'expires_at' => now()->addMinutes((int) config('zapmizer.connect.state_ttl_minutes', 10))->toIso8601String(),
         ]);
 
-        $session = $this->partnerClient->createSession(route('zapmizer.connect.callback'), $state);
+        $session = $this->partnerClient->createSession(
+            redirectUri: route('zapmizer.connect.callback'),
+            state: $state,
+            webhookUrl: route('zapmizer.webhook'),
+        );
 
         return new JsonResponse($session);
     }
 
     /**
-     * The popup lands here with the code. Renders a page that reports the
-     * outcome to the opener through postMessage and closes itself — so
-     * nothing here may escape as a 500: an HTML error page in the popup
-     * never posts the message, and the wizard waits forever.
+     * The popup lands here with the code (or an error). Renders a page that
+     * reports the outcome to the opener through postMessage and closes
+     * itself — so nothing here may escape as a 500: an HTML error page in
+     * the popup never posts the message, and the opener waits forever.
      */
     public function callback(Request $request): View
     {
         // pull() guarantees the single use of the state, on error paths too.
         $pending = $request->session()->pull(self::SESSION_KEY);
 
-        if ($request->query('error') === 'access_denied') {
-            return $this->result('denied');
+        if (($error = $request->query('error')) !== null) {
+            return $this->result(static::POPUP_ERRORS[$error] ?? 'exchange_failed');
         }
 
         try {
@@ -133,14 +150,16 @@ class ConnectController extends Controller
     }
 
     /**
-     * Store the exchanged token on the model's connection.
+     * Store everything the exchange brought on the model's connection. The
+     * hosted page paired the number before handing out the code, so the
+     * connection is born ACTIVE — as long as a number came.
      *
-     * Reconnecting the SAME Zapmizer team updates the row keeping the
-     * phone_number and bot_instance_id already paired; connected_at is
-     * reset so the wizard knows pairing is pending. A DIFFERENT team gets a
-     * clean slate: the old number, instance and webhook belong to the old
-     * token, and the old webhook is deleted over there (best-effort). A new
-     * connection is born INACTIVE — authorizing does not yield a sender yet.
+     * A DIFFERENT team than the one stored gets a clean slate first: the old
+     * number, instance and webhook belong to the old token, and the old
+     * webhook is deleted over there (best-effort). The SAME team keeps its
+     * stored webhook secret when Zapmizer reused the webhook (same id, no
+     * secret in the answer); any other missing secret is obtained by
+     * rotating — without one, no delivery can be verified.
      */
     protected function storeToken(Model&Connectable $connectable, ConnectToken $token): View
     {
@@ -157,16 +176,36 @@ class ConnectController extends Controller
             && $token->teamId !== null
             && $connection->zapmizer_team_id !== $token->teamId;
 
-        if ($switchingTeam) {
+        // A webhook replaced on the same team (new id): the old one would keep
+        // delivering with a secret this row is about to forget.
+        $replacingWebhook = !$switchingTeam
+            && $connection->webhook_id !== null
+            && $token->webhookId !== null
+            && $connection->webhook_id !== $token->webhookId;
+
+        if ($switchingTeam || $replacingWebhook) {
             $this->forgetRemoteWebhook($connection);
+        }
+
+        if ($switchingTeam) {
             $connection->forgetPairing();
         }
+
+        $reusedWebhook = $token->needsWebhookSecret()
+            && $connection->webhook_id === $token->webhookId
+            && filled($connection->webhook_secret);
 
         $connection->forceFill([
             'api_token' => $token->token,
             'zapmizer_team_id' => $token->teamId,
             'zapmizer_team_name' => $token->teamName,
-            'connected_at' => null,
+            'phone_number' => $token->phoneNumber,
+            'bot_instance_id' => $token->botInstanceId,
+            'connected_at' => $token->phoneNumber === null ? null : now(),
+            'webhook_id' => $token->webhookId,
+            'webhook_secret' => $reusedWebhook ? $connection->webhook_secret : $token->webhookSecret,
+            'webhook_previous_secret' => $reusedWebhook ? $connection->webhook_previous_secret : null,
+            'is_active' => $token->phoneNumber !== null,
         ]);
 
         try {
@@ -177,136 +216,11 @@ class ConnectController extends Controller
             return $this->result('team_already_connected');
         }
 
+        if ($token->needsWebhookSecret() && !$reusedWebhook && !$this->obtainWebhookSecret($connection)) {
+            return $this->result('webhook_failed');
+        }
+
         return $this->result('ok');
-    }
-
-    /**
-     * Resolve the instance to pair: adopt a chosen one, create a new one, or
-     * let the backend decide (reuse the stored one, adopt the only connected
-     * one, or create).
-     */
-    public function instance(Request $request): JsonResponse
-    {
-        $connection = $this->connectable($request)->zapmizerConnection;
-
-        if ($connection === null || !$connection->hasApiToken()) {
-            return new JsonResponse(['code' => 'not_connected'], 409);
-        }
-
-        $validated = $request->validate([
-            'instance_id' => ['nullable', 'integer', 'min:1'],
-            'create' => ['nullable', 'boolean'],
-        ]);
-
-        try {
-            $client = $connection->instanceClient();
-
-            if ($chosenId = Arr::get($validated, 'instance_id')) {
-                return $this->adoptChosenInstance($client, $connection, (int) $chosenId);
-            }
-
-            if ($request->boolean('create')) {
-                $instanceConnection = $this->provisionNewInstance($client, $connection);
-            } else {
-                // An instance resolved before (reconnecting after a drop):
-                // reuse instead of creating another — avoids a second
-                // instance and a false plan_limit.
-                $instanceConnection = $this->existingInstanceConnection($client, $connection);
-
-                if ($instanceConnection === null) {
-                    $connected = $client->instances(connected: true);
-
-                    // 2+ connected with no explicit choice: adopting the first
-                    // would silently pick the wrong number.
-                    if (count($connected) >= 2) {
-                        return new JsonResponse([
-                            'code' => 'choice_required',
-                            'instances' => $this->connectedInstanceSummaries($connected, $connection),
-                        ]);
-                    }
-
-                    $instance = Arr::first($connected);
-
-                    // An adoption that failed (the instance vanished between
-                    // the listing and the fetch) equals an empty list: create.
-                    $instanceConnection = ($instance ? $this->adoptInstance($client, $connection, (int) $instance['id']) : null)
-                        ?? $this->provisionNewInstance($client, $connection);
-                }
-            }
-
-            if ($instanceConnection === null) {
-                return $this->qrNotAvailable();
-            }
-
-            // An adopted instance that is already connected never goes through
-            // polling — without the sync here the paired number would never
-            // become the sending `from`.
-            $this->syncConnectedNumber($connection, $instanceConnection);
-
-            return new JsonResponse(['connection' => $instanceConnection]);
-        } catch (InstancePlanLimitException $exception) {
-            return new JsonResponse(['code' => 'plan_limit', 'message' => $exception->getMessage()], 422);
-        } catch (InstanceBootingException $exception) {
-            // Zapmizer names the booting instance so nobody creates a second
-            // one: stored now, the retry reuses it instead of `create` again.
-            if ($exception->instanceId !== null) {
-                $this->recordInstance($connection, $exception->instanceId);
-            }
-
-            return new JsonResponse(['code' => 'booting'], 202);
-        } catch (ZapmizerUnauthorizedException) {
-            return new JsonResponse(['code' => 'reauth_required']);
-        }
-    }
-
-    /**
-     * The connected instances, for the sender choice.
-     */
-    public function instances(Request $request): JsonResponse
-    {
-        $connection = $this->connectable($request)->zapmizerConnection;
-
-        if ($connection === null || !$connection->hasApiToken()) {
-            return new JsonResponse(['code' => 'not_connected'], 409);
-        }
-
-        try {
-            $summaries = $this->connectedInstanceSummaries(
-                $connection->instanceClient()->instances(connected: true),
-                $connection,
-            );
-        } catch (ZapmizerUnauthorizedException) {
-            return new JsonResponse(['code' => 'reauth_required']);
-        }
-
-        return new JsonResponse(['instances' => $summaries]);
-    }
-
-    /**
-     * The pairing state of the stored instance — what the wizard polls.
-     */
-    public function connection(Request $request): JsonResponse
-    {
-        $connection = $this->connectable($request)->zapmizerConnection;
-        $instanceId = $connection?->bot_instance_id;
-
-        if ($connection === null || !$connection->hasApiToken() || blank($instanceId)) {
-            return new JsonResponse(['code' => 'no_instance'], 409);
-        }
-
-        try {
-            $instanceConnection = $connection->instanceClient()->connection((int) $instanceId);
-        } catch (ZapmizerUnauthorizedException) {
-            return new JsonResponse(['code' => 'reauth_required']);
-        } catch (InstanceGoneException) {
-            // Deleted on Zapmizer: the stored id stays — restarting the wizard
-            // re-resolves it through POST .../instance.
-            return new JsonResponse(['code' => 'no_instance'], 409);
-        }
-
-        $this->syncConnectedNumber($connection, $instanceConnection);
-
-        return new JsonResponse(['connection' => $instanceConnection]);
     }
 
     /**
@@ -328,150 +242,53 @@ class ConnectController extends Controller
     }
 
     /**
-     * Explicit confirmation of a choice: only records the instance after
-     * checking it is still connected — recording first would leave a dead
-     * sender stored if it dropped between the list and the click.
+     * Zapmizer reused a webhook the team already had for our URL and kept
+     * its secret to itself. Rotating is the only way to get one; a
+     * connection without it would accept nothing, so it is deactivated when
+     * the rotation fails — the log says why, the popup says `webhook_failed`.
      */
-    protected function adoptChosenInstance(InstanceClient $client, ZapmizerConnection $connection, int $instanceId): JsonResponse
+    protected function obtainWebhookSecret(ZapmizerConnection $connection): bool
     {
         try {
-            $instanceConnection = $client->connection($instanceId);
-        } catch (InstanceGoneException) {
-            $instanceConnection = null;
-        }
+            $connection->rotateWebhookSecret();
 
-        if ($instanceConnection === null || !$instanceConnection->isConnected()) {
-            return new JsonResponse([
-                'code' => 'instance_unavailable',
-                'message' => 'The chosen number is disconnected. Pick another one or connect a new one.',
-                'instances' => $this->connectedInstanceSummaries($client->instances(connected: true), $connection),
-            ], 422);
-        }
-
-        $this->recordInstance($connection, $instanceId);
-        $this->syncConnectedNumber($connection, $instanceConnection);
-
-        return new JsonResponse(['connection' => $instanceConnection]);
-    }
-
-    /**
-     * Automatic adoption (the only connected one in the listing): confirms
-     * the instance still exists before recording it.
-     */
-    protected function adoptInstance(InstanceClient $client, ZapmizerConnection $connection, int $instanceId): ?InstanceConnection
-    {
-        try {
-            $instanceConnection = $client->connection($instanceId);
-        } catch (InstanceGoneException) {
-            return null;
-        }
-
-        $this->recordInstance($connection, $instanceId);
-
-        return $instanceConnection;
-    }
-
-    /**
-     * Create an instance and fetch its connection. Null when the connection
-     * endpoint refuses the instance right after creating it — Zapmizer
-     * answers 404 there for a team without the QR-code feature, and
-     * treating that as "gone" would create yet another instance per retry.
-     */
-    protected function provisionNewInstance(InstanceClient $client, ZapmizerConnection $connection): ?InstanceConnection
-    {
-        $instance = $client->createInstance();
-
-        // Recorded before the fetch on purpose: if the fresh instance is
-        // still booting (423), the next poll reuses the id instead of
-        // creating another.
-        $this->recordInstance($connection, (int) $instance['id']);
-
-        try {
-            return $client->connection((int) $instance['id']);
-        } catch (InstanceGoneException $exception) {
-            Log::warning('zapmizer: the connection of a just-created instance is unavailable.', [
-                'connection_id' => $connection->getKey(),
-                'bot_instance_id' => $instance['id'],
-                'exception' => $exception->getMessage(),
-            ]);
-
-            return null;
-        }
-    }
-
-    protected function qrNotAvailable(): JsonResponse
-    {
-        return new JsonResponse([
-            'code' => 'qr_not_available',
-            'message' => 'The instance was created but its QR code cannot be fetched. Check that the Zapmizer team has QR-code connections enabled.',
-        ], 422);
-    }
-
-    protected function recordInstance(ZapmizerConnection $connection, int $instanceId): void
-    {
-        $connection->forceFill(['bot_instance_id' => $instanceId])->save();
-    }
-
-    /**
-     * @param array<int, array<string, mixed>> $instances
-     * @return array<int, InstanceSummary>
-     */
-    protected function connectedInstanceSummaries(array $instances, ZapmizerConnection $connection): array
-    {
-        $currentId = $connection->bot_instance_id;
-
-        return collect($instances)
-            ->filter(fn (array $item) => filled(Arr::get($item, 'client.cid_formatted')))
-            ->map(fn (array $item) => InstanceSummary::fromArray($item, $currentId === null ? null : (int) $currentId))
-            ->values()
-            ->all();
-    }
-
-    /**
-     * Activate the connection when the number pairs — and only then. Runs on
-     * a polling loop of a few seconds, so it only writes when something
-     * really changed.
-     */
-    protected function syncConnectedNumber(ZapmizerConnection $connection, InstanceConnection $instanceConnection): void
-    {
-        if (!$instanceConnection->isConnected()) {
-            return;
-        }
-
-        // Same number is only a no-op when connected_at already exists: a
-        // reconnection resets connected_at keeping phone_number, and without
-        // this second leg re-pairing with the SAME number would leave the
-        // wizard mid-flow forever.
-        if ($connection->phone_number === $instanceConnection->number && $connection->connected_at !== null) {
-            $this->ensureWebhookRegistered($connection);
-
-            return;
-        }
-
-        $connection->forceFill([
-            'phone_number' => $instanceConnection->number,
-            'connected_at' => now(),
-            'is_active' => true,
-        ])->save();
-
-        $this->ensureWebhookRegistered($connection);
-    }
-
-    /**
-     * The receiver must be registered on Zapmizer's side, and the secret only
-     * comes out in the creation response. Failing here does not break the
-     * wizard: the number is paired, and registration is retried on the next
-     * poll.
-     */
-    protected function ensureWebhookRegistered(ZapmizerConnection $connection): void
-    {
-        try {
-            $connection->registerWebhook();
+            return true;
         } catch (Throwable $exception) {
-            Log::warning('zapmizer: could not register the webhook.', [
+            Log::warning('zapmizer: could not obtain the webhook secret after connecting.', [
                 'connection_id' => $connection->getKey(),
+                'webhook_id' => $connection->webhook_id,
                 'exception' => $exception->getMessage(),
             ]);
+
+            $connection->forceFill(['is_active' => false])->save();
+
+            return false;
+        }
+    }
+
+    /**
+     * The live state of the paired instance, folded into the connection's
+     * JSON. Every failure becomes a `state` the panel can name instead of
+     * an error the screen would have to map.
+     *
+     * @return array{state: ?string, is_online: bool}
+     */
+    protected function liveState(ZapmizerConnection $connection): array
+    {
+        if (!$connection->hasApiToken() || blank($connection->bot_instance_id)) {
+            return ['state' => null, 'is_online' => false];
+        }
+
+        try {
+            $instance = $connection->instanceClient()->connection((int) $connection->bot_instance_id);
+
+            return ['state' => $instance->state, 'is_online' => $instance->isOnline];
+        } catch (ZapmizerUnauthorizedException) {
+            return ['state' => 'reauth_required', 'is_online' => false];
+        } catch (InstanceGoneException) {
+            return ['state' => 'instance_gone', 'is_online' => false];
+        } catch (ZapmizerUnavailableException | ZapmizerConnectException) {
+            return ['state' => 'zapmizer_unavailable', 'is_online' => false];
         }
     }
 
@@ -490,38 +307,6 @@ class ConnectController extends Controller
                 'webhook_id' => $connection->webhook_id,
                 'exception' => $exception->getMessage(),
             ]);
-        }
-    }
-
-    /**
-     * The stored instance, ready to pair. An instance that dropped
-     * (`disconnected`: the phone went away) or was turned off is booted
-     * again — Zapmizer only shows a new QR code after that, and it is the
-     * same POST as creating, with the id in the body. Null when there is
-     * nothing stored or Zapmizer no longer knows the id.
-     *
-     * @throws ZapmizerConnectException
-     */
-    protected function existingInstanceConnection(InstanceClient $client, ZapmizerConnection $connection): ?InstanceConnection
-    {
-        $instanceId = $connection->bot_instance_id;
-
-        if (blank($instanceId)) {
-            return null;
-        }
-
-        try {
-            $instanceConnection = $client->connection((int) $instanceId);
-
-            if (!in_array($instanceConnection->state, static::REBOOTABLE_STATES, true)) {
-                return $instanceConnection;
-            }
-
-            $client->createInstance((int) $instanceId);
-
-            return $client->connection((int) $instanceId);
-        } catch (InstanceGoneException) {
-            return null;
         }
     }
 
@@ -570,10 +355,13 @@ class ConnectController extends Controller
     protected function result(string $status): View
     {
         $messages = [
-            'ok' => 'WhatsApp account connected.',
+            'ok' => 'WhatsApp number connected.',
             'denied' => 'Authorization cancelled.',
+            'plan_limit' => 'The Zapmizer plan has no room for another WhatsApp number. Free one up on Zapmizer, or upgrade the plan, and try again.',
+            'qr_unavailable' => 'The Zapmizer team cannot pair a number by QR code. Check the team settings on Zapmizer and try again.',
             'invalid_state' => 'This connection session is invalid or has expired. Close this window and try again.',
             'exchange_failed' => 'The connection could not be completed. Close this window and try again.',
+            'webhook_failed' => 'The number was paired, but the receiver could not be set up. Close this window and try again.',
             'team_already_connected' => 'This Zapmizer account is already connected to another account here. Disconnect it there first, or authorize a different Zapmizer team.',
             'no_connectable' => 'There is nothing to connect on this account. Close this window, sign in again and retry.',
         ];

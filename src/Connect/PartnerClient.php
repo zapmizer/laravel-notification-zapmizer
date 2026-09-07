@@ -20,6 +20,13 @@ use Psr\Http\Message\ResponseInterface;
  */
 class PartnerClient
 {
+    /**
+     * Zapmizer's floor for `expires_in`: the same signature covers the hosted
+     * page, the authorization and the pairing (whose QR window alone is five
+     * minutes) — below it the session would die mid-pairing.
+     */
+    public const MIN_EXPIRES_IN = 900;
+
     protected HttpClient $http;
 
     protected string $apiBaseUri;
@@ -42,17 +49,20 @@ class PartnerClient
     /**
      * Create the hosted authorization session. `redirectUri` is where Zapmizer
      * sends the user back with the single-use `code`; `state` rides along and
-     * must be checked on the way back.
+     * must be checked on the way back. `webhookUrl` is the receiver Zapmizer
+     * registers on the team once the number pairs — its id and secret come
+     * back with the token.
      *
      * @throws ZapmizerConnectException
      */
-    public function createSession(string $redirectUri, string $state, ?int $expiresIn = null): ConnectSession
+    public function createSession(string $redirectUri, string $state, ?string $webhookUrl = null, ?int $expiresIn = null): ConnectSession
     {
         $response = $this->request('POST', '/connect/sessions', [
             'json' => array_filter([
                 'redirect_uri' => $redirectUri,
                 'state' => $state,
-                'expires_in' => $expiresIn,
+                'webhook_url' => $webhookUrl,
+                'expires_in' => $expiresIn === null ? null : max($expiresIn, self::MIN_EXPIRES_IN),
             ]),
         ]);
 

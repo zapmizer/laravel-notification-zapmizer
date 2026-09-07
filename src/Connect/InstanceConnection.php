@@ -7,9 +7,11 @@ use JsonSerializable;
 /**
  * Class InstanceConnection.
  *
- * Mirror of GET /bot-instances/{id}/connection. The wizard polls this to
- * show the QR code and the pairing state; `number` is only filled once
- * `state === 'connected'`.
+ * Mirror of GET /bot-instances/{id}/connection: the live state of the
+ * paired instance (`connected`, `disconnected`, `qrcode`, ...). `number` is
+ * only filled once `state === 'connected'`. The QR fields are still
+ * mirrored — pairing happens on Zapmizer's hosted page, so the package
+ * never renders them.
  */
 final readonly class InstanceConnection implements JsonSerializable
 {

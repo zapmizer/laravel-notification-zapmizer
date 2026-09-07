@@ -10,9 +10,7 @@ use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Connect\InstanceConnection;
-use NotificationChannels\Zapmizer\Exceptions\InstanceBootingException;
 use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;
-use NotificationChannels\Zapmizer\Exceptions\InstancePlanLimitException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
@@ -29,48 +27,6 @@ class InstanceClientTest extends TestCase
         $stack->push(Middleware::history($this->history));
 
         return new InstanceClient('team-token', new HttpClient(['handler' => $stack]), 'http://localhost/api', '2025-06-27');
-    }
-
-    public function testInstancesListsConnectedOnesUnpaginated()
-    {
-        $client = $this->makeClient(new MockHandler([
-            new Response(200, [], json_encode(['data' => [['id' => 1, 'client' => ['cid_formatted' => '+55 81 91111-0000']]]])),
-        ]));
-
-        $instances = $client->instances(connected: true);
-
-        $this->assertCount(1, $instances);
-        $this->assertEquals(1, $instances[0]['id']);
-
-        $request = $this->history[0]['request'];
-        $this->assertEquals('http://localhost/api/bot-instances?connected=1&per_page=100', (string) $request->getUri());
-        $this->assertEquals('Bearer team-token', $request->getHeaderLine('Authorization'));
-        $this->assertEquals('2025-06-27', $request->getHeaderLine('api-version'));
-    }
-
-    public function testCreateInstanceMapsPlanLimitAndBooting()
-    {
-        $client = $this->makeClient(new MockHandler([
-            new Response(402, [], json_encode(['message' => 'Plan limit reached.'])),
-            new Response(423, [], ''),
-            new Response(201, [], json_encode(['data' => ['id' => 9]])),
-        ]));
-
-        try {
-            $client->createInstance();
-            $this->fail('Expected InstancePlanLimitException.');
-        } catch (InstancePlanLimitException $exception) {
-            $this->assertEquals('Plan limit reached.', $exception->getMessage());
-        }
-
-        try {
-            $client->createInstance();
-            $this->fail('Expected InstanceBootingException.');
-        } catch (InstanceBootingException) {
-            $this->addToAssertionCount(1);
-        }
-
-        $this->assertEquals(9, $client->createInstance()['id']);
     }
 
     public function testConnectionMapsStates()
@@ -91,6 +47,8 @@ class InstanceClientTest extends TestCase
         $this->assertTrue($connection->isConnected());
         $this->assertEquals('5581911110000', $connection->number);
         $this->assertEquals('http://localhost/api/bot-instances/9/connection', (string) $this->history[0]['request']->getUri());
+        $this->assertEquals('Bearer team-token', $this->history[0]['request']->getHeaderLine('Authorization'));
+        $this->assertEquals('2025-06-27', $this->history[0]['request']->getHeaderLine('api-version'));
 
         $this->expectExceptionInOrder([InstanceGoneException::class, ZapmizerUnauthorizedException::class, ZapmizerUnavailableException::class], fn () => $client->connection(9));
     }
@@ -133,35 +91,6 @@ class InstanceClientTest extends TestCase
         $this->app->make(InstanceClient::class);
     }
 
-    public function testCreateInstanceCarriesTheBootingIdFromA423()
-    {
-        $client = $this->makeClient(new MockHandler([
-            new Response(423, [], json_encode(['message' => 'Already booting.', 'bot_instance_id' => 77])),
-        ]));
-
-        try {
-            $client->createInstance();
-            $this->fail('Expected InstanceBootingException.');
-        } catch (InstanceBootingException $exception) {
-            $this->assertEquals(77, $exception->instanceId);
-        }
-    }
-
-    public function testCreateInstanceRebootsAnExistingOneById()
-    {
-        $client = $this->makeClient(new MockHandler([
-            new Response(200, [], json_encode(['data' => ['id' => 9]])),
-            // Re-booting an unknown id: Zapmizer answers 423 without an id.
-            new Response(423, [], json_encode(['message' => 'Conta do WhatsApp não encontrada.'])),
-        ]));
-
-        $this->assertEquals(9, $client->createInstance(9)['id']);
-        $this->assertEquals(['bot_instance_id' => 9], json_decode((string) $this->history[0]['request']->getBody(), true));
-
-        $this->expectException(InstanceGoneException::class);
-        $client->createInstance(9);
-    }
-
     public function testDeleteWebhookTreats404AsDone()
     {
         $client = $this->makeClient(new MockHandler([
@@ -201,7 +130,7 @@ class InstanceClientTest extends TestCase
         ]));
 
         try {
-            $client->instances();
+            $client->connection(9);
             $this->fail('Expected ZapmizerConnectException.');
         } catch (ZapmizerConnectException $exception) {
             $this->assertStringContainsString('302', $exception->getMessage());

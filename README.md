@@ -102,4 +102,4 @@ Event::listen(function (MessageReceived $event) {
 
 Bot events (`message`, ...) are only accepted signed. Single-tenant applications set `ZAPMIZER_WEBHOOK_SECRET` to the secret of the webhook they registered on Zapmizer; connected models store their own.
 
-**See [docs/connect.md](docs/connect.md) for the setup: partner credentials, the resolver, routes and statuses, the Vue stubs, the signed webhook and secret rotation. Requires Zapmizer 1.149.0 or later (hosted pairing).**
+**See [docs/connect.md](docs/connect.md) for the setup: partner credentials, the resolver, routes and statuses, the Vue stubs, the signed webhook and secret rotation. Requires Zapmizer 1.149.0 or later (hosted pairing); receiving media (`$connection->media($message)`) requires 1.150.0 or later.**

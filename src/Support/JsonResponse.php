@@ -23,12 +23,8 @@ final class JsonResponse
      */
     public static function problem(ResponseInterface $response, bool $sniffBody = true): ?string
     {
-        $status = $response->getStatusCode();
-
-        if ($status >= 300 && $status < 400) {
-            $location = $response->getHeaderLine('Location');
-
-            return "redirected ({$status}" . ($location !== '' ? " to {$location}" : '') . ') — the API token is probably invalid or revoked';
+        if (($redirected = self::redirected($response)) !== null) {
+            return $redirected;
         }
 
         $contentType = $response->getHeaderLine('Content-Type');
@@ -52,6 +48,23 @@ final class JsonResponse
         return json_decode($contents) === null && json_last_error() !== JSON_ERROR_NONE
             ? 'response body is not valid JSON'
             : null;
+    }
+
+    /**
+     * Only the redirect leg of the check — for an endpoint whose success is
+     * not JSON (media bytes) but whose refused token still redirects.
+     */
+    public static function redirected(ResponseInterface $response): ?string
+    {
+        $status = $response->getStatusCode();
+
+        if ($status < 300 || $status >= 400) {
+            return null;
+        }
+
+        $location = $response->getHeaderLine('Location');
+
+        return "redirected ({$status}" . ($location !== '' ? " to {$location}" : '') . ') — the API token is probably invalid or revoked';
     }
 
     protected static function isJson(string $contentType): bool

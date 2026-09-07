@@ -109,6 +109,23 @@ final readonly class InboundMessage
     }
 
     /**
+     * The original file name, as the sender's device reported it (documents
+     * mostly — a photo taken in the app has none). Null without media.
+     */
+    public function mediaFilename(): ?string
+    {
+        return $this->mediaMetadata['filename'] ?? null;
+    }
+
+    /**
+     * The media's mime type as the webhook reported it. Null without media.
+     */
+    public function mediaMimeType(): ?string
+    {
+        return $this->mediaMetadata['mimetype'] ?? null;
+    }
+
+    /**
      * The sender's wid, trying the alternative sources before giving up:
      * Zapmizer resolves lid→wid but admits failure, and then `from` arrives as
      * `84474155032797@lid`. `_data.from` usually carries the real wid in that

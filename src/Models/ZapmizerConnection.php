@@ -2,15 +2,18 @@
 
 namespace NotificationChannels\Zapmizer\Models;
 
+use Closure;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
 use Illuminate\Support\Str;
 use NotificationChannels\Zapmizer\Connect\InstanceClient;
+use NotificationChannels\Zapmizer\Connect\MediaDownload;
 use NotificationChannels\Zapmizer\Connect\WebhookRegistration;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
+use NotificationChannels\Zapmizer\InboundMessage;
 use NotificationChannels\Zapmizer\Support\PhoneNumber;
 use NotificationChannels\Zapmizer\Zapmizer;
 use NotificationChannels\Zapmizer\ZapmizerMessage;
@@ -176,6 +179,64 @@ class ZapmizerConnection extends Model
             to: PhoneNumber::digits($to),
             zapmizer: $this->zapmizer(),
         );
+    }
+
+    /**
+     * The media of a message this connection received. One request, no
+     * waiting: the answer is `attached`, `downloading` (the webhook fired
+     * before the bot finished the download — ask again later) or
+     * `unavailable` (it will never come). Needs the paired instance: a
+     * connection that lost it has nothing to ask Zapmizer about.
+     *
+     * @throws ZapmizerConnectException
+     */
+    public function media(InboundMessage $message): MediaDownload
+    {
+        if (blank($this->bot_instance_id)) {
+            throw new ZapmizerUnauthorizedException('There is no paired Zapmizer instance for this connection.');
+        }
+
+        return $this->instanceClient()->media(
+            (int) $this->bot_instance_id,
+            $message->id,
+            $message->sentAt->getTimestamp(),
+        );
+    }
+
+    /**
+     * `media()` that waits out a `downloading`: sleeps and asks again for
+     * each entry of `$waitsSeconds`, and returns the last answer — `attached`,
+     * `unavailable` as soon as it shows up, or `downloading` when the list
+     * ran out (`isDownloading()` then means "give up or try later").
+     *
+     * It blocks the caller for up to the sum of the waits (67 s by default).
+     * That is fine in a command or a simple listener; in a queued job it is
+     * better to call `media()` and `$this->release($delay)` on `downloading`
+     * (see docs/connect.md, "Receiving media") so the worker is free
+     * meanwhile.
+     *
+     * @param array<int, int|float> $waitsSeconds
+     * @param (Closure(int|float): void)|null $sleep Replaces `sleep()` — for tests.
+     *
+     * @throws ZapmizerConnectException
+     */
+    public function awaitMedia(InboundMessage $message, array $waitsSeconds = [2, 5, 10, 20, 30], ?Closure $sleep = null): MediaDownload
+    {
+        $sleep ??= static fn (int|float $seconds) => usleep((int) ($seconds * 1_000_000));
+
+        $download = $this->media($message);
+
+        foreach ($waitsSeconds as $seconds) {
+            if (!$download->isDownloading()) {
+                break;
+            }
+
+            $sleep($seconds);
+
+            $download = $this->media($message);
+        }
+
+        return $download;
     }
 
     /**

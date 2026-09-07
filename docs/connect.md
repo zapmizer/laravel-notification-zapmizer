@@ -222,7 +222,8 @@ Event::listen(function (MessageReceived $event) {
     $m->authorPhone;         // digits of `author` ('' when null or unresolved)
     $m->to;                  // receiving bot wid (X-Wid)
     $m->body; $m->type;      // 'chat', 'image', 'document', ...
-    $m->hasMedia; $m->mediaMetadata;   // mimetype, filename, caption, size, ... (bytes are not delivered)
+    $m->hasMedia; $m->mediaMetadata;   // mimetype, filename, caption, size, ... (bytes are not delivered — see "Receiving media")
+    $m->mediaFilename(); $m->mediaMimeType();  // the original name and type, from the metadata
     $m->isGroup; $m->isBroadcast;      // group message / status@broadcast (a status update, arrives as a DM)
     $m->hasUnresolvedSender; // sender (or group author) arrived as a @lid wid — its digits are NOT a phone number
     $m->fromMe;              // mirrored from the payload — never true: whatsapp-web.js does not emit `message` for the bot's own sends
@@ -251,6 +252,65 @@ Event::listen(function (MessageReceived $event) {
 
 Use `NotificationChannels\Zapmizer\Support\PhoneNumber` to match `fromPhone` against what your users typed: `normalize()` (E.164 without `+`, completes `zapmizer.default_country_code` — `55` by default — on 10/11-digit national numbers, drops the carrier zero), `variants()` (with/without the Brazilian ninth digit, mobiles only, `55` numbers only), `digits()`, `fromWid()`.
 
+### Receiving media
+
+The webhook carries **no bytes**, and no URL to them either: the bot downloads the media in the background and the application fetches it from Zapmizer's API (`GET /api/whatsapp-messages/media`, with the connection's token). **The `message` webhook fires before that download is done** — asking right away usually gets a "still downloading", and the consumer has to come back. Zapmizer keeps trying for **600 seconds** from the message's `timestamp`; after that (or for a type it does not download, or a view-once message) the media is declared unavailable for good.
+
+```php
+$download = $connection->media($m);    // one request, no waiting
+
+$download->state;         // 'attached' | 'downloading' | 'unavailable'
+$download->isAttached();  // ->isDownloading() / ->isUnavailable()
+$download->mimeType;      // Content-Type          (attached only)
+$download->filename;      // from Content-Disposition — Zapmizer's `<id>.<ext>`, not the sender's name: use $m->mediaFilename() for that
+$download->size;          // Content-Length
+
+$download->path();        // temporary file with the bytes — deleted when $download is destroyed
+$download->stream();      // fresh read handle: Storage::disk('s3')->put($key, $download->stream())
+$download->contents();    // the whole file as a string — only if you need it in memory
+```
+
+`media()` streams the bytes into a temporary file; nothing is held in memory unless you call `contents()`. Move or copy the file (`Storage::put`, `putFileAs(new File($download->path()))`) before the object goes away. It needs the connection's `bot_instance_id` (a connection that lost its pairing throws `ZapmizerUnauthorizedException`, like `instanceClient()` without a token) and passes `$m->id` and `$m->sentAt` along — the timestamp is what lets Zapmizer answer `unavailable` instead of `downloading` forever.
+
+**In a queued job, re-dispatch instead of sleeping.** The listener queues a job with the message; the job calls `media()` and releases itself on `downloading`:
+
+```php
+class StoreInboundMedia implements ShouldQueue
+{
+    public int $tries = 8;
+
+    public function __construct(public ZapmizerConnection $connection, public InboundMessage $message) {}
+
+    public function handle(): void
+    {
+        $download = $this->connection->media($this->message);
+
+        if ($download->isDownloading()) {
+            $this->release(delay: min(60, 5 * $this->attempts()));   // come back later, worker stays free
+
+            return;
+        }
+
+        if ($download->isUnavailable()) {
+            return;   // log it, tell the user — it will not arrive
+        }
+
+        Storage::disk('s3')->put("inbound/{$this->message->id}/" . ($this->message->mediaFilename() ?? $download->filename), $download->stream());
+    }
+}
+```
+
+For a command or a simple listener there is `awaitMedia()`, which blocks and retries for you:
+
+```php
+$download = $connection->awaitMedia($m);                          // sleeps 2, 5, 10, 20, 30 s between tries (67 s worst case)
+$download = $connection->awaitMedia($m, waitsSeconds: [3, 3, 3]); // your own schedule
+```
+
+It returns the last answer: `attached`, `unavailable` as soon as Zapmizer says so, or `downloading` when the waits ran out — check `isDownloading()` and decide whether to give up. The `$sleep` closure argument replaces the real sleep in tests.
+
+Requires **Zapmizer 1.150.0 or later** (media endpoint). <!-- TODO confirm the release that ships `api-media-mensagem` -->
+
 ## 7. Rotating the webhook secret
 
 ```php
@@ -272,7 +332,7 @@ use NotificationChannels\Zapmizer\Exceptions\NoConnectableException;        // r
 use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;         // instance deleted (4xx on its connection endpoint)
 ```
 
-The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceClient`) are container-bound with an injected Guzzle client, like `VerificationClient` — swap `GuzzleHttp\Client` in the container to fake them in tests. Every client sends `Accept: application/json` and does **not** follow redirects: a revoked token makes Zapmizer redirect to its login page, and a redirect or a non-JSON answer is an exception (`unexpectedResponse`) instead of a silent "success". `InstanceClient` always acts for one connection: its token is mandatory, there is no fallback to `zapmizer.api_token` — get it through `$connection->instanceClient()`. It only knows `connection($id)`, `createWebhook($url)`, `rotateWebhookSecret($id)` and `deleteWebhook($id)` — instances are created and paired on Zapmizer's page, not from here.
+The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceClient`) are container-bound with an injected Guzzle client, like `VerificationClient` — swap `GuzzleHttp\Client` in the container to fake them in tests. Every client sends `Accept: application/json` and does **not** follow redirects: a revoked token makes Zapmizer redirect to its login page, and a redirect or a non-JSON answer is an exception (`unexpectedResponse`) instead of a silent "success". `InstanceClient` always acts for one connection: its token is mandatory, there is no fallback to `zapmizer.api_token` — get it through `$connection->instanceClient()`. It only knows `connection($id)`, `createWebhook($url)`, `rotateWebhookSecret($id)`, `deleteWebhook($id)` and `media($botInstanceId, $messageId, $timestamp = null)` — instances are created and paired on Zapmizer's page, not from here. `media()` is the one endpoint whose 200 is not JSON (the bytes); its 202/404 answers are, and a redirect is still refused.
 
 `PartnerClient::createSession($redirectUri, $state, $webhookUrl = null, $expiresIn = null)` never asks for an `expires_in` below Zapmizer's floor of **900 seconds** (`PartnerClient::MIN_EXPIRES_IN`): the same signature covers the page, the authorization and the QR code, and a shorter one died mid-pairing.
 

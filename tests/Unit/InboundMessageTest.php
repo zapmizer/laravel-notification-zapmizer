@@ -143,6 +143,12 @@ class InboundMessageTest extends TestCase
             ['mimetype' => 'application/pdf', 'filename' => 'statement.pdf', 'size' => 1234],
             $message->mediaMetadata
         );
+        $this->assertEquals('statement.pdf', $message->mediaFilename());
+        $this->assertEquals('application/pdf', $message->mediaMimeType());
+
+        $text = InboundMessage::fromEnvelope($this->messageEnvelope());
+        $this->assertNull($text->mediaFilename());
+        $this->assertNull($text->mediaMimeType());
     }
 
     public function testNonMessageEventsAndMalformedDataAreNull()

@@ -9,7 +9,9 @@ use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Support\Facades\DB;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
+use NotificationChannels\Zapmizer\Connect\MediaDownload;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
+use NotificationChannels\Zapmizer\InboundMessage;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
 use NotificationChannels\Zapmizer\Test\Fixtures\CreatesConnectionTables;
 use NotificationChannels\Zapmizer\Test\Fixtures\Team;
@@ -297,5 +299,99 @@ class ConnectableTest extends TestCase
         $team = $this->connectedTeam();
 
         $this->assertTrue(ZapmizerConnection::first()->connectable->is($team));
+    }
+
+    protected function inboundMessage(): InboundMessage
+    {
+        return InboundMessage::fromMessage([
+            'id' => ['_serialized' => 'true_5581999998888@c.us_3EB0ABC123', 'id' => '3EB0ABC123'],
+            'from' => '5581999998888@c.us',
+            'type' => 'image',
+            'hasMedia' => true,
+            'timestamp' => 1700000000,
+            '_data' => ['mimetype' => 'image/png'],
+        ], '5581911110000@c.us');
+    }
+
+    public function testMediaAsksForTheConnectionsInstanceAndTheMessage()
+    {
+        $this->fakeHttp(new Response(200, ['Content-Type' => 'image/png', 'Content-Disposition' => 'attachment; filename="3EB0ABC123.png"'], 'png-bytes'));
+        $connection = $this->connectedTeam(overrides: ['api_token' => 'team-token', 'bot_instance_id' => 77])->zapmizerConnection;
+
+        $download = $connection->media($this->inboundMessage());
+
+        $this->assertTrue($download->isAttached());
+        $this->assertEquals('png-bytes', $download->contents());
+        $request = $this->history[0]['request'];
+        parse_str($request->getUri()->getQuery(), $query);
+        $this->assertEquals(['bot_instance_id' => '77', 'message_id' => 'true_5581999998888@c.us_3EB0ABC123', 'timestamp' => '1700000000'], $query);
+        $this->assertEquals('Bearer team-token', $request->getHeaderLine('Authorization'));
+    }
+
+    public function testMediaRequiresAPairedInstance()
+    {
+        $connection = $this->connectedTeam(overrides: ['bot_instance_id' => null])->zapmizerConnection;
+
+        $this->expectException(ZapmizerUnauthorizedException::class);
+        $connection->media($this->inboundMessage());
+    }
+
+    public function testAwaitMediaRetriesWhileDownloading()
+    {
+        $this->fakeHttp(
+            new Response(202, ['Content-Type' => 'application/json'], json_encode(['media_state' => 'downloading'])),
+            new Response(202, ['Content-Type' => 'application/json'], json_encode(['media_state' => 'downloading'])),
+            new Response(200, ['Content-Type' => 'image/png'], 'png-bytes'),
+        );
+        $slept = [];
+
+        $download = $this->connectedTeam()->zapmizerConnection->awaitMedia(
+            $this->inboundMessage(),
+            sleep: function (int|float $seconds) use (&$slept) { $slept[] = $seconds; },
+        );
+
+        $this->assertTrue($download->isAttached());
+        $this->assertCount(3, $this->history);
+        $this->assertEquals([2, 5], $slept);
+    }
+
+    public function testAwaitMediaGivesUpWhenTheWaitsRunOut()
+    {
+        $this->fakeHttp(
+            new Response(202, ['Content-Type' => 'application/json'], json_encode(['media_state' => 'downloading'])),
+            new Response(202, ['Content-Type' => 'application/json'], json_encode(['media_state' => 'downloading'])),
+            new Response(202, ['Content-Type' => 'application/json'], json_encode(['media_state' => 'downloading'])),
+        );
+        $slept = [];
+
+        $download = $this->connectedTeam()->zapmizerConnection->awaitMedia(
+            $this->inboundMessage(),
+            waitsSeconds: [1, 3],
+            sleep: function (int|float $seconds) use (&$slept) { $slept[] = $seconds; },
+        );
+
+        $this->assertTrue($download->isDownloading());
+        $this->assertCount(3, $this->history);
+        $this->assertEquals([1, 3], $slept);
+    }
+
+    public function testAwaitMediaStopsAtUnavailable()
+    {
+        $this->fakeHttp(
+            new Response(202, ['Content-Type' => 'application/json'], json_encode(['media_state' => 'downloading'])),
+            new Response(404, ['Content-Type' => 'application/json'], json_encode(['media_state' => 'unavailable'])),
+            new Response(200, ['Content-Type' => 'image/png'], 'never asked'),
+        );
+        $slept = [];
+
+        $download = $this->connectedTeam()->zapmizerConnection->awaitMedia(
+            $this->inboundMessage(),
+            sleep: function (int|float $seconds) use (&$slept) { $slept[] = $seconds; },
+        );
+
+        $this->assertInstanceOf(MediaDownload::class, $download);
+        $this->assertTrue($download->isUnavailable());
+        $this->assertCount(2, $this->history);
+        $this->assertEquals([2], $slept);
     }
 }

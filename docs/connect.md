@@ -272,7 +272,22 @@ $download->contents();    // the whole file as a string — only if you need it 
 
 `media()` streams the bytes into a temporary file; nothing is held in memory unless you call `contents()`. Move or copy the file (`Storage::put`, `putFileAs(new File($download->path()))`) before the object goes away. It needs the connection's `bot_instance_id` (a connection that lost its pairing throws `ZapmizerUnauthorizedException`, like `instanceClient()` without a token) and passes `$m->id` and `$m->sentAt` along — the timestamp is required over there: the 600 s window is counted from it, and it is what lets Zapmizer answer `unavailable` instead of `downloading` forever.
 
-Two answers are exceptions rather than states, because asking again would not help: a **422** (`ZapmizerConnectException`, "rejected the media request: …" with Zapmizer's reason — a timestamp in the future, or an instance on **Meta Cloud**, which has no media to download) and a **429** (`ZapmizerConnectException`, "rate-limited…"): the endpoint allows **60 requests a minute per user and instance**. `awaitMedia()` with its default schedule makes at most 6 requests in 67 s, well under that — a fleet of jobs polling the same instance is what could reach it, so on a `downloading` release the job with a delay instead of re-dispatching it right away.
+Two answers are exceptions rather than states, because asking again would not help — each has its own class under the `ZapmizerConnectException` base, so a `catch` can tell them apart:
+
+```php
+use NotificationChannels\Zapmizer\Exceptions\MediaRejectedException;
+use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;
+
+try {
+    $download = $connection->media($m);
+} catch (MediaRejectedException $e) {      // 422: a timestamp in the future, or an instance on Meta Cloud (no media there)
+    Log::warning($e->reason());            //      Zapmizer's own explanation — retrying will not help
+} catch (MediaRateLimitedException $e) {   // 429: 60 requests a minute per user and instance
+    $this->release($e->retryAfter() ?? 60); //     seconds from Zapmizer's Retry-After, null when it sent none
+}
+```
+
+`awaitMedia()` with its default schedule makes at most 6 requests in 67 s, well under the limit — a fleet of jobs polling the same instance is what could reach it, so on a `downloading` release the job with a delay instead of re-dispatching it right away.
 
 **In a queued job, re-dispatch instead of sleeping.** The listener queues a job with the message; the job calls `media()` and releases itself on `downloading`:
 
@@ -309,7 +324,7 @@ $download = $connection->awaitMedia($m);                          // sleeps 2, 5
 $download = $connection->awaitMedia($m, waitsSeconds: [3, 3, 3]); // your own schedule
 ```
 
-It returns the last answer: `attached`, `unavailable` as soon as Zapmizer says so, or `downloading` when the waits ran out — check `isDownloading()` and decide whether to give up. The `$sleep` closure argument replaces the real sleep in tests.
+It returns the last answer: `attached`, `unavailable` as soon as Zapmizer says so, or `downloading` when the waits ran out — check `isDownloading()` and decide whether to give up. A **429** on the way is treated like a `downloading`, not thrown: it waits Zapmizer's `Retry-After` or the next entry of the schedule, whichever is longer, and asks again (still rate-limited when the schedule runs out → `downloading`). A **422** propagates as `MediaRejectedException`. The `$sleep` closure argument replaces the real sleep in tests.
 
 Requires **Zapmizer 1.150.0 or later** (media endpoint). <!-- TODO confirm the release that ships `api-media-mensagem` -->
 
@@ -332,9 +347,11 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;  // t
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException; // team token revoked (401)
 use NotificationChannels\Zapmizer\Exceptions\NoConnectableException;        // resolver has nothing to connect (renders 403 no_connectable)
 use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;         // instance deleted (4xx on its connection endpoint)
+use NotificationChannels\Zapmizer\Exceptions\MediaRejectedException;        // media request refused (422) — ->reason()
+use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;     // media endpoint rate limit (429) — ->retryAfter()
 ```
 
-The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceClient`) are container-bound with an injected Guzzle client, like `VerificationClient` — swap `GuzzleHttp\Client` in the container to fake them in tests. Every client sends `Accept: application/json` and does **not** follow redirects: a revoked token makes Zapmizer redirect to its login page, and a redirect or a non-JSON answer is an exception (`unexpectedResponse`) instead of a silent "success". `InstanceClient` always acts for one connection: its token is mandatory, there is no fallback to `zapmizer.api_token` — get it through `$connection->instanceClient()`. It only knows `connection($id)`, `createWebhook($url)`, `rotateWebhookSecret($id)`, `deleteWebhook($id)` and `media($botInstanceId, $messageId, $timestamp)` — instances are created and paired on Zapmizer's page, not from here. `media()` is the one endpoint whose 200 is not JSON (the bytes); its 202/404 answers are, and a redirect is still refused; its 422 (bad request, Meta Cloud instance) and 429 (rate limit) are `ZapmizerConnectException`s with the reason.
+The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceClient`) are container-bound with an injected Guzzle client, like `VerificationClient` — swap `GuzzleHttp\Client` in the container to fake them in tests. Every client sends `Accept: application/json` and does **not** follow redirects: a revoked token makes Zapmizer redirect to its login page, and a redirect or a non-JSON answer is an exception (`unexpectedResponse`) instead of a silent "success". `InstanceClient` always acts for one connection: its token is mandatory, there is no fallback to `zapmizer.api_token` — get it through `$connection->instanceClient()`. It only knows `connection($id)`, `createWebhook($url)`, `rotateWebhookSecret($id)`, `deleteWebhook($id)` and `media($botInstanceId, $messageId, $timestamp)` — instances are created and paired on Zapmizer's page, not from here. `media()` is the one endpoint whose 200 is not JSON (the bytes); its 202/404 answers are, and a redirect is still refused; its 422 (bad request, Meta Cloud instance) is a `MediaRejectedException` and its 429 (rate limit) a `MediaRateLimitedException` — both `ZapmizerConnectException`s.
 
 `PartnerClient::createSession($redirectUri, $state, $webhookUrl = null, $expiresIn = null)` never asks for an `expires_in` below Zapmizer's floor of **900 seconds** (`PartnerClient::MIN_EXPIRES_IN`): the same signature covers the page, the authorization and the QR code, and a shorter one died mid-pairing.
 

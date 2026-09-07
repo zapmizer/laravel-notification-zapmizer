@@ -8,8 +8,10 @@ use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Support\Facades\DB;
-use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Connect\MediaDownload;
+use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;
+use NotificationChannels\Zapmizer\Exceptions\MediaRejectedException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\InboundMessage;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
@@ -393,5 +395,73 @@ class ConnectableTest extends TestCase
         $this->assertTrue($download->isUnavailable());
         $this->assertCount(2, $this->history);
         $this->assertEquals([2], $slept);
+    }
+
+    public function testAwaitMediaWaitsOutARateLimit()
+    {
+        $this->fakeHttp(
+            new Response(429, ['Content-Type' => 'application/json', 'Retry-After' => '7'], json_encode(['message' => 'Too Many Attempts.'])),
+            new Response(429, ['Content-Type' => 'application/json'], json_encode(['message' => 'Too Many Attempts.'])),
+            new Response(202, ['Content-Type' => 'application/json'], json_encode(['media_state' => 'downloading'])),
+            new Response(200, ['Content-Type' => 'image/png'], 'png-bytes'),
+        );
+        $slept = [];
+
+        $download = $this->connectedTeam()->zapmizerConnection->awaitMedia(
+            $this->inboundMessage(),
+            sleep: function (int|float $seconds) use (&$slept) { $slept[] = $seconds; },
+        );
+
+        $this->assertTrue($download->isAttached());
+        $this->assertCount(4, $this->history);
+        // Retry-After 7 beats the list's 2; without a header the list's 5 stands.
+        $this->assertEquals([7, 5, 10], $slept);
+    }
+
+    public function testAwaitMediaIsDownloadingWhenStillRateLimitedAfterTheWaits()
+    {
+        $this->fakeHttp(
+            new Response(429, ['Content-Type' => 'application/json', 'Retry-After' => '1'], json_encode(['message' => 'Too Many Attempts.'])),
+            new Response(429, ['Content-Type' => 'application/json', 'Retry-After' => '1'], json_encode(['message' => 'Too Many Attempts.'])),
+        );
+        $slept = [];
+
+        $download = $this->connectedTeam()->zapmizerConnection->awaitMedia(
+            $this->inboundMessage(),
+            waitsSeconds: [3],
+            sleep: function (int|float $seconds) use (&$slept) { $slept[] = $seconds; },
+        );
+
+        $this->assertTrue($download->isDownloading());
+        $this->assertCount(2, $this->history);
+        $this->assertEquals([3], $slept);
+    }
+
+    public function testAwaitMediaPropagatesARejection()
+    {
+        $this->fakeHttp(
+            new Response(202, ['Content-Type' => 'application/json'], json_encode(['media_state' => 'downloading'])),
+            new Response(422, ['Content-Type' => 'application/json'], json_encode(['message' => 'Media is not available for Meta Cloud instances.'])),
+            new Response(200, ['Content-Type' => 'image/png'], 'never asked'),
+        );
+
+        $this->expectException(MediaRejectedException::class);
+
+        $this->connectedTeam()->zapmizerConnection->awaitMedia(
+            $this->inboundMessage(),
+            sleep: function (int|float $seconds) {},
+        );
+    }
+
+    public function testMediaPropagatesARateLimit()
+    {
+        $this->fakeHttp(new Response(429, ['Content-Type' => 'application/json', 'Retry-After' => '12'], json_encode(['message' => 'Too Many Attempts.'])));
+
+        try {
+            $this->connectedTeam()->zapmizerConnection->media($this->inboundMessage());
+            $this->fail('expected a MediaRateLimitedException');
+        } catch (MediaRateLimitedException $exception) {
+            $this->assertSame(12, $exception->retryAfter());
+        }
     }
 }

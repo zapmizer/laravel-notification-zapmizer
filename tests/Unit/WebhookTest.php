@@ -14,6 +14,10 @@ use NotificationChannels\Zapmizer\Test\TestCase;
 
 class WebhookTest extends TestCase
 {
+    // Every delivery here is unsigned, as Zapmizer sends `verify_number.*`
+    // (outside the bot, no signature) — no flag needed. The signed path and
+    // the refusal of any other unsigned event are in WebhookSignatureTest.
+
     protected function defineDatabaseMigrations()
     {
         Schema::create('users', function (Blueprint $table) {
@@ -24,6 +28,9 @@ class WebhookTest extends TestCase
         });
 
         $migration = include __DIR__ . '/../../database/migrations/create_whatsapp_verifieds_table.php.stub';
+        $migration->up();
+
+        $migration = include __DIR__ . '/../../database/migrations/create_zapmizer_connections_table.php.stub';
         $migration->up();
     }
 
@@ -142,21 +149,35 @@ class WebhookTest extends TestCase
 
     public function testUnknownEventNameFallsThroughToMissingMethod()
     {
-        Event::fake([WebhookHandled::class]);
+        Event::fake([WebhookHandled::class, WebhookReceived::class]);
 
         $this->makeAwaitingUser();
 
-        // Other team-webhook notifications (bot messages etc.) land here too.
-        $this->deliver('message.received', ['number' => '5511999999999'])
+        // A verify_number event the package has no handler for.
+        $this->deliver('verify_number.expired', ['number' => '5511999999999'])
             ->assertOk()->assertSeeText('Webhook Received');
 
+        Event::assertDispatched(WebhookReceived::class);
         Event::assertNotDispatched(WebhookHandled::class);
+    }
+
+    public function testBotEventsAreNotAcceptedUnsigned()
+    {
+        Event::fake([WebhookReceived::class]);
+
+        $this->makeAwaitingUser();
+
+        $this->deliver('message', [['id' => ['_serialized' => 'x'], 'from' => '5581999998888@c.us']])->assertStatus(401);
+
+        Event::assertNotDispatched(WebhookReceived::class);
     }
 
     public function testMalformedPayloadIsRejected()
     {
+        // Unsigned and not even JSON: refused by the signature check, before
+        // the controller's own 400.
         $this->call('POST', '/zapmizer/webhook', [], [], [], ['CONTENT_TYPE' => 'application/json'], 'not-json')
-            ->assertStatus(400);
+            ->assertStatus(401);
     }
 
     public function testWebhookRouteIsPublic()

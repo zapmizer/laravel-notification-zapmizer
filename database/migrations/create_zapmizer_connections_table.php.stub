@@ -1,0 +1,53 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+/**
+ * The Zapmizer account a model (team, user, ...) authorized. One per model:
+ * reconnecting updates the existing row instead of creating another, else
+ * the already-paired number would be lost.
+ */
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('zapmizer_connections', function (Blueprint $table) {
+            $table->id();
+            // Swap for uuidMorphs('connectable') / ulidMorphs('connectable')
+            // when the models you connect (Team, User, ...) use UUID/ULID
+            // keys — morphs() makes connectable_id a bigint.
+            $table->morphs('connectable');
+            // The team's Sanctum token on Zapmizer. Encrypted: reading a dump
+            // does not grant the right to message in anyone's name.
+            $table->text('api_token')->nullable();
+            // One connectable per Zapmizer team: two would register two
+            // webhooks and every message would fire on both tenants.
+            $table->unsignedBigInteger('zapmizer_team_id')->nullable()->unique();
+            $table->string('zapmizer_team_name')->nullable();
+            // The paired number — the `from` of every message sent through
+            // this connection. Filled when the instance reaches `connected`.
+            $table->string('phone_number')->nullable()->index();
+            $table->unsignedBigInteger('bot_instance_id')->nullable();
+            $table->timestamp('connected_at')->nullable();
+            // Webhook signing secret. Zapmizer only returns it on creation —
+            // lost, only rotation brings a new one. The previous one stays
+            // during a rotation so in-flight deliveries still validate.
+            $table->unsignedBigInteger('webhook_id')->nullable();
+            $table->text('webhook_secret')->nullable();
+            $table->text('webhook_previous_secret')->nullable();
+            // Born false: authorizing does not yield a sender yet, and an
+            // active connection with no number would fail mid-wizard.
+            $table->boolean('is_active')->default(false);
+            $table->timestamps();
+
+            $table->unique(['connectable_type', 'connectable_id']);
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('zapmizer_connections');
+    }
+};

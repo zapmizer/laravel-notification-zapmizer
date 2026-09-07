@@ -5,10 +5,15 @@ namespace NotificationChannels\Zapmizer\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use Illuminate\Support\Str;
+use NotificationChannels\Zapmizer\Events\MessageReceived;
 use NotificationChannels\Zapmizer\Events\WebhookHandled;
 use NotificationChannels\Zapmizer\Events\WebhookReceived;
 use NotificationChannels\Zapmizer\Events\WhatsappVerified as WhatsappVerifiedEvent;
+use NotificationChannels\Zapmizer\Http\Middleware\VerifyWebhookSignature;
+use NotificationChannels\Zapmizer\InboundMessage;
 use NotificationChannels\Zapmizer\Models\WhatsappVerified;
+use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
+use NotificationChannels\Zapmizer\Support\PhoneNumber;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -25,15 +30,23 @@ use Symfony\Component\HttpFoundation\Response;
  * event never downgrades an already-verified number, so redeliveries are
  * harmless.
  *
- * Deliveries are NOT signed by Zapmizer — they arrive on the team's
- * registered webhooks like any bot notification. Protect the route through
- * `zapmizer.routes.webhook_middleware` (throttle, IP allowlist, a shared
- * token segment in the URL, ...). Correlation uses the (canonical) phone
- * number from the payload, matched against the state records with the
- * Brazilian extra-9 tolerance.
+ * Bot events (`message`, ...) are signed by Zapmizer (`X-Zapmizer-Signature`,
+ * HMAC-SHA256 of `"{timestamp}.{raw body}"`). The VerifyWebhookSignature
+ * middleware — applied to the route by the package — checks it against the
+ * application secret (`zapmizer.webhook.secret`) and every
+ * ZapmizerConnection, and hands the matching connection (null for the
+ * application secret) to the handlers. `verify_number.*` events are the
+ * only ones Zapmizer delivers unsigned, and the only ones accepted so;
+ * their correlation uses the (canonical) phone number from the payload,
+ * matched against the state records with the Brazilian extra-9 tolerance.
  */
 class WebhookController extends Controller
 {
+    /**
+     * The delivery being handled.
+     */
+    protected ?Request $request = null;
+
     /**
      * Handle a Zapmizer webhook call.
      */
@@ -43,19 +56,44 @@ class WebhookController extends Controller
 
         abort_unless(is_array($payload), 400, 'Malformed webhook payload.');
 
-        WebhookReceived::dispatch($payload);
+        $this->request = $request;
+
+        WebhookReceived::dispatch($payload, $this->connection());
 
         $method = 'handle' . Str::studly(str_replace('.', '_', (string) ($payload['name'] ?? '')));
 
         if (method_exists($this, $method)) {
             $response = $this->{$method}($payload);
 
-            WebhookHandled::dispatch($payload);
+            WebhookHandled::dispatch($payload, $this->connection());
 
             return $response;
         }
 
         return $this->missingMethod($payload);
+    }
+
+    /**
+     * Handle an inbound WhatsApp message.
+     *
+     * Translates the whatsapp-web.js Message into an InboundMessage and fires
+     * MessageReceived with the connection that received it (null when the
+     * delivery was signed with the application's single-tenant secret).
+     * Nothing is persisted — the application listens and decides
+     * (Cashier-style). Payloads we can't make sense of are acknowledged and
+     * not handled.
+     */
+    protected function handleMessage(array $payload): Response
+    {
+        $message = InboundMessage::fromEnvelope($payload, $this->request?->header('X-Wid'));
+
+        if ($message === null) {
+            return $this->missingMethod($payload);
+        }
+
+        MessageReceived::dispatch($message, $this->connection(), $payload);
+
+        return $this->successMethod();
     }
 
     /**
@@ -127,27 +165,29 @@ class WebhookController extends Controller
      */
     protected function numberCandidates(string $number): array
     {
-        $digits = preg_replace('/\D/', '', $number);
-
-        if ($digits === '') {
+        if (PhoneNumber::digits($number) === '') {
             return [];
         }
 
-        $candidates = [$digits];
-
-        if (str_starts_with($digits, '55') && strlen($digits) === 13 && $digits[4] === '9') {
-            $candidates[] = substr($digits, 0, 4) . substr($digits, 5); // drop the extra 9
-        }
-
-        if (str_starts_with($digits, '55') && strlen($digits) === 12) {
-            $candidates[] = substr($digits, 0, 4) . '9' . substr($digits, 4); // add the extra 9
-        }
+        $candidates = PhoneNumber::variants($number);
 
         foreach ($candidates as $candidate) {
             $candidates[] = '+' . $candidate;
         }
 
         return $candidates;
+    }
+
+    /**
+     * The connection whose secret signed the current delivery. Null for a
+     * delivery signed with `zapmizer.webhook.secret` (single-tenant) and for
+     * the unsigned `verify_number.*` events.
+     */
+    protected function connection(): ?ZapmizerConnection
+    {
+        $connection = $this->request?->attributes->get(VerifyWebhookSignature::CONNECTION_ATTRIBUTE);
+
+        return $connection instanceof ZapmizerConnection ? $connection : null;
     }
 
     /**

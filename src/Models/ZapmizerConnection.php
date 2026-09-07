@@ -141,7 +141,7 @@ class ZapmizerConnection extends Model
     }
 
     /**
-     * Instance/webhook client authenticated as this connection. The token
+     * Instance-state/webhook client authenticated as this connection. The token
      * is mandatory: without it the client would fall back to the
      * single-tenant credentials and act in another account's name.
      *
@@ -180,13 +180,16 @@ class ZapmizerConnection extends Model
 
     /**
      * Register the package's webhook route on Zapmizer and store the secret.
-     * No-op when a secret is already stored — Zapmizer only hands the secret
-     * out on creation, so re-registering would orphan the current one.
+     * The connect flow no longer needs this — Zapmizer registers the webhook
+     * during the hosted pairing and hands id + secret back with the token —
+     * but it stays for a connection that lost its webhook (deleted over
+     * there, or connected without `webhook_url`). No-op when a secret is
+     * already stored: Zapmizer only hands the secret out on creation, so
+     * re-registering would orphan the current one.
      *
      * The check is made on a row locked for update, inside a transaction:
-     * the wizard's `instance` call and its `connection` poll can both reach
-     * here within the same seconds, and two registrations would leave the
-     * first webhook delivering with a secret nobody stored.
+     * two concurrent callers would leave the first webhook delivering with
+     * a secret nobody stored.
      *
      * @throws ZapmizerConnectException
      */

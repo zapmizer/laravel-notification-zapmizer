@@ -144,8 +144,9 @@ class ZapmizerServiceProvider extends ServiceProvider
                 __DIR__ . '/../resources/views' => resource_path('views/vendor/zapmizer'),
             ], 'views');
 
-            // The Inertia + Vue connect wizard, Jetstream-style: copied into
-            // the app to be owned and restyled there.
+            // The Inertia + Vue connect components (button + panel),
+            // Jetstream-style: copied into the app to be owned and restyled
+            // there. The tag keeps its name from the wizard days.
             $this->publishes([
                 __DIR__ . '/../stubs/inertia-vue' => resource_path('js'),
             ], 'zapmizer-wizard');

@@ -80,33 +80,26 @@ class ConnectRouteTest extends TestCase
         return $team->fresh();
     }
 
-    protected function connectedPayload(int $id = 9, string $number = '5581911110000'): string
+    /**
+     * What POST /api/connect/token answers once the hosted page paired the
+     * number: token, team, number, instance and the webhook registered for
+     * the session's webhook_url — secret only when it was created now.
+     */
+    protected function tokenPayload(array $overrides = []): string
+    {
+        return json_encode(array_merge([
+            'token' => '1|sanctum', 'team_id' => 7, 'team_name' => 'Acme',
+            'phone_number' => '5581911110000', 'bot_instance_id' => 9,
+            'webhook_id' => 42, 'webhook_secret' => 'whsec_new',
+        ], $overrides));
+    }
+
+    protected function instanceState(string $state, bool $online = false, ?string $number = '5581911110000'): string
     {
         return json_encode(['data' => [
-            'id' => $id, 'state' => 'connected', 'state_label' => 'Conectado', 'is_online' => true, 'is_up' => true,
+            'id' => 9, 'state' => $state, 'state_label' => $state, 'is_online' => $online, 'is_up' => $online,
             'qrcode' => null, 'qrcode_available_at' => null, 'qrcode_expires_at' => null, 'number' => $number,
         ]]);
-    }
-
-    protected function qrPayload(int $id = 9): string
-    {
-        return json_encode(['data' => [
-            'id' => $id, 'state' => 'qrcode', 'state_label' => 'Aguardando QR', 'is_online' => false, 'is_up' => true,
-            'qrcode' => 'QR-DATA', 'qrcode_available_at' => now()->toIso8601String(), 'qrcode_expires_at' => now()->addMinute()->toIso8601String(), 'number' => null,
-        ]]);
-    }
-
-    protected function statePayload(int $id, string $state): string
-    {
-        return json_encode(['data' => [
-            'id' => $id, 'state' => $state, 'state_label' => $state, 'is_online' => false, 'is_up' => false,
-            'qrcode' => null, 'qrcode_available_at' => null, 'qrcode_expires_at' => null, 'number' => null,
-        ]]);
-    }
-
-    protected function webhookPayload(): string
-    {
-        return json_encode(['data' => ['id' => 42, 'secret' => 'whsec_new']]);
     }
 
     protected function pendingSession(): array
@@ -120,7 +113,7 @@ class ConnectRouteTest extends TestCase
 
     public function testRoutesAreRegisteredBehindAuth()
     {
-        foreach (['show', 'destroy', 'start', 'callback', 'instance', 'instances', 'connection'] as $name) {
+        foreach (['show', 'destroy', 'start', 'callback'] as $name) {
             $route = Route::getRoutes()->getByName("zapmizer.connect.{$name}");
 
             $this->assertNotNull($route, "zapmizer.connect.{$name}");
@@ -130,8 +123,25 @@ class ConnectRouteTest extends TestCase
         $this->assertEquals('zapmizer/connect/callback', Route::getRoutes()->getByName('zapmizer.connect.callback')->uri());
     }
 
+    public function testTheWizardRoutesAreGone()
+    {
+        // Pairing happens on Zapmizer's hosted page now: nothing here creates,
+        // lists or polls instances.
+        $this->actingAsUser();
+        $this->authorizedTeam();
+
+        foreach (['instance', 'instances', 'connection'] as $name) {
+            $this->assertNull(Route::getRoutes()->getByName("zapmizer.connect.{$name}"), "zapmizer.connect.{$name}");
+        }
+
+        $this->postJson('/zapmizer/connect/instance')->assertNotFound();
+        $this->getJson('/zapmizer/connect/instances')->assertNotFound();
+        $this->getJson('/zapmizer/connect/connection')->assertNotFound();
+    }
+
     public function testShowReturnsTheConnectionState()
     {
+        $this->fakeHttp();
         $this->actingAsUser();
 
         $this->getJson(route('zapmizer.connect.show'))->assertOk()->assertExactJson(['connection' => null]);
@@ -142,6 +152,67 @@ class ConnectRouteTest extends TestCase
         $response->assertJsonPath('connection.is_active', false);
         $response->assertJsonPath('connection.api_token_masked', '••••oken');
         $response->assertJsonMissingPath('connection.api_token');
+        // Without `live` nothing reaches Zapmizer and nothing live is claimed.
+        $response->assertJsonMissingPath('connection.state');
+        $this->assertCount(0, $this->history);
+    }
+
+    public function testShowLiveQueriesThePairedInstance()
+    {
+        $this->fakeHttp(new Response(200, [], $this->instanceState('connected', online: true)));
+        $this->actingAsUser();
+        $this->authorizedTeam(['phone_number' => '5581911110000', 'bot_instance_id' => 9, 'connected_at' => now(), 'is_active' => true]);
+
+        $response = $this->getJson(route('zapmizer.connect.show', ['live' => 1]))->assertOk();
+        $response->assertJsonPath('connection.state', 'connected');
+        $response->assertJsonPath('connection.is_online', true);
+        $response->assertJsonPath('connection.phone_number', '5581911110000');
+        $response->assertJsonPath('connection.is_active', true);
+        $response->assertJsonMissingPath('connection.api_token');
+        $response->assertJsonMissingPath('connection.webhook_secret');
+
+        $request = $this->history[0]['request'];
+        $this->assertEquals('http://zap.test/api/bot-instances/9/connection', (string) $request->getUri());
+        $this->assertEquals('Bearer team-token', $request->getHeaderLine('Authorization'));
+    }
+
+    public function testShowLiveWithNothingToQueryClaimsNothing()
+    {
+        $this->fakeHttp();
+        $this->actingAsUser();
+
+        $this->getJson(route('zapmizer.connect.show', ['live' => 1]))->assertOk()->assertExactJson(['connection' => null]);
+
+        $this->authorizedTeam(['bot_instance_id' => null]);
+
+        $this->getJson(route('zapmizer.connect.show', ['live' => 1]))
+            ->assertOk()
+            ->assertJsonPath('connection.state', null)
+            ->assertJsonPath('connection.is_online', false);
+        $this->assertCount(0, $this->history);
+    }
+
+    #[DataProvider('liveFailures')]
+    public function testShowLiveNamesTheFailureAsAState(Response $response, string $state)
+    {
+        $this->fakeHttp($response);
+        $this->actingAsUser();
+        $this->authorizedTeam(['phone_number' => '5581911110000', 'bot_instance_id' => 9, 'is_active' => true]);
+
+        $this->getJson(route('zapmizer.connect.show', ['live' => 1]))
+            ->assertOk()
+            ->assertJsonPath('connection.state', $state)
+            ->assertJsonPath('connection.is_online', false);
+    }
+
+    public static function liveFailures(): array
+    {
+        return [
+            'token revoked' => [new Response(401, [], '{}'), 'reauth_required'],
+            'instance gone' => [new Response(404, [], '{}'), 'instance_gone'],
+            'zapmizer down' => [new Response(503, [], ''), 'zapmizer_unavailable'],
+            'html instead of json' => [new Response(200, ['Content-Type' => 'text/html'], '<html></html>'), 'zapmizer_unavailable'],
+        ];
     }
 
     // --- start ----------------------------------------------------------
@@ -162,6 +233,11 @@ class ConnectRouteTest extends TestCase
         $body = json_decode((string) $this->history[0]['request']->getBody(), true);
         $this->assertEquals('http://localhost/zapmizer/connect/callback', $body['redirect_uri']);
         $this->assertEquals($pending['state'], $body['state']);
+        // Zapmizer registers the receiver during the pairing: the route goes
+        // along with the session.
+        $this->assertEquals('http://localhost/zapmizer/webhook', $body['webhook_url']);
+        // The TTL is left to Zapmizer (never below its 900s floor).
+        $this->assertArrayNotHasKey('expires_in', $body);
         $this->assertEquals('partner-id|partner-secret', $this->history[0]['request']->getHeaderLine('X-Partner-Key'));
     }
 
@@ -214,9 +290,9 @@ class ConnectRouteTest extends TestCase
 
     // --- callback -------------------------------------------------------
 
-    public function testCallbackExchangesTheCodeAndStoresAnInactiveConnection()
+    public function testCallbackExchangesTheCodeAndStoresAnActiveConnection()
     {
-        $this->fakeHttp(new Response(200, [], json_encode(['token' => '1|sanctum', 'team_id' => 7, 'team_name' => 'Acme'])));
+        $this->fakeHttp(new Response(200, [], $this->tokenPayload()));
         $this->actingAsUser();
 
         $response = $this->withSession([ConnectController::SESSION_KEY => [
@@ -234,37 +310,162 @@ class ConnectRouteTest extends TestCase
         $this->assertEquals('1|sanctum', $connection->api_token);
         $this->assertEquals(7, $connection->zapmizer_team_id);
         $this->assertEquals('Acme', $connection->zapmizer_team_name);
-        $this->assertFalse($connection->is_active);
-        $this->assertNull($connection->phone_number);
+        // The hosted page paired the number: everything lands at once.
+        $this->assertEquals('5581911110000', $connection->phone_number);
+        $this->assertEquals(9, $connection->bot_instance_id);
+        $this->assertNotNull($connection->connected_at);
+        $this->assertEquals(42, $connection->webhook_id);
+        $this->assertEquals('whsec_new', $connection->webhook_secret);
+        $this->assertNull($connection->webhook_previous_secret);
+        $this->assertTrue($connection->is_active);
+        $this->assertTrue($this->team()->fresh()->hasActiveZapmizer());
 
-        // The state is single-use.
+        // The state is single-use; one call — no instance, no webhook registration.
         $this->assertNull(session(ConnectController::SESSION_KEY));
+        $this->assertCount(1, $this->history);
         $this->assertEquals(['code' => '12.secret'], json_decode((string) $this->history[0]['request']->getBody(), true));
     }
 
-    public function testCallbackOnReconnectKeepsThePairedNumberAndResetsConnectedAt()
+    public function testCallbackWithoutAPairedNumberStaysInactive()
     {
-        $this->fakeHttp(new Response(200, [], json_encode(['token' => '2|sanctum', 'team_id' => 7, 'team_name' => 'Acme'])));
+        // A Zapmizer without the hosted pairing (or a session without one)
+        // answers only the token: nothing to send from, nothing to activate.
+        $this->fakeHttp(new Response(200, [], json_encode(['token' => '1|sanctum', 'team_id' => 7, 'team_name' => 'Acme'])));
         $this->actingAsUser();
-        $this->authorizedTeam(['phone_number' => '5581911110000', 'bot_instance_id' => 9, 'connected_at' => now(), 'is_active' => true]);
 
-        $this->withSession([ConnectController::SESSION_KEY => [
-            'state' => 's', 'connectable' => Team::class . ':' . $this->team()->id, 'expires_at' => now()->addMinutes(5)->toIso8601String(),
-        ]])->get(route('zapmizer.connect.callback', ['code' => 'c', 'state' => 's']))->assertOk();
+        $this->withSession($this->pendingSession())
+            ->get(route('zapmizer.connect.callback', ['code' => 'c', 'state' => 's']))
+            ->assertOk()
+            ->assertSee('status: "ok"', false);
+
+        $connection = $this->team()->zapmizerConnection;
+        $this->assertEquals('1|sanctum', $connection->api_token);
+        $this->assertNull($connection->phone_number);
+        $this->assertNull($connection->connected_at);
+        $this->assertNull($connection->webhook_id);
+        $this->assertFalse($connection->is_active);
+    }
+
+    public function testCallbackRotatesWhenZapmizerReusedTheWebhookAndKeptTheSecret()
+    {
+        $this->fakeHttp(
+            new Response(200, [], $this->tokenPayload(['webhook_secret' => null])),
+            new Response(200, [], json_encode(['data' => ['id' => 42, 'secret' => 'whsec_rotated', 'previous_secret' => 'whsec_unknown']])),
+        );
+        $this->actingAsUser();
+
+        $this->withSession($this->pendingSession())
+            ->get(route('zapmizer.connect.callback', ['code' => 'c', 'state' => 's']))
+            ->assertOk()
+            ->assertSee('status: "ok"', false);
+
+        $connection = $this->team()->zapmizerConnection;
+        $this->assertEquals(42, $connection->webhook_id);
+        $this->assertEquals('whsec_rotated', $connection->webhook_secret);
+        $this->assertEquals('whsec_unknown', $connection->webhook_previous_secret);
+        $this->assertTrue($connection->is_active);
+
+        // Rotated with the NEW token, on the webhook Zapmizer named.
+        $rotate = $this->history[1]['request'];
+        $this->assertEquals('POST', $rotate->getMethod());
+        $this->assertEquals('http://zap.test/api/webhooks/42/secret', (string) $rotate->getUri());
+        $this->assertEquals('Bearer 1|sanctum', $rotate->getHeaderLine('Authorization'));
+    }
+
+    #[DataProvider('rotationFailures')]
+    public function testCallbackDeactivatesWhenTheSecretCannotBeObtained(Response $failure)
+    {
+        Log::spy();
+        $this->fakeHttp(new Response(200, [], $this->tokenPayload(['webhook_secret' => null])), $failure);
+        $this->actingAsUser();
+
+        $this->withSession($this->pendingSession())
+            ->get(route('zapmizer.connect.callback', ['code' => 'c', 'state' => 's']))
+            ->assertOk()
+            ->assertSee('status: "webhook_failed"', false)
+            ->assertSee('window.opener.postMessage', false);
+
+        // The pairing is kept — the token, number and webhook id are real —
+        // but nothing can be verified without a secret: inactive, with a log.
+        $connection = $this->team()->zapmizerConnection;
+        $this->assertEquals('1|sanctum', $connection->api_token);
+        $this->assertEquals('5581911110000', $connection->phone_number);
+        $this->assertEquals(42, $connection->webhook_id);
+        $this->assertNull($connection->webhook_secret);
+        $this->assertFalse($connection->is_active);
+        $this->assertFalse($this->team()->fresh()->hasActiveZapmizer());
+        Log::shouldHaveReceived('warning')->withArgs(fn (string $message) => str_contains($message, 'could not obtain the webhook secret'));
+    }
+
+    public static function rotationFailures(): array
+    {
+        return [
+            'zapmizer down' => [new Response(500, [], '')],
+            'token refused' => [new Response(401, [], '{}')],
+            'webhook gone' => [new Response(404, [], '{}')],
+        ];
+    }
+
+    public function testCallbackKeepsTheStoredSecretWhenTheSameWebhookIsReused()
+    {
+        // Reconnecting the same team: Zapmizer finds our URL already
+        // registered and answers the same id without a secret. The one
+        // stored is still the one signing — no rotation needed.
+        $this->fakeHttp(new Response(200, [], $this->tokenPayload(['token' => '2|sanctum', 'phone_number' => '5581922220000', 'bot_instance_id' => 10, 'webhook_secret' => null])));
+        $this->actingAsUser();
+        $this->authorizedTeam([
+            'phone_number' => '5581911110000', 'bot_instance_id' => 9, 'connected_at' => now()->subDay(), 'is_active' => true,
+            'webhook_id' => 42, 'webhook_secret' => 'whsec_old', 'webhook_previous_secret' => 'whsec_older',
+        ]);
+
+        $this->withSession($this->pendingSession())
+            ->get(route('zapmizer.connect.callback', ['code' => 'c', 'state' => 's']))
+            ->assertOk()
+            ->assertSee('status: "ok"', false);
 
         $connection = $this->team()->zapmizerConnection;
         $this->assertEquals(1, ZapmizerConnection::count());
         $this->assertEquals('2|sanctum', $connection->api_token);
-        $this->assertEquals('5581911110000', $connection->phone_number);
-        $this->assertEquals(9, $connection->bot_instance_id);
-        $this->assertNull($connection->connected_at);
+        $this->assertEquals('5581922220000', $connection->phone_number);
+        $this->assertEquals(10, $connection->bot_instance_id);
+        $this->assertTrue($connection->connected_at->isAfter(now()->subMinute()));
+        $this->assertEquals(42, $connection->webhook_id);
+        $this->assertEquals('whsec_old', $connection->webhook_secret);
+        $this->assertEquals('whsec_older', $connection->webhook_previous_secret);
+        $this->assertTrue($connection->is_active);
+        $this->assertCount(1, $this->history);
+    }
+
+    public function testCallbackOnTheSameTeamWithANewWebhookDeletesTheOldOne()
+    {
+        $this->fakeHttp(
+            new Response(200, [], $this->tokenPayload(['token' => '2|sanctum', 'webhook_id' => 43, 'webhook_secret' => 'whsec_43'])),
+            new Response(200, [], json_encode(['message' => 'Webhook removido.'])),
+        );
+        $this->actingAsUser();
+        $this->authorizedTeam(['phone_number' => '5581911110000', 'bot_instance_id' => 9, 'is_active' => true, 'webhook_id' => 42, 'webhook_secret' => 'whsec_old']);
+
+        $this->withSession($this->pendingSession())
+            ->get(route('zapmizer.connect.callback', ['code' => 'c', 'state' => 's']))
+            ->assertOk()
+            ->assertSee('status: "ok"', false);
+
+        $connection = $this->team()->zapmizerConnection;
+        $this->assertEquals(43, $connection->webhook_id);
+        $this->assertEquals('whsec_43', $connection->webhook_secret);
+
+        // The old webhook is deleted with the OLD token, before it is replaced.
+        $delete = $this->history[1]['request'];
+        $this->assertEquals('DELETE', $delete->getMethod());
+        $this->assertEquals('http://zap.test/api/webhooks/42', (string) $delete->getUri());
+        $this->assertEquals('Bearer team-token', $delete->getHeaderLine('Authorization'));
     }
 
     public function testCallbackOnAnotherTeamForgetsThePairingAndDeletesTheOldWebhook()
     {
         Log::spy();
         $this->fakeHttp(
-            new Response(200, [], json_encode(['token' => '2|sanctum', 'team_id' => 8, 'team_name' => 'Other'])),
+            new Response(200, [], $this->tokenPayload(['token' => '2|sanctum', 'team_id' => 8, 'team_name' => 'Other', 'phone_number' => '5581933330000', 'bot_instance_id' => 30, 'webhook_id' => 77, 'webhook_secret' => 'whsec_77'])),
             new Response(200, [], json_encode(['message' => 'Webhook removido.'])),
         );
         $this->actingAsUser();
@@ -283,14 +484,15 @@ class ConnectRouteTest extends TestCase
         $this->assertEquals('2|sanctum', $connection->api_token);
         $this->assertEquals(8, $connection->zapmizer_team_id);
         $this->assertEquals('Other', $connection->zapmizer_team_name);
-        // Nothing of the old team survives: number, instance, webhook, activity.
-        $this->assertNull($connection->phone_number);
-        $this->assertNull($connection->bot_instance_id);
-        $this->assertNull($connection->connected_at);
-        $this->assertNull($connection->webhook_id);
-        $this->assertNull($connection->webhook_secret);
+        // Nothing of the old team survives: number, instance and webhook are
+        // the new team's, and the old previous secret is not carried over.
+        $this->assertEquals('5581933330000', $connection->phone_number);
+        $this->assertEquals(30, $connection->bot_instance_id);
+        $this->assertNotNull($connection->connected_at);
+        $this->assertEquals(77, $connection->webhook_id);
+        $this->assertEquals('whsec_77', $connection->webhook_secret);
         $this->assertNull($connection->webhook_previous_secret);
-        $this->assertFalse($connection->is_active);
+        $this->assertTrue($connection->is_active);
 
         // The old webhook is deleted with the OLD token.
         $delete = $this->history[1]['request'];
@@ -304,7 +506,7 @@ class ConnectRouteTest extends TestCase
     {
         Log::spy();
         $this->fakeHttp(
-            new Response(200, [], json_encode(['token' => '2|sanctum', 'team_id' => 8, 'team_name' => 'Other'])),
+            new Response(200, [], $this->tokenPayload(['token' => '2|sanctum', 'team_id' => 8, 'team_name' => 'Other', 'webhook_id' => 77, 'webhook_secret' => 'whsec_77'])),
             new Response(401, [], '{}'),
         );
         $this->actingAsUser();
@@ -316,13 +518,14 @@ class ConnectRouteTest extends TestCase
             ->assertSee('status: "ok"', false);
 
         $this->assertEquals(8, $this->team()->zapmizerConnection->zapmizer_team_id);
-        $this->assertNull($this->team()->zapmizerConnection->webhook_id);
+        $this->assertEquals(77, $this->team()->zapmizerConnection->webhook_id);
+        $this->assertEquals('whsec_77', $this->team()->zapmizerConnection->webhook_secret);
         Log::shouldHaveReceived('warning')->withArgs(fn (string $message) => str_contains($message, 'could not delete the webhook'));
     }
 
     public function testCallbackRefusesATeamAlreadyConnectedElsewhere()
     {
-        $this->fakeHttp(new Response(200, [], json_encode(['token' => '2|sanctum', 'team_id' => 7, 'team_name' => 'Acme'])));
+        $this->fakeHttp(new Response(200, [], $this->tokenPayload(['token' => '2|sanctum'])));
         $this->actingAsUser();
         // Another connectable already holds Zapmizer team 7.
         Team::create(['name' => 'Other'])->zapmizerConnection()->create(['api_token' => 'other-token', 'zapmizer_team_id' => 7, 'is_active' => true]);
@@ -338,7 +541,7 @@ class ConnectRouteTest extends TestCase
 
     public function testCallbackRefusesSwitchingToATeamConnectedElsewhere()
     {
-        $this->fakeHttp(new Response(200, [], json_encode(['token' => '2|sanctum', 'team_id' => 8, 'team_name' => 'Other'])));
+        $this->fakeHttp(new Response(200, [], $this->tokenPayload(['token' => '2|sanctum', 'team_id' => 8, 'team_name' => 'Other'])));
         $this->actingAsUser();
         $this->authorizedTeam(['phone_number' => '5581911110000', 'bot_instance_id' => 9, 'is_active' => true, 'webhook_id' => 42, 'webhook_secret' => 'whsec_old']);
         Team::create(['name' => 'Other'])->zapmizerConnection()->create(['api_token' => 'other-token', 'zapmizer_team_id' => 8, 'is_active' => true]);
@@ -425,6 +628,11 @@ class ConnectRouteTest extends TestCase
             'another connectable' => [['state' => 's', 'connectable' => 'Other:1', 'expires_at' => $future], ['code' => 'c', 'state' => 's'], 'invalid_state'],
             'expired' => [['state' => 's', 'connectable' => $valid, 'expires_at' => now()->subMinute()->toIso8601String()], ['code' => 'c', 'state' => 's'], 'invalid_state'],
             'user denied' => [['state' => 's', 'connectable' => $valid, 'expires_at' => $future], ['error' => 'access_denied', 'state' => 's'], 'denied'],
+            // The hosted page could not pair: the plan is full, or the team
+            // cannot pair by QR code. Each one is its own status for the screen.
+            'plan limit' => [['state' => 's', 'connectable' => $valid, 'expires_at' => $future], ['error' => 'plan_limit', 'state' => 's'], 'plan_limit'],
+            'qr unavailable' => [['state' => 's', 'connectable' => $valid, 'expires_at' => $future], ['error' => 'qr_unavailable', 'state' => 's'], 'qr_unavailable'],
+            'unknown error' => [['state' => 's', 'connectable' => $valid, 'expires_at' => $future], ['error' => 'something_new', 'state' => 's'], 'exchange_failed'],
         ];
     }
 
@@ -440,350 +648,6 @@ class ConnectRouteTest extends TestCase
             ->assertSee('status: "exchange_failed"', false);
 
         $this->assertNull($this->team()->zapmizerConnection);
-    }
-
-    // --- instance -------------------------------------------------------
-
-    public function testInstanceRequiresAnAuthorizedConnection()
-    {
-        $this->actingAsUser();
-
-        $this->postJson(route('zapmizer.connect.instance'))->assertStatus(409)->assertExactJson(['code' => 'not_connected']);
-        $this->getJson(route('zapmizer.connect.instances'))->assertStatus(409)->assertExactJson(['code' => 'not_connected']);
-        $this->getJson(route('zapmizer.connect.connection'))->assertStatus(409)->assertExactJson(['code' => 'no_instance']);
-    }
-
-    public function testInstanceAdoptsTheOnlyConnectedOneActivatesAndRegistersTheWebhook()
-    {
-        $this->fakeHttp(
-            new Response(200, [], json_encode(['data' => [['id' => 9, 'client' => ['cid_formatted' => '+55 81 91111-0000']]]])),
-            new Response(200, [], $this->connectedPayload(9)),
-            new Response(201, [], $this->webhookPayload()),
-        );
-        $this->actingAsUser();
-        $this->authorizedTeam();
-
-        $this->postJson(route('zapmizer.connect.instance'))
-            ->assertOk()
-            ->assertJsonPath('connection.state', 'connected')
-            ->assertJsonPath('connection.number', '5581911110000');
-
-        $connection = $this->team()->zapmizerConnection;
-        $this->assertEquals(9, $connection->bot_instance_id);
-        $this->assertEquals('5581911110000', $connection->phone_number);
-        $this->assertTrue($connection->is_active);
-        $this->assertNotNull($connection->connected_at);
-        $this->assertEquals(42, $connection->webhook_id);
-        $this->assertEquals('whsec_new', $connection->webhook_secret);
-        $this->assertTrue($this->team()->hasActiveZapmizer());
-
-        $this->assertEquals('http://zap.test/api/bot-instances?connected=1&per_page=100', (string) $this->history[0]['request']->getUri());
-        $this->assertEquals('Bearer team-token', $this->history[0]['request']->getHeaderLine('Authorization'));
-        $this->assertEquals(
-            ['url' => 'http://localhost/zapmizer/webhook', 'enabled' => true],
-            json_decode((string) $this->history[2]['request']->getBody(), true)
-        );
-    }
-
-    public function testInstanceAsksForAChoiceWhenTwoAreConnected()
-    {
-        $this->fakeHttp(new Response(200, [], json_encode(['data' => [
-            ['id' => 9, 'client' => ['cid_formatted' => '+55 81 91111-0000']],
-            ['id' => 10, 'client' => ['cid_formatted' => '+55 81 92222-0000']],
-            ['id' => 11, 'client' => []], // no paired number: never an option
-        ]])));
-        $this->actingAsUser();
-        $this->authorizedTeam(['bot_instance_id' => null]);
-
-        $this->postJson(route('zapmizer.connect.instance'))
-            ->assertOk()
-            ->assertExactJson(['code' => 'choice_required', 'instances' => [
-                ['id' => 9, 'number' => '+55 81 91111-0000', 'is_current' => false],
-                ['id' => 10, 'number' => '+55 81 92222-0000', 'is_current' => false],
-            ]]);
-
-        $this->assertNull($this->team()->zapmizerConnection->bot_instance_id);
-    }
-
-    public function testInstanceCreatesOneWhenNoneIsConnected()
-    {
-        $this->fakeHttp(
-            new Response(200, [], json_encode(['data' => []])),
-            new Response(201, [], json_encode(['data' => ['id' => 12]])),
-            new Response(200, [], $this->qrPayload(12)),
-        );
-        $this->actingAsUser();
-        $this->authorizedTeam();
-
-        $this->postJson(route('zapmizer.connect.instance'))
-            ->assertOk()
-            ->assertJsonPath('connection.state', 'qrcode')
-            ->assertJsonPath('connection.qrcode', 'QR-DATA');
-
-        $connection = $this->team()->zapmizerConnection;
-        $this->assertEquals(12, $connection->bot_instance_id);
-        $this->assertFalse($connection->is_active);
-        $this->assertEquals('POST', $this->history[1]['request']->getMethod());
-        $this->assertEquals('http://zap.test/api/bot-instances', (string) $this->history[1]['request']->getUri());
-    }
-
-    public function testInstanceReusesTheStoredInstanceInsteadOfCreatingAnother()
-    {
-        $this->fakeHttp(new Response(200, [], $this->qrPayload(9)));
-        $this->actingAsUser();
-        $this->authorizedTeam(['bot_instance_id' => 9]);
-
-        $this->postJson(route('zapmizer.connect.instance'))->assertOk()->assertJsonPath('connection.id', 9);
-
-        $this->assertCount(1, $this->history);
-        $this->assertEquals('http://zap.test/api/bot-instances/9/connection', (string) $this->history[0]['request']->getUri());
-    }
-
-    #[DataProvider('createFailures')]
-    public function testInstanceCreateMapsZapmizerErrors(Response $response, int $status, array $json)
-    {
-        $this->fakeHttp($response);
-        $this->actingAsUser();
-        $this->authorizedTeam();
-
-        $this->postJson(route('zapmizer.connect.instance'), ['create' => true])
-            ->assertStatus($status)
-            ->assertJson($json);
-    }
-
-    public static function createFailures(): array
-    {
-        return [
-            'plan limit' => [new Response(402, [], json_encode(['message' => 'Plan limit reached.'])), 422, ['code' => 'plan_limit', 'message' => 'Plan limit reached.']],
-            'booting' => [new Response(423, [], ''), 202, ['code' => 'booting']],
-            'token revoked' => [new Response(401, [], '{}'), 200, ['code' => 'reauth_required']],
-            'zapmizer down' => [new Response(500, [], ''), 503, ['code' => 'zapmizer_unavailable']],
-        ];
-    }
-
-    public function testInstanceStoresTheBootingIdFromA423SoTheRetryDoesNotCreateAnother()
-    {
-        $this->fakeHttp(
-            new Response(200, [], json_encode(['data' => []])),
-            new Response(423, [], json_encode(['message' => 'Already booting.', 'bot_instance_id' => 77])),
-            // The retry: the stored instance is polled, not created again.
-            new Response(200, [], $this->qrPayload(77)),
-        );
-        $this->actingAsUser();
-        $this->authorizedTeam();
-
-        $this->postJson(route('zapmizer.connect.instance'))->assertStatus(202)->assertExactJson(['code' => 'booting']);
-        $this->assertEquals(77, $this->team()->zapmizerConnection->bot_instance_id);
-
-        $this->postJson(route('zapmizer.connect.instance'))->assertOk()->assertJsonPath('connection.id', 77);
-        $this->assertCount(3, $this->history);
-        $this->assertEquals('http://zap.test/api/bot-instances/77/connection', (string) $this->history[2]['request']->getUri());
-    }
-
-    public function testInstanceCreateStoresTheBootingIdEvenWhenCreateWasExplicit()
-    {
-        $this->fakeHttp(new Response(423, [], json_encode(['bot_instance_id' => 78])));
-        $this->actingAsUser();
-        $this->authorizedTeam();
-
-        $this->postJson(route('zapmizer.connect.instance'), ['create' => true])->assertStatus(202);
-
-        $this->assertEquals(78, $this->team()->zapmizerConnection->bot_instance_id);
-    }
-
-    #[DataProvider('rebootableStates')]
-    public function testInstanceRebootsTheStoredInstanceWhenItDropped(string $state)
-    {
-        $this->fakeHttp(
-            new Response(200, [], $this->statePayload(9, $state)),
-            new Response(200, [], json_encode(['data' => ['id' => 9]])),
-            new Response(200, [], $this->qrPayload(9)),
-        );
-        $this->actingAsUser();
-        $this->authorizedTeam(['bot_instance_id' => 9, 'phone_number' => '5581911110000']);
-
-        $this->postJson(route('zapmizer.connect.instance'))
-            ->assertOk()
-            ->assertJsonPath('connection.id', 9)
-            ->assertJsonPath('connection.qrcode', 'QR-DATA');
-
-        // Booted again by id — no second instance, no listing.
-        $boot = $this->history[1]['request'];
-        $this->assertEquals('POST', $boot->getMethod());
-        $this->assertEquals('http://zap.test/api/bot-instances', (string) $boot->getUri());
-        $this->assertEquals(['bot_instance_id' => 9], json_decode((string) $boot->getBody(), true));
-        $this->assertEquals(9, $this->team()->zapmizerConnection->bot_instance_id);
-    }
-
-    public static function rebootableStates(): array
-    {
-        return ['disconnected' => ['disconnected'], 'off' => ['off']];
-    }
-
-    public function testInstanceRebootStillBootingIsReportedAsBooting()
-    {
-        $this->fakeHttp(
-            new Response(200, [], $this->statePayload(9, 'disconnected')),
-            new Response(423, [], json_encode(['bot_instance_id' => 9])),
-        );
-        $this->actingAsUser();
-        $this->authorizedTeam(['bot_instance_id' => 9]);
-
-        $this->postJson(route('zapmizer.connect.instance'))->assertStatus(202)->assertExactJson(['code' => 'booting']);
-        $this->assertEquals(9, $this->team()->zapmizerConnection->bot_instance_id);
-    }
-
-    public function testInstanceRebootOfAnUnknownIdFallsBackToTheListing()
-    {
-        $this->fakeHttp(
-            new Response(200, [], $this->statePayload(9, 'disconnected')),
-            new Response(423, [], json_encode(['message' => 'Conta do WhatsApp não encontrada.'])),
-            new Response(200, [], json_encode(['data' => []])),
-            new Response(201, [], json_encode(['data' => ['id' => 12]])),
-            new Response(200, [], $this->qrPayload(12)),
-        );
-        $this->actingAsUser();
-        $this->authorizedTeam(['bot_instance_id' => 9]);
-
-        $this->postJson(route('zapmizer.connect.instance'))->assertOk()->assertJsonPath('connection.id', 12);
-        $this->assertEquals(12, $this->team()->zapmizerConnection->bot_instance_id);
-    }
-
-    public function testInstanceCreateAnswersQrNotAvailableWhenTheConnectionIsRefusedRightAfter()
-    {
-        Log::spy();
-        $this->fakeHttp(
-            new Response(201, [], json_encode(['data' => ['id' => 12]])),
-            // EnsureQrConnection: the team has no QR feature → 404.
-            new Response(404, [], '{}'),
-        );
-        $this->actingAsUser();
-        $this->authorizedTeam();
-
-        $this->postJson(route('zapmizer.connect.instance'), ['create' => true])
-            ->assertStatus(422)
-            ->assertJsonPath('code', 'qr_not_available')
-            ->assertJsonPath('message', fn (string $message) => str_contains($message, 'QR'));
-
-        // The id is kept: a retry reuses it instead of creating a third one.
-        $this->assertEquals(12, $this->team()->zapmizerConnection->bot_instance_id);
-        Log::shouldHaveReceived('warning')->withArgs(fn (string $message) => str_contains($message, 'just-created instance'));
-    }
-
-    public function testInstanceRejectsAChosenOneThatDropped()
-    {
-        $this->fakeHttp(
-            new Response(404, [], '{}'),
-            new Response(200, [], json_encode(['data' => [['id' => 10, 'client' => ['cid_formatted' => '+55 81 92222-0000']]]])),
-        );
-        $this->actingAsUser();
-        $this->authorizedTeam();
-
-        $this->postJson(route('zapmizer.connect.instance'), ['instance_id' => 9])
-            ->assertStatus(422)
-            ->assertJsonPath('code', 'instance_unavailable')
-            ->assertJsonPath('instances.0.id', 10);
-
-        $this->assertNull($this->team()->zapmizerConnection->bot_instance_id);
-    }
-
-    public function testInstanceAdoptsAChosenConnectedOne()
-    {
-        $this->fakeHttp(
-            new Response(200, [], $this->connectedPayload(10, '5581922220000')),
-            new Response(201, [], $this->webhookPayload()),
-        );
-        $this->actingAsUser();
-        $this->authorizedTeam();
-
-        $this->postJson(route('zapmizer.connect.instance'), ['instance_id' => 10])
-            ->assertOk()
-            ->assertJsonPath('connection.number', '5581922220000');
-
-        $connection = $this->team()->zapmizerConnection;
-        $this->assertEquals(10, $connection->bot_instance_id);
-        $this->assertEquals('5581922220000', $connection->phone_number);
-        $this->assertTrue($connection->is_active);
-    }
-
-    // --- instances / connection ----------------------------------------
-
-    public function testInstancesListsConnectedOnesMarkingTheCurrent()
-    {
-        $this->fakeHttp(new Response(200, [], json_encode(['data' => [
-            ['id' => 9, 'client' => ['cid_formatted' => '+55 81 91111-0000']],
-            ['id' => 10, 'client' => ['cid_formatted' => '+55 81 92222-0000']],
-        ]])));
-        $this->actingAsUser();
-        $this->authorizedTeam(['bot_instance_id' => 10]);
-
-        $this->getJson(route('zapmizer.connect.instances'))
-            ->assertOk()
-            ->assertJsonPath('instances.0.is_current', false)
-            ->assertJsonPath('instances.1.is_current', true);
-    }
-
-    public function testConnectionPollingActivatesOncePaired()
-    {
-        $this->fakeHttp(
-            new Response(200, [], $this->qrPayload(9)),
-            new Response(200, [], $this->connectedPayload(9)),
-            new Response(201, [], $this->webhookPayload()),
-            new Response(200, [], $this->connectedPayload(9)),
-        );
-        $this->actingAsUser();
-        $this->authorizedTeam(['bot_instance_id' => 9]);
-
-        $this->getJson(route('zapmizer.connect.connection'))->assertOk()->assertJsonPath('connection.state', 'qrcode');
-        $this->assertFalse($this->team()->zapmizerConnection->is_active);
-
-        $this->getJson(route('zapmizer.connect.connection'))->assertOk()->assertJsonPath('connection.state', 'connected');
-        $connection = $this->team()->zapmizerConnection;
-        $this->assertTrue($connection->is_active);
-        $this->assertEquals('whsec_new', $connection->webhook_secret);
-        $connectedAt = $connection->connected_at;
-
-        // Already paired and registered: the poll writes nothing more.
-        $this->getJson(route('zapmizer.connect.connection'))->assertOk();
-        $this->assertEquals($connectedAt, $this->team()->zapmizerConnection->connected_at);
-        $this->assertCount(4, $this->history);
-    }
-
-    public function testConnectionSurvivesAWebhookRegistrationFailure()
-    {
-        Log::spy();
-        $this->fakeHttp(
-            new Response(200, [], $this->connectedPayload(9)),
-            new Response(500, [], ''),
-        );
-        $this->actingAsUser();
-        $this->authorizedTeam(['bot_instance_id' => 9]);
-
-        $this->getJson(route('zapmizer.connect.connection'))->assertOk()->assertJsonPath('connection.state', 'connected');
-
-        $connection = $this->team()->zapmizerConnection;
-        $this->assertTrue($connection->is_active);
-        $this->assertNull($connection->webhook_secret);
-        Log::shouldHaveReceived('warning')->withArgs(fn (string $message) => str_contains($message, 'could not register the webhook'));
-    }
-
-    #[DataProvider('connectionFailures')]
-    public function testConnectionMapsZapmizerErrors(Response $response, int $status, array $json)
-    {
-        $this->fakeHttp($response);
-        $this->actingAsUser();
-        $this->authorizedTeam(['bot_instance_id' => 9]);
-
-        $this->getJson(route('zapmizer.connect.connection'))->assertStatus($status)->assertJson($json);
-    }
-
-    public static function connectionFailures(): array
-    {
-        return [
-            'instance gone' => [new Response(404, [], '{}'), 409, ['code' => 'no_instance']],
-            'token revoked' => [new Response(401, [], '{}'), 200, ['code' => 'reauth_required']],
-            'zapmizer down' => [new Response(503, [], ''), 503, ['code' => 'zapmizer_unavailable']],
-        ];
     }
 
     // --- destroy --------------------------------------------------------
@@ -905,7 +769,7 @@ class ConnectRouteTest extends TestCase
 
     public function testDefaultResolverConnectsTheAuthenticatedUser()
     {
-        $this->fakeHttp(new Response(200, [], json_encode(['token' => '1|sanctum', 'team_id' => 7, 'team_name' => 'Acme'])));
+        $this->fakeHttp(new Response(200, [], $this->tokenPayload()));
         // The resolver is read from config at resolve time, so a runtime
         // change is honoured (defineEnvironment() wins over the attribute).
         config()->set('zapmizer.connect.resolver', ResolvesAuthenticatedUser::class);

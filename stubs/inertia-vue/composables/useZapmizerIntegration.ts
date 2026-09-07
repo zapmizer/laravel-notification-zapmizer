@@ -5,12 +5,24 @@ import type { ZapmizerConnection } from '@/types/zapmizer';
 const JSON_HEADERS = { headers: { Accept: 'application/json' } };
 
 /**
- * Estado da integração do time — de onde a tela decide se abre o wizard, em
- * que passo, ou o painel de conexão já pronta.
+ * Abre o popup do Zapmizer (autorização + pareamento). O resultado chega por
+ * postMessage — ver ConnectButton. Fora do composable de propósito: o botão
+ * chama isto sem carregar um estado que não é dele.
+ */
+export async function openZapmizerConnect(): Promise<Window | null> {
+  const { data } = await axios.post<{ url: string; expires_at: string }>(route('zapmizer.connect.start'), {}, JSON_HEADERS);
+
+  return window.open(data.url, 'zapmizer-connect', 'width=520,height=720');
+}
+
+/**
+ * Estado da integração do time — de onde a tela decide se mostra o botão de
+ * conectar ou o painel do número conectado.
  *
- * Autorizado mas sem número pareado é um estado real (o callback grava a
- * credencial e deixa `is_active` falso de propósito): é ele que manda o wizard
- * abrir direto no passo 2.
+ * O popup do Zapmizer autoriza E pareia o número: quando o callback responde
+ * `ok`, a conexão já vem ativa, com número. `is_active` falso com conexão
+ * existente é um estado de erro (o secret do webhook não pôde ser obtido) —
+ * o caminho é conectar de novo.
  */
 export function useZapmizerIntegration() {
   const integration = ref<ZapmizerConnection | null>(null);
@@ -21,18 +33,18 @@ export function useZapmizerIntegration() {
   // (o "já autorizei" recarrega enquanto o popup também pode ter respondido).
   let request = 0;
 
-  const isAuthorized = computed(() => integration.value !== null);
   const isConnected = computed(() => Boolean(integration.value?.is_active && integration.value?.phone_number));
 
-  /** 1 = autorizar, 2 = parear número, 3 = pronto. */
-  const initialStep = computed(() => (isConnected.value ? 3 : isAuthorized.value ? 2 : 1));
-
-  async function reload() {
+  /** `live` consulta o Zapmizer e traz `state` / `is_online` na conexão. */
+  async function reload(options: { live?: boolean } = {}) {
     const current = ++request;
     errorMessage.value = '';
 
     try {
-      const { data } = await axios.get<{ connection: ZapmizerConnection | null }>(route('zapmizer.connect.show'), JSON_HEADERS);
+      const { data } = await axios.get<{ connection: ZapmizerConnection | null }>(
+        route('zapmizer.connect.show', options.live ? { live: 1 } : {}),
+        JSON_HEADERS,
+      );
 
       if (current !== request) return;
 
@@ -46,6 +58,8 @@ export function useZapmizerIntegration() {
     }
   }
 
+  const start = openZapmizerConnect;
+
   async function disconnect() {
     await axios.delete(route('zapmizer.connect.destroy'), JSON_HEADERS);
 
@@ -53,5 +67,5 @@ export function useZapmizerIntegration() {
     integration.value = null;
   }
 
-  return { integration, loading, errorMessage, isAuthorized, isConnected, initialStep, reload, disconnect };
+  return { integration, loading, errorMessage, isConnected, reload, start, disconnect };
 }

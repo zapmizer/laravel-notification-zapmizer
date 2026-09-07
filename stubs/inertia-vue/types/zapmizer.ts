@@ -1,23 +1,5 @@
 /** Espelho dos payloads JSON do `ConnectController` do pacote zapmizer. */
 
-export interface ZapmizerInstanceConnection {
-  id: number;
-  state: string;
-  state_label: string;
-  is_online: boolean;
-  is_up: boolean;
-  qrcode: string | null;
-  qrcode_available_at: string | null;
-  qrcode_expires_at: string | null;
-  number: string | null;
-}
-
-export interface ZapmizerInstance {
-  id: number;
-  number: string;
-  is_current: boolean;
-}
-
 export interface ZapmizerConnection {
   id: number;
   zapmizer_team_id: number | null;
@@ -30,4 +12,31 @@ export interface ZapmizerConnection {
   api_token_masked: string | null;
   created_at: string;
   updated_at: string;
+  /**
+   * Só com `?live=1`: estado da instância no Zapmizer (`connected`,
+   * `disconnected`, `qrcode`, `off`, ...) ou um dos estados do pacote
+   * (`reauth_required`, `instance_gone`, `zapmizer_unavailable`). `null`
+   * quando não há o que consultar.
+   */
+  state?: string | null;
+  /** Só com `?live=1`. */
+  is_online?: boolean;
+}
+
+/** O que o popup do callback manda por postMessage. */
+export type ZapmizerConnectStatus =
+  | 'ok'
+  | 'denied'
+  | 'plan_limit'
+  | 'qr_unavailable'
+  | 'invalid_state'
+  | 'exchange_failed'
+  | 'webhook_failed'
+  | 'team_already_connected'
+  | 'no_connectable';
+
+export interface ZapmizerConnectMessage {
+  source: 'zapmizer-connect';
+  status: ZapmizerConnectStatus;
+  message: string;
 }

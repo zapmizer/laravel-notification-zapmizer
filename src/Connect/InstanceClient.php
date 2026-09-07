@@ -4,9 +4,7 @@ namespace NotificationChannels\Zapmizer\Connect;
 
 use GuzzleHttp\Client as HttpClient;
 use GuzzleHttp\Exception\GuzzleException;
-use NotificationChannels\Zapmizer\Exceptions\InstanceBootingException;
 use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;
-use NotificationChannels\Zapmizer\Exceptions\InstancePlanLimitException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
@@ -16,8 +14,10 @@ use Psr\Http\Message\ResponseInterface;
 /**
  * Class InstanceClient.
  *
- * Zapmizer's bot-instance and webhook endpoints, authenticated by the
- * connected team's token (the one the connect flow stored). The token is
+ * Zapmizer's instance-connection and webhook endpoints, authenticated by
+ * the connected team's token (the one the connect flow stored). Pairing
+ * itself happens on Zapmizer's hosted page — this client only reads the
+ * state of the paired instance and manages the webhook. The token is
  * always per connection — there is no single-tenant fallback on purpose:
  * resolve it through `ZapmizerConnection::instanceClient()`.
  */
@@ -48,77 +48,8 @@ class InstanceClient
     }
 
     /**
-     * List the team's instances. `per_page` is high on purpose: the index is
-     * paginated, and without it the connected list would be truncated.
+     * The pairing state of an instance — whether the paired number is online.
      *
-     * @return array<int, array<string, mixed>>
-     *
-     * @throws ZapmizerConnectException
-     */
-    public function instances(bool $connected = false): array
-    {
-        $response = $this->request('GET', '/bot-instances', [
-            'query' => $connected ? ['connected' => 1, 'per_page' => 100] : [],
-        ]);
-
-        $this->guardUnauthorized($response);
-        $this->guardFailure($response);
-
-        $json = $this->decode($response);
-
-        return array_values($json['data'] ?? $json);
-    }
-
-    /**
-     * Create an instance — or, given `$botInstanceId`, boot the existing one
-     * again (Zapmizer re-bootstraps a `disconnected`/`off` instance through
-     * the same POST, with the id in the body).
-     *
-     * A 423 means a boot is already in progress. When Zapmizer knows which
-     * instance is booting it says so in the body (`bot_instance_id`), and
-     * the exception carries it: whoever retries must reuse that id, or the
-     * retry creates a second instance once the boot ends.
-     *
-     * @return array<string, mixed>
-     *
-     * @throws ZapmizerConnectException
-     */
-    public function createInstance(?int $botInstanceId = null): array
-    {
-        $response = $this->request('POST', '/bot-instances', $botInstanceId === null ? [] : [
-            'json' => ['bot_instance_id' => $botInstanceId],
-        ]);
-
-        $this->guardUnauthorized($response);
-
-        if ($response->getStatusCode() === 402) {
-            $json = $this->decode($response);
-
-            throw new InstancePlanLimitException((string) ($json['message'] ?? 'Instance limit of the Zapmizer plan reached.'));
-        }
-
-        if ($response->getStatusCode() === 423) {
-            $json = json_decode((string) $response->getBody(), true);
-            $bootingId = is_array($json) && is_numeric($json['bot_instance_id'] ?? null) ? (int) $json['bot_instance_id'] : null;
-
-            // Re-booting an id Zapmizer no longer knows is also a 423 over
-            // there ("account not found") — without a booting id. For the
-            // caller that is a gone instance, not a boot to wait for.
-            if ($bootingId === null && $botInstanceId !== null) {
-                throw new InstanceGoneException("Instance {$botInstanceId} is gone on Zapmizer.");
-            }
-
-            throw InstanceBootingException::inProgress($bootingId);
-        }
-
-        $this->guardFailure($response);
-
-        $json = $this->decode($response);
-
-        return $json['data'] ?? $json;
-    }
-
-    /**
      * @throws ZapmizerConnectException
      */
     public function connection(int $id): InstanceConnection

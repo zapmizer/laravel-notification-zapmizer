@@ -1,39 +1,49 @@
 <script setup lang="ts">
-import axios from 'axios';
 import { AlertCircleIcon, ArrowRightIcon, MessageCircleIcon } from 'lucide-vue-next';
 import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { openZapmizerConnect } from '@/composables/useZapmizerIntegration';
+import type { ZapmizerConnectMessage } from '@/types/zapmizer';
 
 withDefaults(defineProps<{ reauthRequired?: boolean }>(), { reauthRequired: false });
 
-const emit = defineEmits<{ authorized: []; recheck: [] }>();
+/**
+ * `connected`: o popup respondeu `ok` — a conexão já está ativa, com número.
+ * `recheck`: o usuário clicou "já conectei" — quem decide é o estado que
+ * voltar do servidor, não o clique.
+ */
+const emit = defineEmits<{ connected: []; recheck: [] }>();
 
 const starting = ref(false);
 const error = ref('');
 
 const MESSAGES: Record<string, string> = {
   denied: 'Autorização cancelada. Tente novamente quando quiser conectar.',
+  plan_limit: 'O plano do Zapmizer não tem vaga para mais um número. Libere um número lá (ou mude de plano) e tente de novo.',
+  qr_unavailable: 'Esse time do Zapmizer não consegue parear número por QR code. Confira as configurações do time lá e tente de novo.',
   invalid_state: 'O link de autorização expirou. Tente novamente.',
-  exchange_failed: 'Não foi possível concluir a autorização. Tente novamente.',
+  exchange_failed: 'Não foi possível concluir a conexão. Tente novamente.',
+  webhook_failed: 'O número foi pareado, mas o recebimento de mensagens não pôde ser configurado. Tente conectar de novo.',
   team_already_connected: 'Essa conta do Zapmizer já está conectada a outra conta aqui. Desconecte lá primeiro ou autorize outro time do Zapmizer.',
+  no_connectable: 'Não há o que conectar nesta conta. Entre de novo e tente outra vez.',
 };
 
 /**
  * O popup do callback fala com esta página por postMessage. Confiar no payload
  * antes de conferir a origem deixaria qualquer aba aberta em outro site
- * declarar "autorizado" e pular o passo.
+ * declarar "conectado" e pular o passo.
  */
-function onMessage(event: MessageEvent) {
+function onMessage(event: MessageEvent<Partial<ZapmizerConnectMessage>>) {
   if (event.origin !== window.location.origin) return;
   if (event.data?.source !== 'zapmizer-connect') return;
 
   if (event.data.status === 'ok') {
     error.value = '';
-    emit('authorized');
+    emit('connected');
 
     return;
   }
 
-  error.value = MESSAGES[event.data.status] || event.data.message || 'Não foi possível concluir a autorização. Tente novamente.';
+  error.value = MESSAGES[event.data.status ?? ''] || event.data.message || MESSAGES.exchange_failed;
 }
 
 onMounted(() => window.addEventListener('message', onMessage));
@@ -44,13 +54,7 @@ async function connect() {
   starting.value = true;
 
   try {
-    const { data } = await axios.post<{ url: string; expires_at: string }>(
-      route('zapmizer.connect.start'),
-      {},
-      { headers: { Accept: 'application/json' } },
-    );
-
-    const popup = window.open(data.url, 'zapmizer-connect', 'width=520,height=720');
+    const popup = await openZapmizerConnect();
 
     if (!popup) error.value = 'O navegador bloqueou a janela — libere popups para este site e tente de novo.';
   } catch (e) {
@@ -65,7 +69,7 @@ async function connect() {
         ? 'O Zapmizer está indisponível no momento. Tente novamente em instantes.'
         : status >= 500 || status === 0
           ? 'Não foi possível falar com o Zapmizer agora. Tente novamente em instantes.'
-          : (response?.data?.message ?? 'Não foi possível iniciar a autorização. Tente novamente.');
+          : (response?.data?.message ?? 'Não foi possível iniciar a conexão. Tente novamente.');
   } finally {
     starting.value = false;
   }
@@ -73,12 +77,12 @@ async function connect() {
 </script>
 
 <template>
-  <div>
-    <div class="gp-eyebrow">Passo 1</div>
-    <h3 class="mt-1 text-base font-semibold tracking-tight text-gp-text">Autorize o sistema no Zapmizer</h3>
+  <section class="rounded border border-gp-border bg-gp-panel p-4">
+    <div class="gp-eyebrow">Conexão</div>
+    <h3 class="mt-1 text-base font-semibold tracking-tight text-gp-text">Conecte um número de WhatsApp</h3>
     <p class="mt-1 text-[12px] text-gp-muted">
-      É a conta do Zapmizer que fala com o WhatsApp. Depois de autorizar, você escolhe qual número vai conversar com o
-      time.
+      É a conta do Zapmizer que fala com o WhatsApp. Na janela que abre você entra, autoriza e lê o QR code com o
+      celular — tudo lá.
     </p>
 
     <p
@@ -86,7 +90,7 @@ async function connect() {
       class="mt-3 flex items-start gap-2 rounded border border-gp-amber/40 bg-gp-amber/10 px-3 py-2 text-[12px] text-gp-amber"
     >
       <AlertCircleIcon class="mt-px size-3.5 shrink-0" />
-      A autorização com o Zapmizer expirou. Autorize novamente para continuar.
+      A autorização com o Zapmizer expirou. Conecte novamente para continuar.
     </p>
 
     <p
@@ -103,7 +107,7 @@ async function connect() {
       </div>
       <p class="mt-3 text-[13px] font-medium text-gp-text">Uma janela do Zapmizer vai abrir</p>
       <p class="mx-auto mt-1 max-w-sm text-[12px] text-gp-muted">
-        Entre (ou crie sua conta) e autorize o acesso. Você volta para cá automaticamente.
+        Entre (ou crie sua conta), autorize o acesso e leia o QR code. Você volta para cá automaticamente.
       </p>
       <button
         type="button"
@@ -115,16 +119,14 @@ async function connect() {
         <ArrowRightIcon class="size-3.5" />
       </button>
       <!-- Popup fechado na mão, ou bloqueado e reaberto por fora: sem esta saída
-           o usuário fica olhando o passo 1 com a autorização já concluída.
-           Emite `recheck`, não `authorized`: quem decide se avançou é o estado
-           que voltar do servidor, não o clique. -->
+           o usuário fica olhando o botão com a conexão já concluída. -->
       <button
         type="button"
         class="mt-2 rounded px-2 py-1 text-[11px] text-gp-muted transition-colors hover:text-gp-text"
         @click="emit('recheck')"
       >
-        Já autorizei
+        Já conectei
       </button>
     </div>
-  </div>
+  </section>
 </template>

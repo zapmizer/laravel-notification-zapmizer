@@ -5,11 +5,11 @@ namespace NotificationChannels\Zapmizer\Http\Middleware;
 use Closure;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
 use NotificationChannels\Zapmizer\Support\PhoneNumber;
+use NotificationChannels\Zapmizer\Support\TableExists;
 use Symfony\Component\HttpFoundation\Response;
 use Throwable;
 
@@ -211,27 +211,11 @@ class VerifyWebhookSignature
 
     /**
      * A single-tenant application that never published the connections
-     * migration must not answer 500 to a signed delivery. A positive answer
-     * is cached for a day (the table does not go away); a negative one is
-     * re-checked on every delivery, so running the migration is picked up
-     * at once.
+     * migration must not answer 500 to a signed delivery.
      */
     protected function connectionsTableExists(): bool
     {
-        $model = new ($this->connectionModel());
-        $key = 'zapmizer:table-exists:' . $model->getTable();
-
-        if (Cache::get($key) === true) {
-            return true;
-        }
-
-        $exists = $model->getConnection()->getSchemaBuilder()->hasTable($model->getTable());
-
-        if ($exists) {
-            Cache::put($key, true, now()->addDay());
-        }
-
-        return $exists;
+        return TableExists::for(new ($this->connectionModel()));
     }
 
     /**

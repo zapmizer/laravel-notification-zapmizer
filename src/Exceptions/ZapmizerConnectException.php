@@ -33,6 +33,16 @@ class ZapmizerConnectException extends Exception
     }
 
     /**
+     * Thrown by a resolver that has nothing to connect on the request (no
+     * authenticated user, a user without a team). Renders 403 with the code
+     * `no_connectable`; the popup callback reports it on the result page.
+     */
+    public static function noConnectable(?string $reason = null): NoConnectableException
+    {
+        return new NoConnectableException($reason ?? 'There is nothing to connect on this request.');
+    }
+
+    /**
      * Thrown when the partner credentials are missing from the config.
      */
     public static function partnerCredentialsNotProvided(): self

@@ -31,11 +31,11 @@ Publish the config and the migrations, then migrate:
 
 ```bash
 php artisan vendor:publish --provider="NotificationChannels\Zapmizer\ZapmizerServiceProvider" --tag=config
-php artisan vendor:publish --provider="NotificationChannels\Zapmizer\ZapmizerServiceProvider" --tag=migrations
+php artisan vendor:publish --provider="NotificationChannels\Zapmizer\ZapmizerServiceProvider" --tag=zapmizer-migrations-verify
 php artisan migrate
 ```
 
-This creates the `whatsapp_verifieds` table (verification state, 1:1 with the user).
+This creates the `whatsapp_verifieds` table (verification state, 1:1 with the user). `zapmizer-migrations-verify` publishes only this migration; `--tag=migrations` publishes both this one and the connect flow's `zapmizer_connections` (`zapmizer-migrations-connect`).
 
 Set the environment variables:
 
@@ -187,6 +187,8 @@ use NotificationChannels\Zapmizer\Exceptions\VerificationConnectionFailed; // ne
 use NotificationChannels\Zapmizer\Exceptions\VerificationRequestFailed;    // 4xx/5xx (getStatusCode(), getResponseBody())
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerVerificationException; // base of all of the above
 ```
+
+The client sends `Accept: application/json` and does **not** follow redirects: a revoked token makes Zapmizer redirect to its login page, and a redirect or a non-JSON answer throws `ZapmizerVerificationException` (`unexpectedResponse`) instead of passing an HTML page off as a result. The same holds for the messages client (`Zapmizer::sendMessage()` → `CouldNotSendNotification`).
 
 Notable API errors when creating a session: `503` when the team has no online bot, `422` when the `from` number doesn't match any of the team's WhatsApp accounts.
 

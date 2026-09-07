@@ -7,16 +7,19 @@ use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Response;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use NotificationChannels\Zapmizer\Connect\ResolvesAuthenticatedUser;
 use NotificationChannels\Zapmizer\Http\Controllers\ConnectController;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
+use NotificationChannels\Zapmizer\Exceptions\NoConnectableException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Test\Fixtures\CreatesConnectionTables;
 use NotificationChannels\Zapmizer\Test\Fixtures\PlainModel;
 use NotificationChannels\Zapmizer\Test\Fixtures\PlainUser;
 use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesFirstTeam;
+use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesNothing;
 use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesPlainModel;
 use NotificationChannels\Zapmizer\Test\Fixtures\Team;
 use NotificationChannels\Zapmizer\Test\Fixtures\User;
@@ -847,6 +850,41 @@ class ConnectRouteTest extends TestCase
             $this->assertStringContainsString('Contracts\\Connectable', $exception->getMessage());
             $this->assertStringContainsString(PlainModel::class, $exception->getMessage());
         }
+    }
+
+    public function testAResolverWithNothingToConnectAnswers403WithAStableCode()
+    {
+        $this->fakeHttp();
+        config()->set('zapmizer.connect.resolver', ResolvesNothing::class);
+        $this->actingAsUser();
+
+        $this->getJson(route('zapmizer.connect.show'))
+            ->assertForbidden()
+            ->assertExactJson(['code' => 'no_connectable']);
+
+        $this->postJson(route('zapmizer.connect.start'))
+            ->assertForbidden()
+            ->assertExactJson(['code' => 'no_connectable']);
+    }
+
+    public function testCallbackReportsNothingToConnectOnTheResultPage()
+    {
+        $this->fakeHttp();
+        config()->set('zapmizer.connect.resolver', ResolvesNothing::class);
+        $this->actingAsUser();
+
+        $this->withSession($this->pendingSession())
+            ->get(route('zapmizer.connect.callback', ['code' => 'c', 'state' => 's']))
+            ->assertOk()
+            ->assertSee('status: "no_connectable"', false)
+            ->assertSee('window.opener.postMessage', false);
+    }
+
+    public function testDefaultResolverThrowsNoConnectableWithoutAUser()
+    {
+        $this->expectException(NoConnectableException::class);
+
+        (new ResolvesAuthenticatedUser())->resolve(Request::create('/zapmizer/connect'));
     }
 
     public function testDefaultResolverRefusesAUserWithoutTheTrait()

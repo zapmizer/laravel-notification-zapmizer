@@ -22,6 +22,7 @@ use NotificationChannels\Zapmizer\Contracts\ResolvesConnectable;
 use NotificationChannels\Zapmizer\Exceptions\InstanceBootingException;
 use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;
 use NotificationChannels\Zapmizer\Exceptions\InstancePlanLimitException;
+use NotificationChannels\Zapmizer\Exceptions\NoConnectableException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
@@ -39,7 +40,8 @@ use Throwable;
  * `reauth_required`, `choice_required`, `booting` (202), `not_connected`
  * (409), `no_instance` (409), `plan_limit` (422), `instance_unavailable`
  * (422), `qr_not_available` (422), `zapmizer_unavailable` (503),
- * `partner_unauthorized` (503) — the last two rendered by their exceptions.
+ * `partner_unauthorized` (503), `no_connectable` (403) — the last three
+ * rendered by their exceptions.
  */
 class ConnectController extends Controller
 {
@@ -99,7 +101,11 @@ class ConnectController extends Controller
             return $this->result('denied');
         }
 
-        $connectable = $this->connectable($request);
+        try {
+            $connectable = $this->connectable($request);
+        } catch (NoConnectableException) {
+            return $this->result('no_connectable');
+        }
 
         if (!$this->validState($pending, (string) $request->query('state', ''), $connectable)) {
             return $this->result('invalid_state');
@@ -547,7 +553,9 @@ class ConnectController extends Controller
     /**
      * The model being connected on this request. The resolver's return type
      * (`Model&Connectable`) is the contract: a resolver handing back a model
-     * without it fails right there, with a TypeError naming the class.
+     * without it fails right there, with a TypeError naming the class. A
+     * resolver with nothing to connect throws NoConnectableException, which
+     * renders itself (403, `no_connectable`) on the JSON endpoints.
      */
     protected function connectable(Request $request): Model&Connectable
     {
@@ -567,6 +575,7 @@ class ConnectController extends Controller
             'invalid_state' => 'This connection session is invalid or has expired. Close this window and try again.',
             'exchange_failed' => 'The connection could not be completed. Close this window and try again.',
             'team_already_connected' => 'This Zapmizer account is already connected to another account here. Disconnect it there first, or authorize a different Zapmizer team.',
+            'no_connectable' => 'There is nothing to connect on this account. Close this window, sign in again and retry.',
         ];
 
         return view('zapmizer::connect-result', [

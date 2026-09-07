@@ -32,6 +32,15 @@ final class CouldNotSendNotification extends Exception
     }
 
     /**
+     * Thrown when the answer is not the JSON the API promises — a redirect
+     * to the login page (token revoked) or an HTML page.
+     */
+    public static function zapmizerRespondedUnexpectedly(string $reason): self
+    {
+        return new self("Zapmizer responded with something other than an API answer: {$reason}");
+    }
+
+    /**
      * Thrown when there's no bot token provided.
      */
     public static function zapmizerBotTokenNotProvided(string $message): self

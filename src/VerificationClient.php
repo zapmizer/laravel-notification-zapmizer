@@ -8,6 +8,7 @@ use GuzzleHttp\Exception\GuzzleException;
 use NotificationChannels\Zapmizer\Exceptions\VerificationConnectionFailed;
 use NotificationChannels\Zapmizer\Exceptions\VerificationRequestFailed;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerVerificationException;
+use NotificationChannels\Zapmizer\Support\JsonResponse;
 use Psr\Http\Message\ResponseInterface;
 
 /**
@@ -168,6 +169,9 @@ class VerificationClient
             throw ZapmizerVerificationException::apiTokenNotProvided();
         }
 
+        // Redirects are not followed: a revoked token redirects to the login
+        // page, and following it would pass an HTML 200 off as an answer.
+        $options['allow_redirects'] = false;
         $options['headers'] = array_merge($options['headers'] ?? [], array_filter([
             'Authorization' => 'Bearer ' . $this->token,
             'Accept' => 'application/json',
@@ -175,12 +179,18 @@ class VerificationClient
         ]));
 
         try {
-            return $this->http->request($method, $this->getApiBaseUri() . $path, $options);
+            $response = $this->http->request($method, $this->getApiBaseUri() . $path, $options);
         } catch (BadResponseException $exception) {
             throw VerificationRequestFailed::fromResponse($exception);
         } catch (GuzzleException $exception) {
             throw VerificationConnectionFailed::dueTo($exception);
         }
+
+        if (($problem = JsonResponse::problem($response)) !== null) {
+            throw ZapmizerVerificationException::unexpectedResponse($problem);
+        }
+
+        return $response;
     }
 
     /**

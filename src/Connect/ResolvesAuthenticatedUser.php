@@ -19,7 +19,9 @@ final class ResolvesAuthenticatedUser implements ResolvesConnectable
     {
         $user = $request->user();
 
-        abort_unless($user instanceof Model, 403, 'There is no authenticated user to connect.');
+        if (!$user instanceof Model) {
+            throw ZapmizerConnectException::noConnectable('There is no authenticated user to connect.');
+        }
 
         if (!$user instanceof Connectable) {
             throw ZapmizerConnectException::notConnectable($user);

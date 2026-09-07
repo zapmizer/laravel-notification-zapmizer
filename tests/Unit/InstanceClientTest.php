@@ -148,18 +148,71 @@ class InstanceClientTest extends TestCase
         $this->assertFileDoesNotExist($path);
     }
 
-    public function testMediaTimestampIsOptional()
+    public function testMediaWithoutFilenameOrLength()
     {
         $client = $this->makeClient(new MockHandler([
             new Response(200, ['Content-Type' => 'application/octet-stream'], 'bytes'),
         ]));
 
-        $download = $client->media(9, 'ABC');
+        $download = $client->media(9, 'ABC', 1700000000);
 
         $this->assertNull($download->filename);
         $this->assertNull($download->size);
         parse_str($this->history[0]['request']->getUri()->getQuery(), $query);
-        $this->assertArrayNotHasKey('timestamp', $query);
+        $this->assertEquals('1700000000', $query['timestamp']);
+    }
+
+    public function testMediaRejectedIsAnExceptionWithTheReason()
+    {
+        $client = $this->makeClient(new MockHandler([
+            new Response(422, ['Content-Type' => 'application/json'], json_encode([
+                'message' => 'The timestamp must be a date before or equal to now.',
+                'errors' => ['timestamp' => ['The timestamp must be a date before or equal to now.']],
+            ])),
+            new Response(422, ['Content-Type' => 'application/json'], json_encode([
+                'message' => 'Media is not available for Meta Cloud instances.',
+            ])),
+        ]));
+
+        try {
+            $client->media(9, 'ABC', 1700000000);
+            $this->fail('expected a ZapmizerConnectException');
+        } catch (ZapmizerConnectException $exception) {
+            $this->assertStringContainsString('rejected the media request', $exception->getMessage());
+            $this->assertStringContainsString('before or equal to now', $exception->getMessage());
+        }
+
+        try {
+            $client->media(9, 'ABC', 1700000000);
+            $this->fail('expected a ZapmizerConnectException');
+        } catch (ZapmizerConnectException $exception) {
+            $this->assertStringContainsString('Meta Cloud', $exception->getMessage());
+        }
+    }
+
+    public function testMediaRateLimitedIsAnExceptionWithTheRetryAfter()
+    {
+        $client = $this->makeClient(new MockHandler([
+            new Response(429, ['Content-Type' => 'application/json', 'Retry-After' => '37'], json_encode(['message' => 'Too Many Attempts.'])),
+            new Response(429, ['Content-Type' => 'application/json'], json_encode(['message' => 'Too Many Attempts.'])),
+        ]));
+
+        try {
+            $client->media(9, 'ABC', 1700000000);
+            $this->fail('expected a ZapmizerConnectException');
+        } catch (ZapmizerConnectException $exception) {
+            $this->assertStringContainsString('rate-limited', $exception->getMessage());
+            $this->assertStringContainsString('60 a minute', $exception->getMessage());
+            $this->assertStringContainsString('Retry in 37 s', $exception->getMessage());
+        }
+
+        try {
+            $client->media(9, 'ABC', 1700000000);
+            $this->fail('expected a ZapmizerConnectException');
+        } catch (ZapmizerConnectException $exception) {
+            $this->assertStringContainsString('rate-limited', $exception->getMessage());
+            $this->assertStringNotContainsString('Retry in', $exception->getMessage());
+        }
     }
 
     public function testMediaDownloadingAndUnavailable()
@@ -199,7 +252,7 @@ class InstanceClientTest extends TestCase
             ZapmizerConnectException::class,
             ZapmizerConnectException::class,
             ZapmizerUnavailableException::class,
-        ], fn () => $client->media(9, 'ABC'));
+        ], fn () => $client->media(9, 'ABC', 1700000000));
     }
 
     public function testMediaUnexpectedJsonOnA202IsAnError()
@@ -209,7 +262,7 @@ class InstanceClientTest extends TestCase
         ]));
 
         $this->expectException(ZapmizerConnectException::class);
-        $client->media(9, 'ABC');
+        $client->media(9, 'ABC', 1700000000);
     }
 
     public function testMediaFilenameVariants()
@@ -220,9 +273,9 @@ class InstanceClientTest extends TestCase
             new Response(200, ['Content-Type' => 'application/pdf', 'Content-Disposition' => 'inline'], 'x'),
         ]));
 
-        $this->assertEquals('extrato mês.pdf', $client->media(9, 'A')->filename);
-        $this->assertEquals('plain.pdf', $client->media(9, 'A')->filename);
-        $this->assertNull($client->media(9, 'A')->filename);
+        $this->assertEquals('extrato mês.pdf', $client->media(9, 'A', 1700000000)->filename);
+        $this->assertEquals('plain.pdf', $client->media(9, 'A', 1700000000)->filename);
+        $this->assertNull($client->media(9, 'A', 1700000000)->filename);
     }
 
     /**

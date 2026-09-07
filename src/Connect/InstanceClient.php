@@ -131,27 +131,42 @@ class InstanceClient
      *
      * A 200 here is binary by design, so the JSON guard the other endpoints
      * run through is skipped for it; 202 and 404 are JSON with `media_state`.
+     * Two answers are the caller's fault and come back as exceptions with
+     * the reason: 422 (a bad request — a `timestamp` in the future, or an
+     * instance on Meta Cloud, which has no media endpoint) and 429 (over the
+     * limit of 60 requests a minute per user and instance).
      *
      * @param string $messageId `id._serialized` or `id.id` of the message
-     * @param int|null $timestamp The message's `timestamp` (seconds) — lets
-     *                            Zapmizer tell "still downloading" from "never will"
+     * @param int $timestamp The message's `timestamp` (seconds) — required:
+     *                       the 600 s window Zapmizer keeps downloading in
+     *                       is counted from it, and it must not be in the future
      *
      * @throws ZapmizerConnectException
      */
-    public function media(int $botInstanceId, string $messageId, ?int $timestamp = null): MediaDownload
+    public function media(int $botInstanceId, string $messageId, int $timestamp): MediaDownload
     {
         $response = $this->request('GET', '/whatsapp-messages/media', [
-            'query' => array_filter([
+            'query' => [
                 'bot_instance_id' => $botInstanceId,
                 'message_id' => $messageId,
                 'timestamp' => $timestamp,
-            ], fn ($value) => $value !== null),
+            ],
             'stream' => true,
         ], expectsJson: false);
 
         $this->guardUnauthorized($response);
 
         $status = $response->getStatusCode();
+
+        if ($status === 422) {
+            throw ZapmizerConnectException::mediaRejected($this->reasonFrom($response));
+        }
+
+        if ($status === 429) {
+            throw ZapmizerConnectException::mediaRateLimited(
+                $response->hasHeader('Retry-After') ? (int) $response->getHeaderLine('Retry-After') : null,
+            );
+        }
 
         if ($status === 200) {
             return MediaDownload::attached(
@@ -180,6 +195,28 @@ class InstanceClient
         $this->guardFailure($response);
 
         throw ZapmizerConnectException::unexpectedResponse("HTTP {$status} on the media endpoint");
+    }
+
+    /**
+     * The reason of a JSON error answer: Laravel's `message`, plus the first
+     * of each validation error when there is one. The raw body otherwise.
+     */
+    protected function reasonFrom(ResponseInterface $response): string
+    {
+        $body = (string) $response->getBody();
+        $payload = json_decode($body, true);
+
+        if (!is_array($payload)) {
+            return trim($body);
+        }
+
+        $errors = array_map(
+            fn ($messages) => is_array($messages) ? (string) reset($messages) : (string) $messages,
+            $payload['errors'] ?? [],
+        );
+
+        return implode(' ', array_filter([$payload['message'] ?? null, ...array_values($errors)]))
+            ?: trim($body);
     }
 
     /**

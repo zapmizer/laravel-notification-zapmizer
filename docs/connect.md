@@ -24,9 +24,11 @@ You need **partner credentials** (id + secret), issued by Zapmizer for your appl
 
 ```bash
 php artisan vendor:publish --provider="NotificationChannels\Zapmizer\ZapmizerServiceProvider" --tag=config
-php artisan vendor:publish --provider="NotificationChannels\Zapmizer\ZapmizerServiceProvider" --tag=migrations
+php artisan vendor:publish --provider="NotificationChannels\Zapmizer\ZapmizerServiceProvider" --tag=zapmizer-migrations-connect
 php artisan migrate
 ```
+
+`zapmizer-migrations-connect` publishes only the migration this flow needs; `--tag=migrations` publishes both this one and the verify-number one (`zapmizer-migrations-verify`). A `verify_number.*` delivery to an app without the `whatsapp_verifieds` table is acknowledged and ignored.
 
 This creates `zapmizer_connections` (one row per connected model, polymorphic). The stub uses `morphs('connectable')`, which makes `connectable_id` a **bigint** — if the models you connect use UUID/ULID keys, edit the published migration to `uuidMorphs('connectable')` / `ulidMorphs('connectable')` before running it. `zapmizer_team_id` is unique: one connectable per Zapmizer team (see `team_already_connected` below).
 
@@ -69,19 +71,21 @@ The `ZapmizerConnection` model (`zapmizer.models.connection` to subclass it) exp
 
 ## 4. Who gets connected: the resolver
 
-The controller asks a resolver which model the current request connects. The default returns `$request->user()` (which must implement `Contracts\Connectable`, or it throws a `ZapmizerConnectException` naming the class). For team-scoped connections, point `zapmizer.connect.resolver` at your own — the return type is the contract:
+The controller asks a resolver which model the current request connects. The default returns `$request->user()` (which must implement `Contracts\Connectable`, or it throws a `ZapmizerConnectException` naming the class). For team-scoped connections, point `zapmizer.connect.resolver` at your own — the return type is the contract. When there is nothing to connect (a user without a team), throw `ZapmizerConnectException::noConnectable()`: the JSON endpoints answer 403 `{"code": "no_connectable"}` and the popup callback reports `no_connectable` on its result page. Returning `null` is not an option — it would surface as a `TypeError` (500).
 
 ```php
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 use NotificationChannels\Zapmizer\Contracts\Connectable;
 use NotificationChannels\Zapmizer\Contracts\ResolvesConnectable;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 
 class ResolvesCurrentTeam implements ResolvesConnectable
 {
     public function resolve(Request $request): Model&Connectable
     {
-        return $request->user()->currentTeam;
+        return $request->user()->currentTeam
+            ?? throw ZapmizerConnectException::noConnectable('The user has no current team.');
     }
 }
 ```
@@ -103,7 +107,7 @@ All under the package prefix (`zapmizer`), behind `web` + `auth`:
 |---|---|---|
 | `zapmizer.connect.show` | GET | `{ connection }` — the model's connection, or `null`. |
 | `zapmizer.connect.start` | POST | `{ url, expires_at }` — open `url` in a popup. Stores the `state` in the session. |
-| `zapmizer.connect.callback` | GET | HTML page that `postMessage`s `{ source: 'zapmizer-connect', status, message }` to the opener and closes — it never answers a 500 (that would leave the wizard waiting). `status`: `ok`, `denied`, `invalid_state`, `exchange_failed`, `team_already_connected`. Stores the token; the connection is born **inactive**. Re-authorizing the **same** Zapmizer team keeps the paired number and instance; a **different** team resets number, instance and webhook (the old webhook is deleted over there, best-effort). |
+| `zapmizer.connect.callback` | GET | HTML page that `postMessage`s `{ source: 'zapmizer-connect', status, message }` to the opener and closes — it never answers a 500 (that would leave the wizard waiting). `status`: `ok`, `denied`, `invalid_state`, `exchange_failed`, `team_already_connected`, `no_connectable`. Stores the token; the connection is born **inactive**. Re-authorizing the **same** Zapmizer team keeps the paired number and instance; a **different** team resets number, instance and webhook (the old webhook is deleted over there, best-effort). |
 | `zapmizer.connect.instance` | POST | Resolve the instance to pair. Body: `{ instance_id }` to adopt a chosen one, `{ create: true }` to create, nothing to let the backend decide (reuse the stored one — booting it again if it is `disconnected`/`off` → adopt the only connected one → create). |
 | `zapmizer.connect.instances` | GET | `{ instances: [{ id, number, is_current }] }` — connected instances, for the choice screen. |
 | `zapmizer.connect.connection` | GET | `{ connection: { id, state, qrcode, qrcode_expires_at, number, ... } }` — poll this until `state === 'connected'`. |
@@ -125,6 +129,7 @@ Every branch the frontend has to take carries a stable `code`:
 | `qr_not_available` | 422 | The instance was created but Zapmizer refuses its connection endpoint — the team has no QR-code connections enabled. Retrying does not help; the id is kept so a retry does not create another. |
 | `zapmizer_unavailable` | 503 | Zapmizer is down or misbehaving — back off and retry. |
 | `partner_unauthorized` | 503 | Your partner credentials were refused — configuration error, logged. |
+| `no_connectable` | 403 | The resolver found nothing to connect on this request (no user, a user without a team). |
 
 `booting` (202) reuses the instance Zapmizer reports as booting (`bot_instance_id` in its 423 body): it is stored right away, so the retry polls it instead of creating a second one.
 
@@ -232,12 +237,13 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;      // b
 use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;   // partner key refused (renders 503 partner_unauthorized)
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;  // timeout / 5xx (renders 503 zapmizer_unavailable)
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException; // team token revoked (401)
+use NotificationChannels\Zapmizer\Exceptions\NoConnectableException;        // resolver has nothing to connect (renders 403 no_connectable)
 use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;         // instance deleted (4xx)
 use NotificationChannels\Zapmizer\Exceptions\InstanceBootingException;      // 423 (`$instanceId` when Zapmizer names the booting instance)
 use NotificationChannels\Zapmizer\Exceptions\InstancePlanLimitException;    // 402
 ```
 
-The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceClient`) are container-bound with an injected Guzzle client, like `VerificationClient` — swap `GuzzleHttp\Client` in the container to fake them in tests. `InstanceClient` always acts for one connection: its token is mandatory, there is no fallback to `zapmizer.api_token` — get it through `$connection->instanceClient()`.
+The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceClient`) are container-bound with an injected Guzzle client, like `VerificationClient` — swap `GuzzleHttp\Client` in the container to fake them in tests. Every client sends `Accept: application/json` and does **not** follow redirects: a revoked token makes Zapmizer redirect to its login page, and a redirect or a non-JSON answer is an exception (`unexpectedResponse`) instead of a silent "success". `InstanceClient` always acts for one connection: its token is mandatory, there is no fallback to `zapmizer.api_token` — get it through `$connection->instanceClient()`.
 
 ## Customization summary
 

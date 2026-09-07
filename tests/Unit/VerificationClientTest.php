@@ -17,6 +17,7 @@ use NotificationChannels\Zapmizer\VerificationClient;
 use NotificationChannels\Zapmizer\VerificationResult;
 use NotificationChannels\Zapmizer\VerificationSession;
 use NotificationChannels\Zapmizer\VerificationStatus;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class VerificationClientTest extends TestCase
 {
@@ -246,5 +247,38 @@ class VerificationClientTest extends TestCase
 
         $this->assertEquals('config-token', app(VerificationClient::class)->getToken());
         $this->assertEquals('runtime-token', app(VerificationClient::class, ['api_token' => 'runtime-token'])->getToken());
+    }
+
+    /**
+     * A revoked token makes Zapmizer redirect to its login page; followed,
+     * the HTML 200 would be decoded as garbage. Redirects are refused first.
+     */
+    #[DataProvider('nonApiAnswers')]
+    public function testRefusesAnAnswerThatIsNotJson(Response $response)
+    {
+        $client = $this->makeClient(new MockHandler([$response]));
+
+        $this->expectException(ZapmizerVerificationException::class);
+
+        $client->pending('5511999999999');
+    }
+
+    public static function nonApiAnswers(): array
+    {
+        return [
+            'redirect to login' => [new Response(302, ['Location' => 'http://localhost/login'], '')],
+            'html page' => [new Response(200, ['Content-Type' => 'text/html'], '<html>login</html>')],
+        ];
+    }
+
+    public function testDoesNotFollowRedirects()
+    {
+        $client = $this->makeClient(new MockHandler([
+            new Response(200, [], json_encode(['pending' => true])),
+        ]));
+
+        $client->pending('5511999999999');
+
+        $this->assertFalse($this->history[0]['options']['allow_redirects']);
     }
 }

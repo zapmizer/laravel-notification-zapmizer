@@ -130,10 +130,15 @@ class ZapmizerServiceProvider extends ServiceProvider
                 __DIR__ . '/../config/zapmizer.php' => config_path('zapmizer.php'),
             ], 'config');
 
+            // One tag per flow, so an app publishes only the table it uses;
+            // `migrations` still publishes both (compat).
             $this->publishes([
                 __DIR__ . '/../database/migrations/create_whatsapp_verifieds_table.php.stub' => database_path('migrations/' . date('Y_m_d_His') . '_create_whatsapp_verifieds_table.php'),
+            ], ['migrations', 'zapmizer-migrations-verify']);
+
+            $this->publishes([
                 __DIR__ . '/../database/migrations/create_zapmizer_connections_table.php.stub' => database_path('migrations/' . date('Y_m_d_His', time() + 1) . '_create_zapmizer_connections_table.php'),
-            ], 'migrations');
+            ], ['migrations', 'zapmizer-migrations-connect']);
 
             $this->publishes([
                 __DIR__ . '/../resources/views' => resource_path('views/vendor/zapmizer'),

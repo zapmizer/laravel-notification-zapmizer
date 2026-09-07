@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Log;
 use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
+use NotificationChannels\Zapmizer\Support\JsonResponse;
 use Psr\Http\Message\ResponseInterface;
 
 /**
@@ -92,6 +93,9 @@ class PartnerClient
         }
 
         $options['http_errors'] = false;
+        // Redirects are not followed: a refused credential redirects to the
+        // login page, and following it would pass an HTML 200 off as an answer.
+        $options['allow_redirects'] = false;
         $options['headers'] = array_merge($options['headers'] ?? [], [
             'Accept' => 'application/json',
             'X-Partner-Key' => "{$this->partnerId}|{$this->partnerSecret}",
@@ -105,6 +109,10 @@ class PartnerClient
 
         if ($response->getStatusCode() >= 500) {
             throw ZapmizerUnavailableException::dueTo();
+        }
+
+        if (($problem = JsonResponse::problem($response, sniffBody: false)) !== null && $response->getStatusCode() < 400) {
+            throw ZapmizerConnectException::unexpectedResponse($problem);
         }
 
         return $response;

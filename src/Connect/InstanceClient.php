@@ -10,6 +10,7 @@ use NotificationChannels\Zapmizer\Exceptions\InstancePlanLimitException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
+use NotificationChannels\Zapmizer\Support\JsonResponse;
 use Psr\Http\Message\ResponseInterface;
 
 /**
@@ -193,6 +194,9 @@ class InstanceClient
     protected function request(string $method, string $path, array $options = []): ResponseInterface
     {
         $options['http_errors'] = false;
+        // Redirects are not followed: a refused credential redirects to the
+        // login page, and following it would pass an HTML 200 off as an answer.
+        $options['allow_redirects'] = false;
         $options['headers'] = array_merge($options['headers'] ?? [], array_filter([
             'Authorization' => 'Bearer ' . $this->token,
             'Accept' => 'application/json',
@@ -207,6 +211,10 @@ class InstanceClient
 
         if ($response->getStatusCode() >= 500) {
             throw ZapmizerUnavailableException::dueTo();
+        }
+
+        if (($problem = JsonResponse::problem($response, sniffBody: false)) !== null && $response->getStatusCode() < 400) {
+            throw ZapmizerConnectException::unexpectedResponse($problem);
         }
 
         return $response;

@@ -14,6 +14,7 @@ use NotificationChannels\Zapmizer\InboundMessage;
 use NotificationChannels\Zapmizer\Models\WhatsappVerified;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
 use NotificationChannels\Zapmizer\Support\PhoneNumber;
+use NotificationChannels\Zapmizer\Support\TableExists;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -140,13 +141,16 @@ class WebhookController extends Controller
     }
 
     /**
-     * Find the verification the payload refers to, by phone number.
+     * Find the verification the payload refers to, by phone number. An
+     * application that never published the verify migration (connect only)
+     * has nothing to find — and, `verify_number.*` being accepted unsigned,
+     * a forged delivery must not turn into a 500 on a missing table.
      */
     protected function findVerification(array $payload): ?WhatsappVerified
     {
         $candidates = $this->numberCandidates((string) ($payload['data']['number'] ?? ''));
 
-        if ($candidates === []) {
+        if ($candidates === [] || !TableExists::for(new ($this->verificationModel()))) {
             return null;
         }
 

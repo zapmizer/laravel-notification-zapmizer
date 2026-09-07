@@ -193,4 +193,20 @@ class InstanceClientTest extends TestCase
             }
         }
     }
+
+    public function testARedirectIsRefusedInsteadOfFollowed()
+    {
+        $client = $this->makeClient(new MockHandler([
+            new Response(302, ['Location' => 'http://localhost/login'], ''),
+        ]));
+
+        try {
+            $client->instances();
+            $this->fail('Expected ZapmizerConnectException.');
+        } catch (ZapmizerConnectException $exception) {
+            $this->assertStringContainsString('302', $exception->getMessage());
+        }
+
+        $this->assertFalse($this->history[0]['options']['allow_redirects']);
+    }
 }

@@ -55,21 +55,18 @@ class ZapmizerConnectException extends Exception
      * the future, or an instance on Meta Cloud — there is no media endpoint
      * for those. The request will not do better on a retry.
      */
-    public static function mediaRejected(string $reason): self
+    public static function mediaRejected(string $reason): MediaRejectedException
     {
-        return new self("Zapmizer rejected the media request: {$reason}");
+        return new MediaRejectedException($reason);
     }
 
     /**
      * Thrown when the media endpoint's rate limit was hit (429): 60 requests
      * a minute per user and instance. Retry after the given seconds.
      */
-    public static function mediaRateLimited(?int $retryAfterSeconds = null): self
+    public static function mediaRateLimited(?int $retryAfterSeconds = null): MediaRateLimitedException
     {
-        return new self(
-            'Zapmizer rate-limited the media request (60 a minute per user and instance).'
-            . ($retryAfterSeconds !== null ? " Retry in {$retryAfterSeconds} s." : '')
-        );
+        return new MediaRateLimitedException($retryAfterSeconds);
     }
 
     /**

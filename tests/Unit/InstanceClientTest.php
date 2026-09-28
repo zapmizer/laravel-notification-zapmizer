@@ -12,6 +12,8 @@ use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Connect\InstanceConnection;
 use NotificationChannels\Zapmizer\Connect\MediaDownload;
 use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;
+use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;
+use NotificationChannels\Zapmizer\Exceptions\MediaRejectedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
@@ -176,16 +178,19 @@ class InstanceClientTest extends TestCase
 
         try {
             $client->media(9, 'ABC', 1700000000);
-            $this->fail('expected a ZapmizerConnectException');
+            $this->fail('expected a MediaRejectedException');
         } catch (ZapmizerConnectException $exception) {
+            $this->assertInstanceOf(MediaRejectedException::class, $exception);
+            $this->assertStringStartsWith('The timestamp must be a date before or equal to now.', $exception->reason());
             $this->assertStringContainsString('rejected the media request', $exception->getMessage());
             $this->assertStringContainsString('before or equal to now', $exception->getMessage());
         }
 
         try {
             $client->media(9, 'ABC', 1700000000);
-            $this->fail('expected a ZapmizerConnectException');
-        } catch (ZapmizerConnectException $exception) {
+            $this->fail('expected a MediaRejectedException');
+        } catch (MediaRejectedException $exception) {
+            $this->assertEquals('Media is not available for Meta Cloud instances.', $exception->reason());
             $this->assertStringContainsString('Meta Cloud', $exception->getMessage());
         }
     }
@@ -199,8 +204,10 @@ class InstanceClientTest extends TestCase
 
         try {
             $client->media(9, 'ABC', 1700000000);
-            $this->fail('expected a ZapmizerConnectException');
+            $this->fail('expected a MediaRateLimitedException');
         } catch (ZapmizerConnectException $exception) {
+            $this->assertInstanceOf(MediaRateLimitedException::class, $exception);
+            $this->assertSame(37, $exception->retryAfter());
             $this->assertStringContainsString('rate-limited', $exception->getMessage());
             $this->assertStringContainsString('60 a minute', $exception->getMessage());
             $this->assertStringContainsString('Retry in 37 s', $exception->getMessage());
@@ -208,8 +215,9 @@ class InstanceClientTest extends TestCase
 
         try {
             $client->media(9, 'ABC', 1700000000);
-            $this->fail('expected a ZapmizerConnectException');
-        } catch (ZapmizerConnectException $exception) {
+            $this->fail('expected a MediaRateLimitedException');
+        } catch (MediaRateLimitedException $exception) {
+            $this->assertNull($exception->retryAfter());
             $this->assertStringContainsString('rate-limited', $exception->getMessage());
             $this->assertStringNotContainsString('Retry in', $exception->getMessage());
         }

@@ -9,12 +9,12 @@ namespace NotificationChannels\Zapmizer\Connect;
  * only two responses that carry the secret. Whoever calls must persist it:
  * there is no way to read it back later.
  */
-final readonly class WebhookRegistration
+final class WebhookRegistration
 {
     public function __construct(
-        public ?int $id,
-        public ?string $secret,
-        public ?string $previousSecret = null,
+        public readonly ?int $id,
+        public readonly ?string $secret,
+        public readonly ?string $previousSecret = null,
     ) {
     }
 

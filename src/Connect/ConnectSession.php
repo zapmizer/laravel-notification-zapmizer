@@ -11,11 +11,11 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
  * An authorization session created on Zapmizer: `url` is the hosted page the
  * popup opens, where the end user picks the team to connect.
  */
-final readonly class ConnectSession implements JsonSerializable
+final class ConnectSession implements JsonSerializable
 {
     public function __construct(
-        public string $url,
-        public ?string $expiresAt = null,
+        public readonly string $url,
+        public readonly ?string $expiresAt = null,
     ) {
     }
 

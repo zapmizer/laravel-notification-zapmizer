@@ -252,6 +252,8 @@ class VerificationClientTest extends TestCase
     /**
      * A revoked token makes Zapmizer redirect to its login page; followed,
      * the HTML 200 would be decoded as garbage. Redirects are refused first.
+     *
+     * @dataProvider nonApiAnswers
      */
     #[DataProvider('nonApiAnswers')]
     public function testRefusesAnAnswerThatIsNotJson(Response $response)

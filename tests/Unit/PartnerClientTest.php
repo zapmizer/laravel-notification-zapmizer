@@ -65,6 +65,7 @@ class PartnerClientTest extends TestCase
         $this->assertEquals(['redirect_uri' => 'http://app.test/cb', 'state' => 'state'], json_decode((string) $this->history[0]['request']->getBody(), true));
     }
 
+    /** @dataProvider expiresIn */
     #[DataProvider('expiresIn')]
     public function testCreateSessionNeverAsksForLessThanZapmizerAllows(int $requested, int $sent)
     {
@@ -132,6 +133,7 @@ class PartnerClientTest extends TestCase
         $this->assertNull($client->exchangeCode('bad'));
     }
 
+    /** @dataProvider credentialFailures */
     #[DataProvider('credentialFailures')]
     public function testRefusedPartnerKeyBecomesTypedExceptionAndIsLogged(int $status)
     {

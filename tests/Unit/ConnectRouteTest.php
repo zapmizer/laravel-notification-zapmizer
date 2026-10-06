@@ -151,9 +151,9 @@ class ConnectRouteTest extends TestCase
         $response = $this->getJson(route('zapmizer.connect.show'))->assertOk();
         $response->assertJsonPath('connection.is_active', false);
         $response->assertJsonPath('connection.api_token_masked', '••••oken');
-        $response->assertJsonMissingPath('connection.api_token');
+        $this->assertArrayNotHasKey('api_token', $response->json('connection'));
         // Without `live` nothing reaches Zapmizer and nothing live is claimed.
-        $response->assertJsonMissingPath('connection.state');
+        $this->assertArrayNotHasKey('state', $response->json('connection'));
         $this->assertCount(0, $this->history);
     }
 
@@ -168,8 +168,8 @@ class ConnectRouteTest extends TestCase
         $response->assertJsonPath('connection.is_online', true);
         $response->assertJsonPath('connection.phone_number', '5581911110000');
         $response->assertJsonPath('connection.is_active', true);
-        $response->assertJsonMissingPath('connection.api_token');
-        $response->assertJsonMissingPath('connection.webhook_secret');
+        $this->assertArrayNotHasKey('api_token', $response->json('connection'));
+        $this->assertArrayNotHasKey('webhook_secret', $response->json('connection'));
 
         $request = $this->history[0]['request'];
         $this->assertEquals('http://zap.test/api/bot-instances/9/connection', (string) $request->getUri());
@@ -192,6 +192,7 @@ class ConnectRouteTest extends TestCase
         $this->assertCount(0, $this->history);
     }
 
+    /** @dataProvider liveFailures */
     #[DataProvider('liveFailures')]
     public function testShowLiveNamesTheFailureAsAState(Response $response, string $state)
     {
@@ -241,6 +242,7 @@ class ConnectRouteTest extends TestCase
         $this->assertEquals('partner-id|partner-secret', $this->history[0]['request']->getHeaderLine('X-Partner-Key'));
     }
 
+    /** @dataProvider credentialFailures */
     #[DataProvider('credentialFailures')]
     public function testStartAnswersAStableCodeWhenThePartnerKeyIsRefused(int $status)
     {
@@ -372,6 +374,7 @@ class ConnectRouteTest extends TestCase
         $this->assertEquals('Bearer 1|sanctum', $rotate->getHeaderLine('Authorization'));
     }
 
+    /** @dataProvider rotationFailures */
     #[DataProvider('rotationFailures')]
     public function testCallbackDeactivatesWhenTheSecretCannotBeObtained(Response $failure)
     {
@@ -539,6 +542,29 @@ class ConnectRouteTest extends TestCase
         $this->assertEquals(1, ZapmizerConnection::count());
     }
 
+    public function testCallbackRefusesATeamConnectedElsewhereBetweenTheCheckAndTheSave()
+    {
+        $this->fakeHttp(new Response(200, [], $this->tokenPayload(['token' => '2|sanctum'])));
+        $this->actingAsUser();
+        $raced = false;
+        ZapmizerConnection::creating(function () use (&$raced) {
+            if ($raced) {
+                return;
+            }
+
+            $raced = true;
+            Team::create(['name' => 'Other'])->zapmizerConnection()->create(['api_token' => 'other-token', 'zapmizer_team_id' => 7, 'is_active' => true]);
+        });
+
+        $this->withSession($this->pendingSession())
+            ->get(route('zapmizer.connect.callback', ['code' => 'c', 'state' => 's']))
+            ->assertOk()
+            ->assertSee('status: "team_already_connected"', false);
+
+        $this->assertNull($this->team()->zapmizerConnection);
+        $this->assertEquals(1, ZapmizerConnection::count());
+    }
+
     public function testCallbackRefusesSwitchingToATeamConnectedElsewhere()
     {
         $this->fakeHttp(new Response(200, [], $this->tokenPayload(['token' => '2|sanctum', 'team_id' => 8, 'team_name' => 'Other'])));
@@ -559,6 +585,7 @@ class ConnectRouteTest extends TestCase
         $this->assertCount(1, $this->history);
     }
 
+    /** @dataProvider exchangeFailures */
     #[DataProvider('exchangeFailures')]
     public function testCallbackNeverAnswersA500ToThePopup(Response $response)
     {
@@ -599,6 +626,7 @@ class ConnectRouteTest extends TestCase
         $this->assertCount(0, $this->history);
     }
 
+    /** @dataProvider invalidStates */
     #[DataProvider('invalidStates')]
     public function testCallbackRefusesABadState(array $session, array $query, string $status)
     {

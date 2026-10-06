@@ -69,6 +69,7 @@ class WebhookSignatureTest extends TestCase
         Event::assertDispatched(WebhookHandled::class, fn (WebhookHandled $event) => $event->connection->is($connection));
     }
 
+    /** @dataProvider messageVariants */
     #[DataProvider('messageVariants')]
     public function testMessageVariantsAreTranslated(string $from, array $overrides, callable $assert)
     {
@@ -193,6 +194,7 @@ class WebhookSignatureTest extends TestCase
         Event::assertDispatched(WebhookReceived::class, fn (WebhookReceived $event) => $event->connection === null);
     }
 
+    /** @dataProvider unsignedNonVerifyEvents */
     #[DataProvider('unsignedNonVerifyEvents')]
     public function testOnlyVerifyNumberPassesUnsigned(array $envelope)
     {

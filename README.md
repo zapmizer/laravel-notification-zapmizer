@@ -1,4 +1,4 @@
-# Zapmizer WhatsApp notification channel for Laravel 11
+# Zapmizer WhatsApp notification channel for Laravel 8 to 13
 
 ## Installation
 

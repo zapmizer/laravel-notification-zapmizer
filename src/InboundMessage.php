@@ -14,7 +14,7 @@ use NotificationChannels\Zapmizer\Support\PhoneNumber;
  * object. Reading the raw array in three different places is how its shape
  * gets misread.
  */
-final readonly class InboundMessage
+final class InboundMessage
 {
     /**
      * `from` is who the chat is with: the person in a DM, the group in a
@@ -27,22 +27,22 @@ final readonly class InboundMessage
      * @param array<string, mixed> $raw The whatsapp-web.js Message object.
      */
     public function __construct(
-        public string $id,
-        public string $from,
-        public string $fromPhone,
-        public ?string $to,
-        public ?string $body,
-        public string $type,
-        public bool $hasMedia,
-        public ?array $mediaMetadata,
-        public bool $isGroup,
-        public bool $fromMe,
-        public bool $hasUnresolvedSender,
-        public Carbon $sentAt,
-        public ?string $author = null,
-        public string $authorPhone = '',
-        public bool $isBroadcast = false,
-        public array $raw = [],
+        public readonly string $id,
+        public readonly string $from,
+        public readonly string $fromPhone,
+        public readonly ?string $to,
+        public readonly ?string $body,
+        public readonly string $type,
+        public readonly bool $hasMedia,
+        public readonly ?array $mediaMetadata,
+        public readonly bool $isGroup,
+        public readonly bool $fromMe,
+        public readonly bool $hasUnresolvedSender,
+        public readonly Carbon $sentAt,
+        public readonly ?string $author = null,
+        public readonly string $authorPhone = '',
+        public readonly bool $isBroadcast = false,
+        public readonly array $raw = [],
     ) {
     }
 

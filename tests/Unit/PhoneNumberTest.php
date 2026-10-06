@@ -24,6 +24,7 @@ class PhoneNumberTest extends TestCase
         ];
     }
 
+    /** @dataProvider normalizationCases */
     #[DataProvider('normalizationCases')]
     public function testNormalizeCompletesCountryCodeAndDropsCarrierZero(?string $typed, string $expected)
     {
@@ -77,6 +78,7 @@ class PhoneNumberTest extends TestCase
         ];
     }
 
+    /** @dataProvider nonMobileCases */
     #[DataProvider('nonMobileCases')]
     public function testVariantsNeverInventAMobileFromALandline(string $number)
     {

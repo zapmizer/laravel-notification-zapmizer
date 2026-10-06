@@ -4,6 +4,7 @@ namespace NotificationChannels\Zapmizer\Http\Controllers;
 
 use Illuminate\Contracts\View\View;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\QueryException;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -210,7 +211,11 @@ class ConnectController extends Controller
 
         try {
             $connection->save();
-        } catch (UniqueConstraintViolationException) {
+        } catch (QueryException $exception) {
+            if (!$this->isUniqueViolation($exception)) {
+                throw $exception;
+            }
+
             // Lost the race with another connectable authorizing the same
             // team between the check above and this insert.
             return $this->result('team_already_connected');
@@ -316,6 +321,15 @@ class ConnectController extends Controller
             ->where('zapmizer_team_id', $teamId)
             ->when($connection->exists, fn ($query) => $query->whereKeyNot($connection->getKey()))
             ->exists();
+    }
+
+    protected function isUniqueViolation(QueryException $exception): bool
+    {
+        $message = ($exception->getPrevious() ?? $exception)->getMessage();
+
+        return $exception instanceof UniqueConstraintViolationException
+            || $exception->getCode() === '23505'
+            || preg_match('#Integrity constraint violation: 1062|UNIQUE constraint failed: |column(s)? .* (is|are) not unique|Cannot insert duplicate key(?: row)? in object#i', $message) === 1;
     }
 
     protected function validState(mixed $pending, string $state, Model $connectable): bool

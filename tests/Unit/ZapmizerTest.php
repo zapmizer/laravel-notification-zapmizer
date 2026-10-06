@@ -58,6 +58,8 @@ class ZapmizerTest extends TestCase
     /**
      * A revoked token makes Zapmizer redirect to its login page. Followed,
      * that is an HTML 200 — and a message silently lost.
+     *
+     * @dataProvider nonApiAnswers
      */
     #[DataProvider('nonApiAnswers')]
     public function testSendMessageRefusesAnAnswerThatIsNotJson(Response $response)
@@ -69,6 +71,7 @@ class ZapmizerTest extends TestCase
         $client->sendMessage($this->params());
     }
 
+    /** @dataProvider nonApiAnswers */
     #[DataProvider('nonApiAnswers')]
     public function testSendMessageWithFileRefusesAnAnswerThatIsNotJson(Response $response)
     {

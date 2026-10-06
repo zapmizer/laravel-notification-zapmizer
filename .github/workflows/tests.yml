@@ -1,0 +1,72 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Laravel ${{ matrix.laravel }} / PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - laravel: 8
+            php: '8.1'
+            testbench: '^6.48'
+          - laravel: 9
+            php: '8.1'
+            testbench: '^7.58'
+          - laravel: 10
+            php: '8.1'
+            testbench: '^8.18'
+          - laravel: 10
+            php: '8.2'
+            testbench: '^8.18'
+          - laravel: 11
+            php: '8.3'
+            testbench: '^9.0'
+          - laravel: 12
+            php: '8.3'
+            testbench: '^10.0'
+          - laravel: 13
+            php: '8.3'
+            testbench: '^11.0'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: pdo_sqlite
+          coverage: none
+
+      - name: Install dependencies
+        env:
+          COMPOSER_NO_SECURITY_BLOCKING: 1
+        run: composer update --no-interaction --no-progress --with "orchestra/testbench:${{ matrix.testbench }}"
+
+      - name: Run tests
+        run: vendor/bin/phpunit
+
+  boot-php80:
+    name: Boot path parses on PHP 8.0
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.0'
+          coverage: none
+
+      - name: Lint
+        run: |
+          for file in src/ZapmizerServiceProvider.php src/Console/SendMessage.php src/Http/Controllers/VerifyNumberController.php routes/web.php routes/webhook.php config/zapmizer.php src/Connectable.php src/MustVerifyWhatsapp.php src/Contracts/Connectable.php src/Contracts/MustVerifyWhatsapp.php; do
+            php -l "$file"
+          done

@@ -17,16 +17,16 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
  * ever handed out once, on creation): a null secret with a non-null id
  * means "rotate to get one".
  */
-final readonly class ConnectToken
+final class ConnectToken
 {
     public function __construct(
-        public string $token,
-        public ?int $teamId = null,
-        public ?string $teamName = null,
-        public ?string $phoneNumber = null,
-        public ?int $botInstanceId = null,
-        public ?int $webhookId = null,
-        public ?string $webhookSecret = null,
+        public readonly string $token,
+        public readonly ?int $teamId = null,
+        public readonly ?string $teamName = null,
+        public readonly ?string $phoneNumber = null,
+        public readonly ?int $botInstanceId = null,
+        public readonly ?int $webhookId = null,
+        public readonly ?string $webhookSecret = null,
     ) {
     }
 

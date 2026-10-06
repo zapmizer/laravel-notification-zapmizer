@@ -13,18 +13,18 @@ use JsonSerializable;
  * mirrored — pairing happens on Zapmizer's hosted page, so the package
  * never renders them.
  */
-final readonly class InstanceConnection implements JsonSerializable
+final class InstanceConnection implements JsonSerializable
 {
     public function __construct(
-        public int $id,
-        public string $state,
-        public string $stateLabel = '',
-        public bool $isOnline = false,
-        public bool $isUp = false,
-        public ?string $qrcode = null,
-        public ?string $qrcodeAvailableAt = null,
-        public ?string $qrcodeExpiresAt = null,
-        public ?string $number = null,
+        public readonly int $id,
+        public readonly string $state,
+        public readonly string $stateLabel = '',
+        public readonly bool $isOnline = false,
+        public readonly bool $isUp = false,
+        public readonly ?string $qrcode = null,
+        public readonly ?string $qrcodeAvailableAt = null,
+        public readonly ?string $qrcodeExpiresAt = null,
+        public readonly ?string $number = null,
     ) {
     }
 

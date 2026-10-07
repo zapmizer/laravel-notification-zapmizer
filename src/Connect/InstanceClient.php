@@ -122,6 +122,24 @@ class InstanceClient
     }
 
     /**
+     * @throws ZapmizerConnectException
+     */
+    public function revokeToken(): void
+    {
+        $response = $this->request('DELETE', '/connect/token', expectsJson: false);
+
+        $status = $response->getStatusCode();
+
+        if ($status === 204 || $status === 401) {
+            return;
+        }
+
+        $this->guardFailure($response);
+
+        throw ZapmizerConnectException::unexpectedResponse("HTTP {$status} on the token revocation endpoint");
+    }
+
+    /**
      * Register a webhook receiver. Zapmizer returns the `secret` ONLY in this
      * response — the caller must persist it.
      *

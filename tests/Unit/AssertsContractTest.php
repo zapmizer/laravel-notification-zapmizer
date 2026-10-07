@@ -85,6 +85,16 @@ class AssertsContractTest extends TestCase
         );
     }
 
+    public function testADeclaredResponseWithoutBodyOnlyChecksTheStatus()
+    {
+        $this->assertMatchesContract('DELETE', '/connect/token', 204, '');
+
+        $this->assertContractRefuses(
+            fn () => $this->assertMatchesContract('DELETE', '/connect/token', 200, ''),
+            'does not declare a 200 response',
+        );
+    }
+
     public function testADeclaredRetryAfterIsRequired()
     {
         $this->assertMatchesContract('POST', '/connect/sessions', 429, '{"message":"Too Many Attempts."}', ['retry-after' => '12']);

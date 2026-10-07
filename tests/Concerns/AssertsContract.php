@@ -55,6 +55,12 @@ trait AssertsContract
             }
         }
 
+        if (!isset($response->content)) {
+            $this->addToAssertionCount(1);
+
+            return;
+        }
+
         if (!isset($response->content->{'application/json'}->schema)) {
             $this->fail(sprintf('The %d response of %s %s has no application/json body in the contract snapshot.', $status, strtoupper($method), $pathTemplate));
         }

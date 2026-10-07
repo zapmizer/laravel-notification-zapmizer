@@ -11,6 +11,7 @@ use GuzzleHttp\Psr7\Response;
 use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Connect\InstanceConnection;
 use NotificationChannels\Zapmizer\Connect\MediaDownload;
+use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
 use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;
 use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\MediaRejectedException;
@@ -29,7 +30,7 @@ class InstanceClientTest extends TestCase
         $stack = HandlerStack::create($mock);
         $stack->push(Middleware::history($this->history));
 
-        return new InstanceClient('team-token', new HttpClient(['handler' => $stack]), 'http://localhost/api', '2025-06-27');
+        return new InstanceClient('team-token', new GuzzleTransport(new HttpClient(['handler' => $stack])), 'http://localhost/api', '2025-06-27');
     }
 
     public function testConnectionMapsStates()

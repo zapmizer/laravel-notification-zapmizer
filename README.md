@@ -103,3 +103,65 @@ Event::listen(function (MessageReceived $event) {
 Bot events (`message`, ...) are only accepted signed. Single-tenant applications set `ZAPMIZER_WEBHOOK_SECRET` to the secret of the webhook they registered on Zapmizer; connected models store their own.
 
 **See [docs/connect.md](docs/connect.md) for the setup: partner credentials, the resolver, routes and statuses, the Vue stubs, the signed webhook and secret rotation. Requires Zapmizer 1.149.0 or later (hosted pairing); receiving media (`$connection->media($message)`) requires 1.150.0 or later.**
+
+## Examples
+
+See [examples/](examples/README.md) for app code that uses the package: faking calls in tests, a custom transport and storing inbound media. The examples run in this package's test suite.
+
+## HTTP transport
+
+`PartnerClient` and `InstanceClient` send their requests through a transport chosen in `config/zapmizer.php`:
+
+```php
+'http' => [
+    'transport' => \NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport::class,
+    'connect_timeout' => env('ZAPMIZER_HTTP_CONNECT_TIMEOUT'),
+    'timeout' => env('ZAPMIZER_HTTP_TIMEOUT'),
+],
+```
+
+The default is `GuzzleTransport`. Point it at `LaravelHttpTransport::class` to send through Laravel's `Http` client, so `Http::fake()`, `Http::preventStrayRequests()` (Laravel 9 and later) and `Http::globalMiddleware()` (Laravel 10 and later) see the calls.
+
+### Timeouts
+
+Both default to `null`: no limit with Guzzle, the `Http` client default with Laravel. Only a numeric value greater than zero counts; empty, `0` or non-numeric text counts as no value, that is, `null`. Do not use `0` for "no limit". We recommend `ZAPMIZER_HTTP_CONNECT_TIMEOUT=10` and `ZAPMIZER_HTTP_TIMEOUT=30`. These config values win over the timeout of a `GuzzleHttp\Client` you registered in the container.
+
+### Media downloads
+
+Media downloads ignore those timeouts: they use fixed limits of 60 s to connect and 600 s in total (`InstanceClient::MEDIA_CONNECT_TIMEOUT` / `MEDIA_TIMEOUT`). Without the `curl` extension, Guzzle falls back to its stream handler and the `timeout` applies per read instead. The body is written straight to a file (`sink`), so Telescope and any `ResponseReceived` listener that calls `body()` will load the whole media into memory. To change these limits, extend the transport and adjust the options it receives; the media call is the one that carries `sink`, or the URL `/whatsapp-messages/media`.
+
+If the temporary directory is not writable and `LaravelHttpTransport` has a global middleware that reads the body, the media `202`/`404` answers become `unexpectedResponse` and the `422` comes out with an empty reason. This is rare.
+
+### Your own transport
+
+Implement `NotificationChannels\Zapmizer\Contracts\Transport`:
+
+```php
+public function send(string $method, string $url, array $options = []): ResponseInterface;
+```
+
+The rules:
+
+- Options use Guzzle names: `headers`, `json`, `query`, `sink`, `stream`, `timeout`, `connect_timeout`.
+- Honor `sink` whenever it comes.
+- Never follow redirects. With a refused token Zapmizer redirects to the login page; followed, that becomes an HTML `200` and a message lost in silence.
+- Return any status; do not throw on 4xx or 5xx.
+- Throw `ZapmizerUnavailableException` when there is no response at all.
+- The constructor parameters `?float $connectTimeout` and `?float $timeout` receive the config values.
+
+Set the class in `zapmizer.http.transport`. If you register the class in the container yourself, the timeout config does not apply: whoever registered it defines its timeouts. Binding `Contracts\Transport` directly works too.
+
+An app that already published `config/zapmizer.php` with an `http` key and wants to switch transport must add `'transport' => ...` inside it: the package merges only the first level of the config, so the new key does not arrive by itself. Without it, the default `GuzzleTransport` is used.
+
+An invalid `zapmizer.http.transport` throws `InvalidArgumentException` when the transport is resolved: a class that does not implement `Contracts\Transport`, the interface itself, or a value that is not a string. `null` or an empty string fall back to `GuzzleTransport`.
+
+`GuzzleTransport` and `LaravelHttpTransport` are not `final`; extend either one.
+
+### Building a client by hand
+
+Resolve the clients from the container (`app(PartnerClient::class)`, `$connection->instanceClient()`) to get the configured transport. Built by hand, they take the transport as an argument; without one they use a plain `GuzzleTransport` and ignore the config:
+
+```php
+new PartnerClient($partnerId, $partnerSecret, $transport, $apiBaseUri);
+new InstanceClient($token, $transport, $apiBaseUri, $apiVersion);
+```

@@ -1,5 +1,28 @@
 # Changelog
 
+# Unreleased
+
+**Breaking** para quem constrói `PartnerClient` ou `InstanceClient` à mão: o argumento do `GuzzleHttp\Client` virou o do transporte. Quem resolve os clientes pelo container (`app(PartnerClient::class)`, `$connection->instanceClient()`) não muda nada.
+
+- **Transporte HTTP plugável.** `PartnerClient` e `InstanceClient` mandam as requisições por um transporte: `zapmizer.http.transport` nomeia uma classe que implementa `Contracts\Transport`. Vêm `GuzzleTransport` (padrão, com o `GuzzleHttp\Client` registrado no container) e `LaravelHttpTransport` (`Http::fake`, `preventStrayRequests`, middleware global).
+- Com o `LaravelHttpTransport`, o `getPrevious()` da `ZapmizerUnavailableException` pode mudar de classe conforme a versão do Laravel: uma exceção do `Http` do Laravel (`ConnectionException` etc.) ou, do Laravel 8 ao 11 em alguns casos (corpo cortado), a do Guzzle. É opt-in.
+- `zapmizer.http.connect_timeout` e `zapmizer.http.timeout` (`ZAPMIZER_HTTP_CONNECT_TIMEOUT`, `ZAPMIZER_HTTP_TIMEOUT`), `null` por padrão.
+- `illuminate/http` declarado como dependência.
+- Um app que já tinha `zapmizer.http.connect_timeout`/`timeout` na config agora aplica esses timeouts nas chamadas JSON de partner e instância.
+- O download de mídia grava direto no arquivo temporário (`sink`) com 60 s pra conectar e 600 s no total, no lugar do limite de 60 s por leitura e de qualquer timeout de um `GuzzleHttp\Client` registrado.
+- Um download de mídia cortado (erro de transporte, ou corpo menor que o `Content-Length` sem `Transfer-Encoding`) lança `ZapmizerUnavailableException` e não deixa arquivo. Antes lançava um `RuntimeException` cru, ou devolvia um `attached` truncado quando a conexão fechava limpa.
+- Com o diretório temporário sem escrita, uma resposta `200` de mídia lança `unexpectedResponse` (antes estourava `ErrorException`); os outros status seguem como antes.
+- Um header passado na chamada com o mesmo nome de `Accept`, `X-Partner-Key`, `Authorization` ou `api-version`, em qualquer caixa, é descartado; vale o valor fixo, em vez de concatenar.
+- Pasta `examples/` com código de app: teste com `Http::fake` via `LaravelHttpTransport`, um transporte próprio e um listener que guarda a mídia recebida num disk. Rodam na suíte do pacote.
+
+**Upgrade da 0.3:**
+
+- `new PartnerClient($id, $secret, $guzzle, $uri)` → `new PartnerClient($id, $secret, new GuzzleTransport($guzzle), $uri)`.
+- `new InstanceClient($token, $guzzle, $uri, $version)` → `new InstanceClient($token, new GuzzleTransport($guzzle), $uri, $version)`.
+- `null` nessa posição continua valendo (um `GuzzleTransport` novo, sem a config); um `GuzzleHttp\Client` ali agora lança `TypeError`. Construído à mão, o cliente não lê `zapmizer.http.*`: para isso, resolva pelo container ou passe `app(Contracts\Transport::class)`.
+- Subclasses: a propriedade `$http` e `InstanceClient::spool()` não existem mais; as chamadas passam pelo `$transport`.
+- Quem publicou `config/zapmizer.php` com a chave `http` e quer trocar de transporte precisa acrescentar `'transport' => ...` dentro dela: o merge da config é só no primeiro nível.
+
 # 0.3.1
 
 Sem breaking.

@@ -3,6 +3,7 @@
 namespace NotificationChannels\Zapmizer;
 
 use Illuminate\Support\Str;
+use InvalidArgumentException;
 use GuzzleHttp\Client as HttpClient;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Notifications\ChannelManager;
@@ -12,7 +13,9 @@ use Illuminate\Support\Facades\Route;
 use Illuminate\Contracts\Foundation\Application;
 use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Connect\PartnerClient;
+use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
 use NotificationChannels\Zapmizer\Contracts\ResolvesConnectable;
+use NotificationChannels\Zapmizer\Contracts\Transport;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 
 class ZapmizerServiceProvider extends ServiceProvider
@@ -36,23 +39,20 @@ class ZapmizerServiceProvider extends ServiceProvider
             Arr::get($config, 'api_version', config('zapmizer.api_version'))
         ));
 
-        // Connect flow: the partner client speaks for the application, the
-        // instance client for one connected model (token passed at resolve
-        // time — see ZapmizerConnection::instanceClient()).
+        $this->app->bindIf(Transport::class, fn (Application $app) => $this->makeTransport($app));
+
         $this->app->bind(PartnerClient::class, fn (Application $app, $config) => new PartnerClient(
             Arr::get($config, 'partner_id', config('zapmizer.partner.id')),
             Arr::get($config, 'partner_secret', config('zapmizer.partner.secret')),
-            app(HttpClient::class),
+            $app->make(Transport::class),
             Arr::get($config, 'base_uri', config('zapmizer.base_uri'))
         ));
 
-        // No fallback to the single-tenant token here: the instance client
-        // always acts for ONE connection (ZapmizerConnection::instanceClient()).
         $this->app->bind(InstanceClient::class, fn (Application $app, $config) => new InstanceClient(
             Arr::get($config, 'api_token') ?? throw new ZapmizerUnauthorizedException(
                 'InstanceClient needs the connection token — resolve it through ZapmizerConnection::instanceClient().'
             ),
-            app(HttpClient::class),
+            $app->make(Transport::class),
             Arr::get($config, 'base_uri', config('zapmizer.base_uri')),
             Arr::get($config, 'api_version', config('zapmizer.api_version'))
         ));
@@ -163,6 +163,37 @@ class ZapmizerServiceProvider extends ServiceProvider
         $this->commands([
             Console\SendMessage::class,
         ]);
+    }
+
+    protected function makeTransport(Application $app): Transport
+    {
+        $class = config('zapmizer.http.transport');
+
+        if ($class === null || $class === '') {
+            $class = GuzzleTransport::class;
+        }
+
+        if (!is_string($class) || $class === Transport::class || !is_a($class, Transport::class, true)) {
+            throw new InvalidArgumentException(sprintf(
+                'zapmizer.http.transport must name a class implementing %s, got %s.',
+                Transport::class,
+                is_string($class) ? $class : get_debug_type($class),
+            ));
+        }
+
+        if ($app->bound($class)) {
+            return $app->make($class);
+        }
+
+        return $app->make($class, array_filter([
+            'connectTimeout' => $this->seconds(config('zapmizer.http.connect_timeout')),
+            'timeout' => $this->seconds(config('zapmizer.http.timeout')),
+        ], fn ($value) => $value !== null));
+    }
+
+    protected function seconds(mixed $value): ?float
+    {
+        return is_numeric($value) && (float) $value > 0 ? (float) $value : null;
     }
 
     /**

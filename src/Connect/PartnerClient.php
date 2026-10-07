@@ -3,12 +3,13 @@
 namespace NotificationChannels\Zapmizer\Connect;
 
 use GuzzleHttp\Client as HttpClient;
-use GuzzleHttp\Exception\GuzzleException;
 use Illuminate\Support\Facades\Log;
+use NotificationChannels\Zapmizer\Connect\Concerns\UsesTransport;
+use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
+use NotificationChannels\Zapmizer\Contracts\Transport;
 use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
-use NotificationChannels\Zapmizer\Support\JsonResponse;
 use Psr\Http\Message\ResponseInterface;
 
 /**
@@ -27,7 +28,11 @@ class PartnerClient
      */
     public const MIN_EXPIRES_IN = 900;
 
+    use UsesTransport;
+
     protected HttpClient $http;
+
+    protected Transport $transport;
 
     protected string $apiBaseUri;
 
@@ -36,8 +41,10 @@ class PartnerClient
         protected ?string $partnerSecret = null,
         ?HttpClient $httpClient = null,
         ?string $apiBaseUri = null,
+        ?Transport $transport = null,
     ) {
-        $this->http = $httpClient ?? new HttpClient();
+        $this->transport = $transport ?? new GuzzleTransport($httpClient ?? new HttpClient());
+        $this->http = $this->transport instanceof GuzzleTransport ? $this->transport->client() : ($httpClient ?? new HttpClient());
         $this->apiBaseUri = rtrim($apiBaseUri ?? 'https://app.zapmizer.com/api/', '/');
     }
 
@@ -93,39 +100,15 @@ class PartnerClient
         return ConnectToken::fromArray($this->decode($response));
     }
 
-    /**
-     * @throws ZapmizerConnectException
-     */
     protected function request(string $method, string $path, array $options = []): ResponseInterface
     {
         if (blank($this->partnerId) || blank($this->partnerSecret)) {
             throw ZapmizerConnectException::partnerCredentialsNotProvided();
         }
 
-        $options['http_errors'] = false;
-        // Redirects are not followed: a refused credential redirects to the
-        // login page, and following it would pass an HTML 200 off as an answer.
-        $options['allow_redirects'] = false;
-        $options['headers'] = array_merge($options['headers'] ?? [], [
-            'Accept' => 'application/json',
+        return (new ZapmizerApi($this->currentTransport()))->send($method, $this->apiBaseUri . $path, $options, [
             'X-Partner-Key' => "{$this->partnerId}|{$this->partnerSecret}",
         ]);
-
-        try {
-            $response = $this->http->request($method, $this->apiBaseUri . $path, $options);
-        } catch (GuzzleException $exception) {
-            throw ZapmizerUnavailableException::dueTo($exception);
-        }
-
-        if ($response->getStatusCode() >= 500) {
-            throw ZapmizerUnavailableException::dueTo();
-        }
-
-        if (($problem = JsonResponse::problem($response, sniffBody: false)) !== null && $response->getStatusCode() < 400) {
-            throw ZapmizerConnectException::unexpectedResponse($problem);
-        }
-
-        return $response;
     }
 
     /**

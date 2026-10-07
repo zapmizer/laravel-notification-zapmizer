@@ -1,5 +1,23 @@
 # Changelog
 
+# Unreleased
+
+Sem breaking para quem usa o pacote direto; há mudanças para quem estende os clientes.
+
+- **Transporte HTTP plugável.** `PartnerClient` e `InstanceClient` mandam as requisições por um transporte: `zapmizer.http.transport` nomeia uma classe que implementa `Contracts\Transport`. Vêm `GuzzleTransport` (padrão) e `LaravelHttpTransport` (`Http::fake`, `preventStrayRequests`, middleware global).
+- Com o `LaravelHttpTransport`, o `getPrevious()` da `ZapmizerUnavailableException` passa a ser uma exceção do `Http` do Laravel (`ConnectionException` etc.) em vez da do Guzzle. É opt-in.
+- `zapmizer.http.connect_timeout` e `zapmizer.http.timeout` (`ZAPMIZER_HTTP_CONNECT_TIMEOUT`, `ZAPMIZER_HTTP_TIMEOUT`), `null` por padrão.
+- `illuminate/http` declarado como dependência.
+- Um app que já tinha `zapmizer.http.connect_timeout`/`timeout` na config agora aplica esses timeouts nas chamadas JSON de partner e instância.
+- O download de mídia grava direto no arquivo temporário (`sink`) com 60 s pra conectar e 600 s no total, no lugar do limite de 60 s por leitura e de qualquer timeout de um `GuzzleHttp\Client` registrado.
+- Um download de mídia cortado (erro de transporte, ou corpo menor que o `Content-Length` sem `Transfer-Encoding`) lança `ZapmizerUnavailableException` e não deixa arquivo. Antes lançava um `RuntimeException` cru, ou devolvia um `attached` truncado quando a conexão fechava limpa.
+- Com o diretório temporário sem escrita, uma resposta `200` de mídia lança `unexpectedResponse` (antes estourava `ErrorException`); os outros status seguem como antes.
+- Um header passado na chamada com o mesmo nome de `Accept`, `X-Partner-Key`, `Authorization` ou `api-version`, em qualquer caixa, é descartado; vale o valor fixo, em vez de concatenar.
+- **Breaking pra subclasses.** `InstanceClient::spool()` foi removido.
+- Nomes novos em `PartnerClient`/`InstanceClient` podem colidir numa subclasse: a propriedade `$transport`, `currentTransport()`, `MEDIA_CONNECT_TIMEOUT`/`MEDIA_TIMEOUT`, `temporaryMediaPath()`, `mediaFrom()` e `storedMedia()`.
+- Uma subclasse que usa `$this->http` direto ignora o transporte configurado; trocar `$this->http` depois do construtor só vale com o `GuzzleTransport`.
+- Uma subclasse cujo construtor chama `parent::__construct` sem `$transport`, ou um app que rebinda os clientes do jeito do 0.3, segue no Guzzle e ignora `zapmizer.http.transport`.
+
 # 0.3.1
 
 Sem breaking.

@@ -25,6 +25,12 @@ return [
         'secret' => env('ZAPMIZER_PARTNER_SECRET'),
     ],
 
+    'http' => [
+        'transport' => \NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport::class,
+        'connect_timeout' => env('ZAPMIZER_HTTP_CONNECT_TIMEOUT'),
+        'timeout' => env('ZAPMIZER_HTTP_TIMEOUT'),
+    ],
+
     'connect' => [
         // Who is being connected on a given request. Must implement
         // NotificationChannels\Zapmizer\Contracts\ResolvesConnectable — the

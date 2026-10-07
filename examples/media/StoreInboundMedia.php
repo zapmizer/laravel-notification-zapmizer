@@ -1,62 +1,83 @@
 <?php
 
-namespace App\Listeners;
+namespace App\Jobs;
 
+use DateTime;
+use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Filesystem\Filesystem;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use NotificationChannels\Zapmizer\Connect\MediaDownload;
-use NotificationChannels\Zapmizer\Events\MessageReceived;
+use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\MediaRejectedException;
+use NotificationChannels\Zapmizer\InboundMessage;
+use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
 use Symfony\Component\Mime\MimeTypes;
 
 /**
  * Stores the media of an inbound WhatsApp message on a filesystem disk.
  *
- * Register it for NotificationChannels\Zapmizer\Events\MessageReceived. The
+ * Dispatched by App\Listeners\QueueInboundMedia. It runs on the queue because
+ * the webhook answers at once and the bot may still be downloading: the job
+ * asks once (`media()`) and releases itself instead of holding a worker. The
  * disk comes from `services.zapmizer.media_disk` (the default disk when unset).
- *
- * This listener runs inline and blocks while the bot finishes downloading
- * (up to 67 s with the default waits). In production prefer a queued job that
- * calls `media()` and releases itself on `downloading` (docs/connect.md).
  */
-class StoreInboundMedia
+class StoreInboundMedia implements ShouldQueue
 {
-    public function handle(MessageReceived $event): void
+    use Dispatchable;
+    use InteractsWithQueue;
+    use Queueable;
+    use SerializesModels;
+
+    public function __construct(
+        public ZapmizerConnection $zapmizerConnection,
+        public InboundMessage $message,
+    ) {
+    }
+
+    /**
+     * Zapmizer keeps the media for 600 s after the message was sent.
+     */
+    public function retryUntil(): DateTime
     {
-        $message = $event->message;
-        $connection = $event->connection;
+        return $this->message->sentAt->copy()->addSeconds(600)->toDateTime();
+    }
 
-        // No connection means a single-tenant delivery: there is no token to ask with.
-        if (!$message->hasMedia || $connection === null) {
-            return;
-        }
-
+    public function handle(): void
+    {
         $disk = Storage::disk(config('services.zapmizer.media_disk'));
-        $path = $this->pathFor($connection->getKey(), $message->id, $message->mediaMimeType());
+        $path = $this->pathFor($this->zapmizerConnection->getKey(), $this->message->id, $this->message->mediaMimeType());
 
-        // Deliveries are retried: do not fetch the same message twice.
+        // Jobs are retried and deliveries repeated: do not fetch the same message twice.
         if ($disk->exists($path)) {
             return;
         }
 
         try {
-            // A 429 is waited out inside awaitMedia(); a 422 is not.
-            $download = $connection->awaitMedia($message);
+            $download = $this->zapmizerConnection->media($this->message);
+        } catch (MediaRateLimitedException $exception) {
+            $this->release($exception->retryAfter() ?? 60);
+
+            return;
         } catch (MediaRejectedException $exception) {
-            Log::warning('zapmizer media rejected', ['message' => $message->id, 'reason' => $exception->reason()]);
+            Log::warning('zapmizer media rejected', ['message' => $this->message->id, 'reason' => $exception->reason()]);
+            $this->fail($exception);
 
             return;
         }
 
         if ($download->isDownloading()) {
-            Log::warning('zapmizer media still downloading, giving up', ['message' => $message->id]);
+            $this->release(5);
 
             return;
         }
 
         if ($download->isUnavailable()) {
-            Log::info('zapmizer media unavailable', ['message' => $message->id]);
+            Log::info('zapmizer media unavailable', ['message' => $this->message->id]);
 
             return;
         }
@@ -65,9 +86,9 @@ class StoreInboundMedia
     }
 
     /**
-     * One fixed path per message, known before downloading, so a retried
-     * delivery is a single `exists()`. Message ids are case-sensitive: only
-     * the characters a path cannot carry are replaced.
+     * One fixed path per message, known before downloading, so a retry is a
+     * single `exists()`. Message ids are case-sensitive: only the characters
+     * a path cannot carry are replaced.
      */
     protected function pathFor(int|string $connectionId, string $messageId, ?string $mime): string
     {

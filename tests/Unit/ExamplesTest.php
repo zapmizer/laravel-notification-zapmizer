@@ -2,13 +2,16 @@
 
 namespace NotificationChannels\Zapmizer\Test\Unit;
 
-use App\Listeners\StoreInboundMedia;
+use App\Jobs\StoreInboundMedia;
+use App\Listeners\QueueInboundMedia;
 use App\Zapmizer\TracingTransport;
 use GuzzleHttp\Client as HttpClient;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Response;
+use Illuminate\Contracts\Queue\Job as JobContract;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use NotificationChannels\Zapmizer\Connect\PartnerClient;
@@ -17,6 +20,7 @@ use NotificationChannels\Zapmizer\Events\MessageReceived;
 use NotificationChannels\Zapmizer\InboundMessage;
 use NotificationChannels\Zapmizer\Test\Fixtures\CreatesConnectionTables;
 use NotificationChannels\Zapmizer\Test\TestCase;
+use Mockery;
 
 class ExamplesTest extends TestCase
 {
@@ -85,57 +89,115 @@ class ExamplesTest extends TestCase
         Log::shouldHaveReceived('info')->once();
     }
 
-    public function testStoreInboundMediaWritesTheFileToTheDisk()
+    protected function runJob(StoreInboundMedia $job): ?JobContract
+    {
+        $queueJob = Mockery::mock(JobContract::class);
+        $job->setJob($queueJob);
+
+        return $queueJob;
+    }
+
+    protected function mediaJob(): StoreInboundMedia
     {
         Storage::fake('media');
         config()->set('services.zapmizer.media_disk', 'media');
-        $this->fakeGuzzle(new Response(200, ['Content-Type' => 'image/png'], 'png-bytes'));
+
+        return new StoreInboundMedia($this->connectedTeam()->zapmizerConnection, $this->message());
+    }
+
+    public function testQueueInboundMediaDispatchesTheJobForMessagesWithMedia()
+    {
+        Bus::fake();
         $connection = $this->connectedTeam()->zapmizerConnection;
 
-        (new StoreInboundMedia())->handle(new MessageReceived($this->message(), $connection, []));
+        (new QueueInboundMedia())->handle(new MessageReceived($this->message(), $connection, []));
+
+        Bus::assertDispatched(StoreInboundMedia::class, fn ($job) => $job->message->id === $this->message()->id
+            && $job->zapmizerConnection->is($connection));
+    }
+
+    public function testQueueInboundMediaIgnoresMessagesWithoutMediaOrConnection()
+    {
+        Bus::fake();
+        $connection = $this->connectedTeam()->zapmizerConnection;
+
+        (new QueueInboundMedia())->handle(new MessageReceived($this->message(hasMedia: false), $connection, []));
+        (new QueueInboundMedia())->handle(new MessageReceived($this->message(), null, []));
+
+        Bus::assertNothingDispatched();
+    }
+
+    public function testStoreInboundMediaWritesTheFileToTheDisk()
+    {
+        $this->fakeGuzzle(new Response(200, ['Content-Type' => 'image/png'], 'png-bytes'));
+        $job = $this->mediaJob();
+
+        $job->handle();
 
         $files = Storage::disk('media')->allFiles();
-        $this->assertSame(["zapmizer/{$connection->getKey()}/true_5581999998888_c_us_3EB0ABC123.png"], $files);
+        $this->assertSame(["zapmizer/{$job->zapmizerConnection->getKey()}/true_5581999998888_c_us_3EB0ABC123.png"], $files);
         $this->assertSame('png-bytes', Storage::disk('media')->get($files[0]));
     }
 
     public function testStoreInboundMediaIsIdempotentOnRetries()
     {
-        Storage::fake('media');
-        config()->set('services.zapmizer.media_disk', 'media');
         $this->fakeGuzzle(new Response(200, ['Content-Type' => 'image/png'], 'png-bytes'));
-        $connection = $this->connectedTeam()->zapmizerConnection;
-        $event = new MessageReceived($this->message(), $connection, []);
+        $job = $this->mediaJob();
 
-        (new StoreInboundMedia())->handle($event);
-        (new StoreInboundMedia())->handle($event);
+        $job->handle();
+        $job->handle();
 
         $this->assertCount(1, $this->history);
         $this->assertCount(1, Storage::disk('media')->allFiles());
     }
 
-    public function testStoreInboundMediaStoresNothingWhenUnavailable()
+    public function testStoreInboundMediaReleasesWhileDownloading()
     {
-        Storage::fake('media');
-        config()->set('services.zapmizer.media_disk', 'media');
-        $this->fakeGuzzle(new Response(404, ['Content-Type' => 'application/json'], json_encode(['media_state' => 'unavailable'])));
-        $connection = $this->connectedTeam()->zapmizerConnection;
+        $this->fakeGuzzle(new Response(202, ['Content-Type' => 'application/json'], json_encode(['media_state' => 'downloading'])));
+        $job = $this->mediaJob();
+        $this->runJob($job)->shouldReceive('release')->once()->with(5);
 
-        (new StoreInboundMedia())->handle(new MessageReceived($this->message(), $connection, []));
+        $job->handle();
 
         $this->assertSame([], Storage::disk('media')->allFiles());
     }
 
-    public function testStoreInboundMediaIgnoresMessagesWithoutMedia()
+    public function testStoreInboundMediaReleasesForRetryAfterOnRateLimit()
     {
-        Storage::fake('media');
-        config()->set('services.zapmizer.media_disk', 'media');
-        $this->fakeGuzzle();
-        $connection = $this->connectedTeam()->zapmizerConnection;
+        $this->fakeGuzzle(new Response(429, ['Content-Type' => 'application/json', 'Retry-After' => '17'], '{}'));
+        $job = $this->mediaJob();
+        $this->runJob($job)->shouldReceive('release')->once()->with(17);
 
-        (new StoreInboundMedia())->handle(new MessageReceived($this->message(hasMedia: false), $connection, []));
+        $job->handle();
+    }
 
-        $this->assertSame([], $this->history);
+    public function testStoreInboundMediaStoresNothingAndDoesNotReleaseWhenUnavailable()
+    {
+        $this->fakeGuzzle(new Response(404, ['Content-Type' => 'application/json'], json_encode(['media_state' => 'unavailable'])));
+        $job = $this->mediaJob();
+        $this->runJob($job)->shouldNotReceive('release');
+
+        $job->handle();
+
         $this->assertSame([], Storage::disk('media')->allFiles());
+    }
+
+    public function testStoreInboundMediaFailsWhenRejected()
+    {
+        $this->fakeGuzzle(new Response(422, ['Content-Type' => 'application/json'], json_encode(['message' => 'nope'])));
+        $job = $this->mediaJob();
+        $this->runJob($job)->shouldReceive('fail')->once();
+        Log::spy();
+
+        $job->handle();
+
+        Log::shouldHaveReceived('warning')->once();
+    }
+
+    public function testStoreInboundMediaRetriesUntilTenMinutesAfterTheMessage()
+    {
+        $job = $this->mediaJob();
+
+        $this->assertSame(1700000600, $job->retryUntil()->getTimestamp());
     }
 }

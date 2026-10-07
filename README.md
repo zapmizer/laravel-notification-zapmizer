@@ -10,7 +10,7 @@ composer require zapmizer/laravel-notification-zapmizer
 
 Now publish config file
 ```bash
-php artisan vendor:publish --provider="Notification\Zapmizer\ZapmizerServiceProvider" --tag=config --force
+php artisan vendor:publish --provider="NotificationChannels\Zapmizer\ZapmizerServiceProvider" --tag=config --force
 ```
 
 

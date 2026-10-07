@@ -3,6 +3,7 @@
 namespace NotificationChannels\Zapmizer\Console;
 
 use Illuminate\Console\Command;
+use NotificationChannels\Zapmizer\ZapmizerMessage;
 
 class SendMessage extends Command
 {
@@ -59,7 +60,7 @@ class SendMessage extends Command
             ],
         ];
 
-        (new \Notification\Zapmizer\ZapmizerMessage(from: config('zapmizer.from_number', $from), to: $to, params: $params))->send();
+        (new ZapmizerMessage(from: (string) ($from ?: config('zapmizer.from_number')), to: (string) $to, params: $params))->send();
 
         $this->info('Message sent!');
     }

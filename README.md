@@ -104,6 +104,10 @@ Bot events (`message`, ...) are only accepted signed. Single-tenant applications
 
 **See [docs/connect.md](docs/connect.md) for the setup: partner credentials, the resolver, routes and statuses, the Vue stubs, the signed webhook and secret rotation. Requires Zapmizer 1.149.0 or later (hosted pairing); receiving media (`$connection->media($message)`) requires 1.150.0 or later.**
 
+## Examples
+
+See [examples/](examples/README.md) for app code that uses the package: faking calls in tests, a custom transport and storing inbound media. The examples run in this package's test suite.
+
 ## HTTP transport
 
 `PartnerClient` and `InstanceClient` send their requests through a transport chosen in `config/zapmizer.php`:

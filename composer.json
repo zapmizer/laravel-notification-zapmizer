@@ -31,7 +31,11 @@
     "autoload-dev": {
         "psr-4": {
             "NotificationChannels\\Zapmizer\\Test\\": "tests"
-        }
+        },
+        "classmap": [
+            "examples/",
+            "tests/Examples/"
+        ]
     },
     "config": {
         "sort-packages": true

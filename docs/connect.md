@@ -410,6 +410,11 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
 
 $connection = $team->zapmizerConnection;
 
+if ($connection->bot_instance_id === null) {
+    // no paired number is stored (the pairing was forgotten): start a new connect instead
+    return redirect()->route('numbers.connect');
+}
+
 try {
     $result = $connection->instanceClient()->reconnect($connection->bot_instance_id, route('numbers.reconnected'), $state);
 
@@ -438,8 +443,10 @@ try {
 ### Revoking the token
 
 ```php
+use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerException;
 
+// The customer removes the integration: the connection's own token is the one to revoke.
 try {
     $connection->instanceClient()->revokeToken();
 } catch (ZapmizerException $e) {
@@ -447,9 +454,23 @@ try {
 }
 
 $connection->delete();
+
+// Replacing a token with the one from a new connect: revoke the PREVIOUS one, with a client built for it.
+// instanceClient() reads api_token when it is called, so after the new token is stored it would revoke the new one.
+$previousToken = $connection->api_token;
+// ... the new token is stored on $connection here ...
+
+try {
+    app(InstanceClient::class, [
+        'api_token' => $previousToken,
+        'api_version' => config('zapmizer.api_version'),
+    ])->revokeToken();
+} catch (ZapmizerException $e) {
+    report($e);
+}
 ```
 
-- `revokeToken(): void` — `DELETE /api/connect/token` revokes the token the client authenticates with. Use it when the customer removes the integration, and after storing a new token that came from another connect. Zapmizer also points to it to recover a lost webhook secret.
+- `revokeToken(): void` — `DELETE /api/connect/token` revokes the token the client authenticates with. Use it when the customer removes the integration, and to revoke the previous token after a new connect replaced it (the client must be built for the previous token, as above: `instanceClient()` uses whichever `api_token` is stored when it is called, so calling it after the swap revokes the new token and leaves the old one valid). In this release the package's own connect callback (`zapmizer.connect.callback`) overwrites `api_token` without revoking the previous one, so revoking it is up to your app. Zapmizer also points to it to recover a lost webhook secret.
 - It returns on 204 (revoked now) and on 401 (the token was already revoked, or is not valid). A 404 is a `ZapmizerApiException` with `status()` 404: the token did not come from a connect and **is still valid**. A 403 (e-mail not verified) also means nothing was revoked. 5xx or no answer is a `ZapmizerUnavailableException`, a 429 a `ZapmizerRateLimitedException`, and a redirect or another 2xx `unexpectedResponse`.
 - 401 and 404 also come from a wrong `base_uri` or environment (an unknown route answers 404). Never let a failed revocation block the removal: catch it, report it and go on.
 
@@ -484,6 +505,8 @@ return response()->json([
 ### Catch order
 
 `ZapmizerUnauthorizedException`, `ZapmizerRateLimitedException` and `InstanceGoneException` extend `ZapmizerApiException`: catch them before it. `unexpectedResponse` and `ZapmizerUnavailableException` are `ZapmizerConnectException` but not `ZapmizerApiException`, so a `catch (ZapmizerApiException)` lets them through. None of them renders a response.
+
+`reconnect()` (like `createSession()` and `checkout()`) throws `InvalidArgumentException` before any request when the `state` is invalid; that is not a `ZapmizerException`, so no `catch` for the exceptions above covers it.
 
 ## Error handling
 

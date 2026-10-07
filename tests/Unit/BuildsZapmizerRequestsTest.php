@@ -144,4 +144,17 @@ class BuildsZapmizerRequestsTest extends TestCase
 
         $this->assertSame(['redirect_uri' => 'http://app.test/cb', 'state' => '0'], $transport->calls[0]['options']['json']);
     }
+
+    public function testT3AnOverriddenGuardStateHoldsInTheInstanceClient()
+    {
+        $transport = new RecordingTransport(new Response(200, ['Content-Type' => 'application/json'], '{"status":"online"}'));
+        $client = new class ('team-token', $transport, 'http://localhost/api') extends InstanceClient {
+            protected function guardState(?string $state): void
+            {
+            }
+        };
+
+        $this->assertTrue($client->reconnect(9, 'https://app.test/cb', '0')->isOnline());
+        $this->assertSame(['redirect_uri' => 'https://app.test/cb', 'state' => '0'], $transport->calls[0]['options']['json']);
+    }
 }

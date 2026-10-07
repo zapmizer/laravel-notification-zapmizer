@@ -4,7 +4,9 @@ namespace NotificationChannels\Zapmizer\Connect;
 
 use NotificationChannels\Zapmizer\Connect\Concerns\BuildsZapmizerRequests;
 use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
+use InvalidArgumentException;
 use NotificationChannels\Zapmizer\Contracts\Transport;
+use NotificationChannels\Zapmizer\Exceptions\ErrorCode;
 use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
@@ -16,12 +18,11 @@ use Psr\Http\Message\ResponseInterface;
 /**
  * Class InstanceClient.
  *
- * Zapmizer's instance-connection and webhook endpoints, authenticated by
- * the connected team's token (the one the connect flow stored). Pairing
- * itself happens on Zapmizer's hosted page — this client only reads the
- * state of the paired instance and manages the webhook. The token is
- * always per connection — there is no single-tenant fallback on purpose:
- * resolve it through `ZapmizerConnection::instanceClient()`.
+ * Zapmizer's endpoints that act for one connection, authenticated by the
+ * connected team's token (the one the connect flow stored). Pairing itself
+ * happens on Zapmizer's hosted page, not here. The token is always per
+ * connection — there is no single-tenant fallback on purpose: resolve it
+ * through `ZapmizerConnection::instanceClient()`.
  */
 class InstanceClient
 {
@@ -73,6 +74,51 @@ class InstanceClient
         $this->guardFailure($response);
 
         return InstanceConnection::fromArray($this->decode($response));
+    }
+
+    /**
+     * @throws InvalidArgumentException
+     * @throws ZapmizerConnectException
+     */
+    public function reconnect(int $botInstanceId, string $redirectUri, ?string $state = null, ?int $expiresIn = null): ReconnectResult
+    {
+        $this->guardState($state);
+
+        $response = $this->request('POST', "/bot-instances/{$botInstanceId}/reconnect", [
+            'json' => $this->withoutNulls([
+                'redirect_uri' => $redirectUri,
+                'state' => $state,
+                'expires_in' => $this->clampExpiresIn($expiresIn),
+            ]),
+        ]);
+
+        $this->guardUnauthorized($response);
+
+        $status = $response->getStatusCode();
+
+        if ($status === 404) {
+            throw new InstanceGoneException(ApiError::from($response), $botInstanceId);
+        }
+
+        if ($status === 409) {
+            $error = ApiError::from($response);
+
+            if ($error->error === ErrorCode::NEEDS_RECONNECT) {
+                return ReconnectResult::fromNeedsReconnect($error->payload);
+            }
+
+            throw ZapmizerApi::failure($error);
+        }
+
+        $this->guardFailure($response);
+
+        if ($status !== 200 && $status !== 202) {
+            throw ZapmizerConnectException::unexpectedResponse("HTTP {$status} on the reconnect endpoint");
+        }
+
+        $this->decode($response);
+
+        return new ReconnectResult($status === 200 ? ReconnectResult::ONLINE : ReconnectResult::STARTING);
     }
 
     /**

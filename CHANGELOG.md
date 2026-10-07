@@ -83,6 +83,17 @@ Quebras:
 - 404 e 409 de chamadas de parceiro deixam de logar `zapmizer: partner call failed.`.
 - Subclasses: `PartnerClient` ganhou os métodos públicos `subscription()` e `checkout()`, a constante `MAX_EXPIRES_IN` e os métodos protegidos `guardExternalId()`, `guardState()` e `withoutNulls()`, que podem colidir com nomes de uma subclasse.
 
+**Cliente de instância:**
+
+- `InstanceClient::reconnect(int $botInstanceId, string $redirectUri, ?string $state = null, ?int $expiresIn = null): ReconnectResult` religa o número (`POST /bot-instances/{id}/reconnect`). `Connect\ReconnectResult` tem `status` (`ReconnectResult::ONLINE`, `STARTING` ou `NEEDS_CLIENT`), `url`, `expiresAt` (`?CarbonImmutable`), `isOnline()`, `isStarting()` e `needsClient()`: 200 → online, 202 → starting, 409 `needs_reconnect` → `needsClient()` com a `url` para onde mandar o cliente. 404 → `InstanceGoneException` (número inexistente ou fora desta conexão); 402, 403, 422 e outro 409 → `ZapmizerApiException` com `status()` e `error()`; 429 → `ZapmizerRateLimitedException`. `state` e `expires_in` seguem as regras do `createSession()`.
+- `InstanceClient::revokeToken(): void` revoga o token da conexão (`DELETE /connect/token`). 204 e 401 voltam normalmente (revogado agora; o token já não valia); 404 → `ZapmizerApiException` com `status()` 404 (o token não veio de um connect e continua valendo).
+- `InstanceClient::conversationSession(string $phone, string $parentOrigin, array $appearance = [], ?string $userId = null, ?string $userName = null)` e `inboxSession(string $parentOrigin, ?string $userId = null, ?string $userName = null)` criam a sessão do iframe (`POST /embed/sessions`) e devolvem `Connect\EmbedSession`, com `url`, `origin` (a origem do iframe como o navegador mostra), `expiresAt`, `resumeUrl` e `resumeUntil`. Uma `url` que não seja http(s) segura lança `unexpectedResponse`; um `resume_url` inseguro ou de outra origem vira `null` e loga `zapmizer: unexpected resume url.` (warning) só com as origens.
+- Veja "9. Reconnect, revoke and embed" em `docs/connect.md`, com a ordem dos `catch`.
+
+Quebras: nenhuma de comportamento. Só métodos e classes novos, e o `PartnerClient` passa a usar o trait `Connect\Concerns\BuildsZapmizerRequests`, com os mesmos métodos `protected`.
+
+- Subclasses: subclasses de `InstanceClient` ganham `reconnect()`, `revokeToken()`, `conversationSession()`, `inboxSession()`, `guardState()`, `withoutNulls()` e `clampExpiresIn()`; subclasses de `PartnerClient` ganham `clampExpiresIn()`. Esses nomes podem colidir com métodos já existentes nelas.
+
 **Upgrade da 0.3:**
 
 - `new PartnerClient($id, $secret, $guzzle, $uri)` → `new PartnerClient($id, $secret, new GuzzleTransport($guzzle), $uri)`.

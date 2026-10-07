@@ -2,15 +2,13 @@
 
 namespace NotificationChannels\Zapmizer\Exceptions;
 
-use Exception;
-
 /**
  * Class ZapmizerConnectException.
  *
  * Base exception of the connect flow (partner authorization, instance
  * pairing, webhook registration). Catch this to handle any of them.
  */
-class ZapmizerConnectException extends Exception
+class ZapmizerConnectException extends ZapmizerException
 {
     /**
      * Thrown when a Connectable model has no active Zapmizer connection.

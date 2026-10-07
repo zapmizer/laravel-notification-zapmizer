@@ -2,8 +2,6 @@
 
 namespace NotificationChannels\Zapmizer\Exceptions;
 
-use Exception;
-
 /**
  * Class ZapmizerVerificationException.
  *
@@ -11,7 +9,7 @@ use Exception;
  * any failure raised while creating a verification session or confirming a
  * code.
  */
-class ZapmizerVerificationException extends Exception
+class ZapmizerVerificationException extends ZapmizerException
 {
     /**
      * Thrown when there's no API token provided.

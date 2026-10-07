@@ -140,6 +140,39 @@ class InstanceClient
     }
 
     /**
+     * @param array<string, mixed> $appearance
+     *
+     * @throws ZapmizerConnectException
+     */
+    public function conversationSession(
+        string $phone,
+        string $parentOrigin,
+        array $appearance = [],
+        ?string $userId = null,
+        ?string $userName = null,
+    ): EmbedSession {
+        return $this->embedSession($this->withoutNulls([
+            'component' => 'conversation',
+            'phone' => $phone,
+            'parent_origin' => $parentOrigin,
+            'appearance' => $this->withoutNulls($appearance) ?: null,
+            'user' => $this->embedUser($userId, $userName),
+        ]));
+    }
+
+    /**
+     * @throws ZapmizerConnectException
+     */
+    public function inboxSession(string $parentOrigin, ?string $userId = null, ?string $userName = null): EmbedSession
+    {
+        return $this->embedSession($this->withoutNulls([
+            'component' => 'inbox',
+            'parent_origin' => $parentOrigin,
+            'user' => $this->embedUser($userId, $userName),
+        ]));
+    }
+
+    /**
      * Register a webhook receiver. Zapmizer returns the `secret` ONLY in this
      * response — the caller must persist it.
      *
@@ -378,6 +411,29 @@ class InstanceClient
         }
 
         return null;
+    }
+
+    /**
+     * @throws ZapmizerConnectException
+     */
+    private function embedSession(array $body): EmbedSession
+    {
+        $response = $this->request('POST', '/embed/sessions', ['json' => $body]);
+
+        $this->guardFailure($response);
+
+        if ($response->getStatusCode() !== 201) {
+            throw ZapmizerConnectException::unexpectedResponse("HTTP {$response->getStatusCode()} on the embed session endpoint");
+        }
+
+        return EmbedSession::fromArray($this->decode($response));
+    }
+
+    private function embedUser(?string $id, ?string $name): ?array
+    {
+        $user = array_filter(['id' => $id, 'name' => $name], fn (?string $value) => $value !== null && trim($value) !== '');
+
+        return $user === [] ? null : $user;
     }
 
     protected function request(string $method, string $path, array $options = [], bool $expectsJson = true): ResponseInterface

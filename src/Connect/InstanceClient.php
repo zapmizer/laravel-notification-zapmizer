@@ -8,6 +8,7 @@ use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
+use NotificationChannels\Zapmizer\Support\ApiError;
 use NotificationChannels\Zapmizer\Support\JsonResponse;
 use Psr\Http\Message\ResponseInterface;
 
@@ -62,8 +63,8 @@ class InstanceClient
 
         $this->guardUnauthorized($response);
 
-        if ($response->getStatusCode() >= 400 && $response->getStatusCode() < 500) {
-            throw new InstanceGoneException("Instance {$id} is gone on Zapmizer.");
+        if ($response->getStatusCode() === 404) {
+            throw new InstanceGoneException(ApiError::from($response), $id);
         }
 
         $this->guardFailure($response);
@@ -176,28 +177,6 @@ class InstanceClient
     }
 
     /**
-     * The reason of a JSON error answer: Laravel's `message`, plus the first
-     * of each validation error when there is one. The raw body otherwise.
-     */
-    protected function reasonFrom(ResponseInterface $response): string
-    {
-        $body = (string) $response->getBody();
-        $payload = json_decode($body, true);
-
-        if (!is_array($payload)) {
-            return trim($body);
-        }
-
-        $errors = array_map(
-            fn ($messages) => is_array($messages) ? (string) reset($messages) : (string) $messages,
-            $payload['errors'] ?? [],
-        );
-
-        return implode(' ', array_filter([$payload['message'] ?? null, ...array_values($errors)]))
-            ?: trim($body);
-    }
-
-    /**
      * Whether the body is one this call opened and must close — the sink
      * file, or, under `stream`, the 200 left unread on the connection (the
      * other answers are read whole). A fake (`Http::fake` in array form)
@@ -227,13 +206,11 @@ class InstanceClient
         $status = $response->getStatusCode();
 
         if ($status === 422) {
-            throw ZapmizerConnectException::mediaRejected($this->reasonFrom($response));
+            throw ZapmizerConnectException::mediaRejected(ApiError::from($response));
         }
 
         if ($status === 429) {
-            throw ZapmizerConnectException::mediaRateLimited(
-                $response->hasHeader('Retry-After') ? (int) $response->getHeaderLine('Retry-After') : null,
-            );
+            throw ZapmizerConnectException::mediaRateLimited(ApiError::from($response));
         }
 
         if ($status === 200) {
@@ -350,7 +327,7 @@ class InstanceClient
     protected function guardUnauthorized(ResponseInterface $response): void
     {
         if ($response->getStatusCode() === 401) {
-            throw new ZapmizerUnauthorizedException('Zapmizer refused the connection token.');
+            throw ZapmizerApi::failure($response);
         }
     }
 
@@ -360,9 +337,7 @@ class InstanceClient
     protected function guardFailure(ResponseInterface $response): void
     {
         if ($response->getStatusCode() >= 400) {
-            throw ZapmizerConnectException::unexpectedResponse(
-                "HTTP {$response->getStatusCode()} - " . (string) $response->getBody()
-            );
+            throw ZapmizerApi::failure($response);
         }
     }
 

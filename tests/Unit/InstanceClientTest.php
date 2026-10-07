@@ -15,13 +15,19 @@ use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
 use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;
 use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\MediaRejectedException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
+use NotificationChannels\Zapmizer\Test\Concerns\AssertsContract;
 use NotificationChannels\Zapmizer\Test\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class InstanceClientTest extends TestCase
 {
+    use AssertsContract;
+
     /** @var array<int, array{request: Request}> */
     protected array $history = [];
 
@@ -299,6 +305,133 @@ class InstanceClientTest extends TestCase
             } catch (\Throwable $exception) {
                 $this->assertInstanceOf($class, $exception);
             }
+        }
+    }
+
+    protected function callEndpoint(InstanceClient $client, string $call): mixed
+    {
+        return match ($call) {
+            'connection' => $client->connection(9),
+            'createWebhook' => $client->createWebhook('http://app.test/zapmizer/webhook'),
+            'rotateWebhookSecret' => $client->rotateWebhookSecret(42),
+            'deleteWebhook' => $client->deleteWebhook(42),
+            'media' => $client->media(9, 'ABC', 1700000000),
+        };
+    }
+
+    protected function assertRefusal(string $call, Response $response, string $class): ZapmizerApiException
+    {
+        $client = $this->makeClient(new MockHandler([$response]));
+
+        try {
+            $this->callEndpoint($client, $call);
+        } catch (ZapmizerApiException $exception) {
+            $this->assertSame($class, get_class($exception));
+            $this->assertSame($response->getStatusCode(), $exception->status());
+
+            return $exception;
+        }
+
+        $this->fail("Expected {$class}.");
+    }
+
+    /** @dataProvider refusalsFromTheContract */
+    #[DataProvider('refusalsFromTheContract')]
+    public function testRefusalFromTheContract(string $call, string $method, string $path, int $status, string $body, array $headers, string $class, string $reason)
+    {
+        $this->assertMatchesContract($method, $path, $status, $body, $headers);
+
+        $exception = $this->assertRefusal($call, new Response($status, ['Content-Type' => 'application/json'] + $headers, $body), $class);
+
+        $this->assertSame($reason, $exception->reason());
+    }
+
+    public static function refusalsFromTheContract(): array
+    {
+        return [
+            'M8 connection 404' => ['connection', 'GET', '/bot-instances/{id}/connection', 404, '{"message":"No query results for model."}', [], InstanceGoneException::class, 'No query results for model.'],
+            'M10 connection 401' => ['connection', 'GET', '/bot-instances/{id}/connection', 401, '{"message":"Unauthenticated."}', [], ZapmizerUnauthorizedException::class, 'Unauthenticated.'],
+            'M13 media 422' => ['media', 'GET', '/whatsapp-messages/media', 422, '{"message":"The timestamp field must be a date before or equal to now.","errors":{"timestamp":["The timestamp field must be a date before or equal to now."]}}', [], MediaRejectedException::class, 'The timestamp field must be a date before or equal to now. The timestamp field must be a date before or equal to now.'],
+            'M13 media 429' => ['media', 'GET', '/whatsapp-messages/media', 429, '{"message":"Too Many Attempts."}', ['Retry-After' => '37'], MediaRateLimitedException::class, 'Too Many Attempts.'],
+            'media 401' => ['media', 'GET', '/whatsapp-messages/media', 401, '{"message":"Unauthenticated."}', [], ZapmizerUnauthorizedException::class, 'Unauthenticated.'],
+        ];
+    }
+
+    /** @dataProvider refusalsOutsideTheContract */
+    #[DataProvider('refusalsOutsideTheContract')]
+    public function testRefusalOutsideTheContract(string $call, Response $response, string $class)
+    {
+        $this->assertRefusal($call, $response, $class);
+    }
+
+    public static function refusalsOutsideTheContract(): array
+    {
+        $json = ['Content-Type' => 'application/json'];
+
+        return [
+            'M9 connection 429' => ['connection', new Response(429, $json + ['Retry-After' => '5'], '{"message":"Too Many Attempts."}'), ZapmizerRateLimitedException::class],
+            'M9 connection 403' => ['connection', new Response(403, $json, '{"message":"This action is unauthorized."}'), ZapmizerApiException::class],
+            'M9 connection 422' => ['connection', new Response(422, $json, '{"message":"Invalid.","errors":{"id":["Invalid."]}}'), ZapmizerApiException::class],
+            'M11 createWebhook 422' => ['createWebhook', new Response(422, $json, '{"message":"The url field must be a valid URL.","errors":{"url":["The url field must be a valid URL."]}}'), ZapmizerApiException::class],
+            'createWebhook 401' => ['createWebhook', new Response(401, $json, '{"message":"Unauthenticated."}'), ZapmizerUnauthorizedException::class],
+            'rotateWebhookSecret 404' => ['rotateWebhookSecret', new Response(404, $json, '{"message":"Not Found"}'), ZapmizerApiException::class],
+            'rotateWebhookSecret 429' => ['rotateWebhookSecret', new Response(429, $json, '{"message":"Too Many Attempts."}'), ZapmizerRateLimitedException::class],
+            'deleteWebhook 403' => ['deleteWebhook', new Response(403, $json, '{"message":"Forbidden."}'), ZapmizerApiException::class],
+            'deleteWebhook 429' => ['deleteWebhook', new Response(429, $json, '{"message":"Too Many Attempts."}'), ZapmizerRateLimitedException::class],
+            'M14 media 403' => ['media', new Response(403, $json, '{"message":"This connection does not grant this number."}'), ZapmizerApiException::class],
+            'media 409' => ['media', new Response(409, $json, '{"message":"Conflict."}'), ZapmizerApiException::class],
+        ];
+    }
+
+    public function testM9ConnectionRateLimitCarriesTheRetryAfter()
+    {
+        $exception = $this->assertRefusal('connection', new Response(429, ['Retry-After' => '5'], '{"message":"Too Many Attempts."}'), ZapmizerRateLimitedException::class);
+
+        $this->assertSame(5, $exception->retryAfter());
+    }
+
+    public function testM11WebhookRefusalKeepsTheFieldErrors()
+    {
+        $exception = $this->assertRefusal('createWebhook', new Response(422, ['Content-Type' => 'application/json'], '{"message":"Invalid.","errors":{"url":["The url field must be a valid URL."]}}'), ZapmizerApiException::class);
+
+        $this->assertSame(['url' => ['The url field must be a valid URL.']], $exception->errors());
+        $this->assertSame('Zapmizer refused the request (HTTP 422): Invalid. The url field must be a valid URL.', $exception->getMessage());
+    }
+
+    public function testMediaRetryAfterThatIsNotANumberIsNull()
+    {
+        $exception = $this->assertRefusal('media', new Response(429, ['Retry-After' => 'Wed, 21 Oct 2026 07:28:00 GMT'], '{"message":"Too Many Attempts."}'), MediaRateLimitedException::class);
+
+        $this->assertNull($exception->retryAfter());
+        $this->assertStringNotContainsString('Retry in', $exception->getMessage());
+    }
+
+    public function testMediaRejectionWithHtmlCutsTheReasonAt500Characters()
+    {
+        $html = '<html>' . str_repeat('x', 800) . '</html>';
+
+        $exception = $this->assertRefusal('media', new Response(422, ['Content-Type' => 'text/html'], $html), MediaRejectedException::class);
+
+        $this->assertSame(substr($html, 0, 500), $exception->reason());
+    }
+
+    public function testAMediaRefusalWithoutATemporaryFileReadsTheLiveBody()
+    {
+        $stack = HandlerStack::create(new MockHandler([
+            new Response(422, ['Content-Type' => 'application/json'], '{"message":"Media is not available for Meta Cloud instances."}'),
+        ]));
+        $client = new class ('team-token', new GuzzleTransport(new HttpClient(['handler' => $stack])), 'http://localhost/api') extends InstanceClient {
+            protected function temporaryMediaPath(): ?string
+            {
+                return null;
+            }
+        };
+
+        try {
+            $client->media(9, 'ABC', 1700000000);
+            $this->fail('Expected MediaRejectedException.');
+        } catch (MediaRejectedException $exception) {
+            $this->assertSame('Media is not available for Meta Cloud instances.', $exception->reason());
         }
     }
 

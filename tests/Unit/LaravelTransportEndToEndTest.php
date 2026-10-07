@@ -10,11 +10,16 @@ use NotificationChannels\Zapmizer\Connect\PartnerClient;
 use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
 use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\MediaRejectedException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
+use NotificationChannels\Zapmizer\Test\Concerns\AssertsContract;
 use NotificationChannels\Zapmizer\Test\TestCase;
+use NotificationChannels\Zapmizer\Zapmizer;
 use RuntimeException;
 
 class LaravelTransportEndToEndTest extends TestCase
 {
+    use AssertsContract;
+
     protected function defineEnvironment($app)
     {
         $app['config']->set('zapmizer.base_uri', 'http://zap.test/api/');
@@ -38,6 +43,61 @@ class LaravelTransportEndToEndTest extends TestCase
         Http::assertSent(fn (Request $request) => $request->url() === 'http://zap.test/api/connect/sessions'
             && $request->header('X-Partner-Key')[0] === 'id|secret'
             && $request->header('Accept')[0] === 'application/json');
+    }
+
+    public function testM29TextSendIsAFormThroughTheFake()
+    {
+        $body = '{"id":1}';
+        $this->assertMatchesContract('POST', '/messages', 200, $body);
+        Http::fake(['zap.test/*' => Http::response($body, 200, ['Content-Type' => 'application/json'])]);
+
+        app(Zapmizer::class, ['api_token' => 'bot-token', 'api_version' => '2025-06-27'])
+            ->sendMessage(['type' => 'chat', 'from' => '5581999990000', 'to' => '5511999999999', 'metadata' => ['text' => 'hi']]);
+
+        Http::assertSent(fn (Request $request) => $request->method() === 'POST'
+            && $request->url() === 'http://zap.test/api/messages'
+            && $request->isForm()
+            && $request['metadata']['text'] === 'hi'
+            && $request->header('Authorization')[0] === 'Bearer bot-token'
+            && $request->header('api-version')[0] === '2025-06-27');
+    }
+
+    public function testM28FileSendIsMultipartThroughTheFake()
+    {
+        $body = '{"id":1}';
+        $this->assertMatchesContract('POST', '/messages', 200, $body);
+        Http::fake(['zap.test/*' => Http::response($body, 200, ['Content-Type' => 'application/json'])]);
+
+        app(Zapmizer::class, ['api_token' => 'bot-token'])
+            ->sendMessageWithFile(['type' => 'document', 'from' => '5581999990000', 'to' => '5511999999999'], __FILE__);
+
+        Http::assertSent(fn (Request $request) => $request->url() === 'http://zap.test/api/messages'
+            && $request->isMultipart()
+            && str_contains($request->body(), 'name="uploaded_media"')
+            && str_contains($request->body(), 'class LaravelTransportEndToEndTest extends TestCase'));
+    }
+
+    public function testAFileWithNestedMetadataSendsTheNestedFieldThroughTheFake()
+    {
+        $body = '{"id":1}';
+        $this->assertMatchesContract('POST', '/messages', 200, $body);
+        Http::fake(['zap.test/*' => Http::response($body, 200, ['Content-Type' => 'application/json'])]);
+
+        app(Zapmizer::class, ['api_token' => 'bot-token'])
+            ->sendMessageWithFile(['type' => 'image', 'text' => 'caption', 'metadata' => ['text' => 'hi']], __FILE__);
+
+        Http::assertSent(fn (Request $request) => $request->isMultipart()
+            && str_contains($request->body(), 'name="metadata[text]"'));
+    }
+
+    public function testAnEmptyFakeIsNotAnApiAnswer()
+    {
+        Http::fake();
+
+        $this->expectException(ZapmizerConnectException::class);
+        $this->expectExceptionMessage('response body is not valid JSON');
+
+        app(Zapmizer::class, ['api_token' => 'bot-token'])->sendMessage(['type' => 'chat', 'to' => '5511999999999']);
     }
 
     public function testC3InstanceCallCarriesTokenAndVersion()

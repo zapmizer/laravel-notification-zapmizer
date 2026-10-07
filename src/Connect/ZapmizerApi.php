@@ -3,8 +3,12 @@
 namespace NotificationChannels\Zapmizer\Connect;
 
 use NotificationChannels\Zapmizer\Contracts\Transport;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerRateLimitedException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
+use NotificationChannels\Zapmizer\Support\ApiError;
 use NotificationChannels\Zapmizer\Support\JsonResponse;
 use Psr\Http\Message\ResponseInterface;
 
@@ -36,6 +40,17 @@ class ZapmizerApi
         }
 
         return $response;
+    }
+
+    public static function failure(ResponseInterface|ApiError $failure): ZapmizerApiException
+    {
+        $error = $failure instanceof ApiError ? $failure : ApiError::from($failure);
+
+        return match ($error->status) {
+            401 => new ZapmizerUnauthorizedException($error, 'Zapmizer refused the connection token.'),
+            429 => new ZapmizerRateLimitedException($error),
+            default => new ZapmizerApiException($error),
+        };
     }
 
     protected function withoutHeaders(array $headers, array $names): array

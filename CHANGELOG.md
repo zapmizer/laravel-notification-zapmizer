@@ -2,7 +2,9 @@
 
 # Unreleased
 
-**Breaking** para quem constrói `PartnerClient` ou `InstanceClient` à mão: o argumento do `GuzzleHttp\Client` virou o do transporte. Quem resolve os clientes pelo container (`app(PartnerClient::class)`, `$connection->instanceClient()`) não muda nada.
+**Breaking** para quem constrói `PartnerClient`, `InstanceClient` ou `Zapmizer` à mão: o argumento do `GuzzleHttp\Client` virou o do transporte. Quem resolve os clientes pelo container (`app(PartnerClient::class)`, `$connection->instanceClient()`, `app(Zapmizer::class)`) não muda a construção.
+
+**Breaking nos erros:** o envio lança as mesmas exceções dos clientes Connect e `CouldNotSendNotification` foi removida. Veja "Erros" abaixo, com o de/para.
 
 - **Transporte HTTP plugável.** `PartnerClient` e `InstanceClient` mandam as requisições por um transporte: `zapmizer.http.transport` nomeia uma classe que implementa `Contracts\Transport`. Vêm `GuzzleTransport` (padrão, com o `GuzzleHttp\Client` registrado no container) e `LaravelHttpTransport` (`Http::fake`, `preventStrayRequests`, middleware global).
 - Com o `LaravelHttpTransport`, o `getPrevious()` da `ZapmizerUnavailableException` pode mudar de classe conforme a versão do Laravel: uma exceção do `Http` do Laravel (`ConnectionException` etc.) ou, do Laravel 8 ao 11 em alguns casos (corpo cortado), a do Guzzle. É opt-in.
@@ -15,6 +17,50 @@
 - Um header passado na chamada com o mesmo nome de `Accept`, `X-Partner-Key`, `Authorization` ou `api-version`, em qualquer caixa, é descartado; vale o valor fixo, em vez de concatenar.
 - Pasta `examples/` com código de app: teste com `Http::fake` via `LaravelHttpTransport`, um transporte próprio e um listener que guarda a mídia recebida num disk. Rodam na suíte do pacote.
 
+**Erros:**
+
+> **A quebra é silenciosa.** `CouldNotSendNotification` não existe mais, e em PHP um `catch (CouldNotSendNotification $e)` de uma classe que não existe não dá erro: só nunca casa, e a exceção volta a escapar. Procure esse nome no app antes de atualizar.
+
+- `Exceptions\ZapmizerException` (abstrata) é a raiz de todas as exceções da lib: `catch (ZapmizerException $e)` pega as do connect, do envio e do verify-number.
+- `Exceptions\ZapmizerApiException`, filha de `ZapmizerConnectException`: a Zapmizer recusou a chamada (4xx). `status()`, `error()` (o código da API, ou `null`), `reason()`, `errors()`, `payload()` e `apiError()`. Mensagem: `Zapmizer refused the request (HTTP {status}[, {error}])[: {reason}].`
+- `Exceptions\ZapmizerRateLimitedException` (429), com `retryAfter(): ?int` lido do `Retry-After` em segundos; data HTTP, negativo ou texto dão `null`.
+- `Exceptions\ErrorCode`: uma constante por código `error` do contrato da API (`ErrorCode::WINDOW_CLOSED`, `ErrorCode::BOT_OFFLINE`, ...). `error()` devolve string: um código novo chega ao app sem release da lib.
+- `Support\ApiError` lê a resposta de erro nos quatro formatos do contrato; `Connect\ZapmizerApi::failure()` escolhe a exceção pelo status (401 → `ZapmizerUnauthorizedException`, 429 → `ZapmizerRateLimitedException`, outro 4xx → `ZapmizerApiException`).
+- `ZapmizerUnauthorizedException`, `PartnerCredentialsException`, `InstanceGoneException` e `MediaRejectedException` passam a estender `ZapmizerApiException`; `MediaRateLimitedException` passa a estender `ZapmizerRateLimitedException`. Um `catch` de qualquer uma delas continua pegando.
+- O envio (`Zapmizer::sendMessage()`, `sendMessageWithFile()`, `ZapmizerMessage::send()`) passa pelo transporte configurado em `zapmizer.http.transport`, como os clientes Connect.
+
+De/para do envio:
+
+| Antes | Agora |
+| --- | --- |
+| `CouldNotSendNotification` (4xx), `getPrevious()` `ClientException` | `ZapmizerApiException` (`status()`, `error()`, `reason()`, `errors()`); 401 → `ZapmizerUnauthorizedException`; 429 → `ZapmizerRateLimitedException` |
+| `CouldNotSendNotification` (5xx, rede) | `ZapmizerUnavailableException` |
+| `CouldNotSendNotification` (redirect, não-JSON) | `ZapmizerConnectException` (`unexpectedResponse`) |
+| `CouldNotSendNotification` (sem token) | `ZapmizerUnauthorizedException` (`status()` 401, mesma mensagem) |
+| `CouldNotSendNotification` (arquivo que não abre) | `ZapmizerConnectException` (`unreadableFile`) |
+| `CouldNotSendNotification` (URL malformada, multipart inválido, exceção de transporte próprio ou de `preventStrayRequests`) | a exceção original, sem embrulho (não é `ZapmizerException`) |
+| mensagem `` `{status} - {description}` `` | `Zapmizer refused the request (HTTP {status}[, {error}])[: {reason}].` |
+
+Outras mudanças que podem quebrar:
+
+- Um `catch (ZapmizerConnectException)` em volta de código que também envia passa a capturar falhas de envio (`ZapmizerApiException` e `ZapmizerUnavailableException` são filhas dela).
+- `ZapmizerUnavailableException`, `PartnerCredentialsException` e `NoConnectableException` perdem o `render()`. Fora das rotas da lib (que respondem o mesmo JSON de hoje), quem chamava os clientes e contava com o 503/403 JSON automático passa a ter a resposta do handler do app; em troca, os callbacks `renderable` do app passam a valer para essas exceções.
+- Quem chama `PartnerClient` fora do `ConnectController` perde o `render()` 503 `zapmizer_unavailable` nos 4xx que não são de credencial: `ZapmizerApiException` não se renderiza.
+- `start()` reporta (`report()`) os 4xx do parceiro; um app com `ZapmizerUnavailableException` em `dontReport` passa a ver esses 4xx reportados, porque agora são `ZapmizerApiException`.
+- `NoConnectableException` nas rotas da lib deixa de ir para o `report()`.
+- O log `zapmizer: partner call failed.` passa a registrar o corpo cortado em 500 caracteres (antes, inteiro).
+- Parceiro: 404 (fora do `exchangeCode`), 409, 422 e 429 deixam de ser `ZapmizerUnavailableException`.
+- `InstanceClient::connection()`: 4xx que não é 401/404 deixa de ser `InstanceGoneException` (no `show?live=1`, 403/409/422/429 passam de `instance_gone` a `zapmizer_unavailable`; o contrato só declara 401 e 404 nessa rota).
+- `InstanceClient` (`createWebhook`, `rotateWebhookSecret`, `deleteWebhook`, `media` fora de 422/429): 4xx deixa de ser `unexpectedResponse`.
+- `ZapmizerConnection::media()` sem instância pareada passa de `ZapmizerUnauthorizedException` a `ZapmizerConnectException` (`notPaired()`).
+- `MediaRejectedException`, `MediaRateLimitedException`, `InstanceGoneException`, `ZapmizerUnauthorizedException` e `PartnerCredentialsException` mudam de construtor (recebem `Support\ApiError`); as fábricas `mediaRejected()`/`mediaRateLimited()` também.
+- `Retry-After` não numérico na mídia passa de `0` para `null` (mensagem sem `Retry in`). O `reason()` da mídia corta HTML em 500 caracteres e deixa de incluir valor escalar não-string de `errors` (número).
+- Upload de arquivo: limites próprios de 60 s para conectar e 600 s no total (`Zapmizer::UPLOAD_CONNECT_TIMEOUT`/`UPLOAD_TIMEOUT`), no lugar do timeout do `GuzzleHttp\Client` registrado.
+- `Zapmizer::sendMessage*` passam pelo transporte configurado: `Http::fake` passa a ver o envio com o `LaravelHttpTransport`, e os timeouts de `zapmizer.http.*` passam a valer no envio de texto (com o `LaravelHttpTransport` sem timeout configurado vale o padrão do `Http`, 30 s do Laravel 9 em diante). `Http::fake()` sem argumentos responde 200 sem corpo nem Content-Type, e o envio passa a lançar `unexpectedResponse`: fakeie com um corpo JSON.
+- `Zapmizer`: o 2º argumento do construtor passa de `?GuzzleHttp\Client` a `?Contracts\Transport`; `setHttpClient()` e `httpClient()` saem. Um `zapmizer.http.transport` inválido passa a quebrar também `app(Zapmizer::class)` e, com ele, `ZapmizerMessage`.
+- Subclasses: `InstanceClient::reasonFrom()` saiu (a regra está em `Support\ApiError`); `Zapmizer` ganhou `$transport`, `guardToken()` e as constantes `UPLOAD_CONNECT_TIMEOUT`/`UPLOAD_TIMEOUT`, que podem colidir com nomes de uma subclasse.
+- Não quebra: `catch` de `ZapmizerConnectException`, `ZapmizerUnavailableException`, `ZapmizerUnauthorizedException`, `PartnerCredentialsException`, `InstanceGoneException`, `MediaRejectedException`, `MediaRateLimitedException`, `ZapmizerVerificationException` e filhas.
+
 **Upgrade da 0.3:**
 
 - `new PartnerClient($id, $secret, $guzzle, $uri)` → `new PartnerClient($id, $secret, new GuzzleTransport($guzzle), $uri)`.
@@ -22,6 +68,8 @@
 - `null` nessa posição continua valendo (um `GuzzleTransport` novo, sem a config); um `GuzzleHttp\Client` ali agora lança `TypeError`. Construído à mão, o cliente não lê `zapmizer.http.*`: para isso, resolva pelo container ou passe `app(Contracts\Transport::class)`.
 - Subclasses: a propriedade `$http` e `InstanceClient::spool()` não existem mais; as chamadas passam pelo `$transport`.
 - Quem publicou `config/zapmizer.php` com a chave `http` e quer trocar de transporte precisa acrescentar `'transport' => ...` dentro dela: o merge da config é só no primeiro nível.
+- `new Zapmizer($token, $guzzle, $uri, $version)` → `new Zapmizer($token, new GuzzleTransport($guzzle), $uri, $version)`; `$zapmizer->setHttpClient($guzzle)` não existe mais: construa com o transporte.
+- `catch (CouldNotSendNotification $e)` → `catch (ZapmizerException $e)` ou as classes da tabela "De/para do envio". Quem lia o status do `getPrevious()` (`ClientException`) passa a usar `$e->status()` de `ZapmizerApiException`.
 
 # 0.3.1
 

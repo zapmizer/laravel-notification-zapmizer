@@ -7,7 +7,7 @@ use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
 use NotificationChannels\Zapmizer\Contracts\Transport;
 use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
-use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
+use NotificationChannels\Zapmizer\Support\ApiError;
 use Psr\Http\Message\ResponseInterface;
 
 /**
@@ -104,31 +104,31 @@ class PartnerClient
     }
 
     /**
-     * A refused partner credential (401/403) is the only 4xx the caller can
-     * tell apart; every other failure becomes unavailability, with the detail
-     * in the log and not in the response.
+     * A refused partner credential (401/403) is PartnerCredentialsException;
+     * any other 4xx comes out of ZapmizerApi::failure(). The body is read
+     * once and goes to the log too.
      *
      * @throws ZapmizerConnectException
      */
     protected function guardFailure(ResponseInterface $response, string $endpoint): void
     {
-        $status = $response->getStatusCode();
-
-        if ($status < 400) {
+        if ($response->getStatusCode() < 400) {
             return;
         }
 
+        $error = ApiError::from($response);
+
         Log::error('zapmizer: partner call failed.', [
             'endpoint' => $endpoint,
-            'status' => $status,
-            'body' => (string) $response->getBody(),
+            'status' => $error->status,
+            'body' => $error->body,
         ]);
 
-        if (in_array($status, [401, 403], true)) {
-            throw new PartnerCredentialsException('Zapmizer refused the partner credentials.');
+        if (in_array($error->status, [401, 403], true)) {
+            throw new PartnerCredentialsException($error);
         }
 
-        throw ZapmizerUnavailableException::dueTo();
+        throw ZapmizerApi::failure($error);
     }
 
     /**

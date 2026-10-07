@@ -7,6 +7,9 @@ use Illuminate\Support\Facades\Http;
 use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Connect\PartnerClient;
 use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
+use NotificationChannels\Zapmizer\Exceptions\ErrorCode;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
+use NotificationChannels\Zapmizer\ZapmizerMessage;
 use Tests\TestCase;
 
 class ZapmizerFakeTest extends TestCase
@@ -16,6 +19,7 @@ class ZapmizerFakeTest extends TestCase
         $app['config']->set('zapmizer.base_uri', 'https://zapmizer.test/api/');
         $app['config']->set('zapmizer.partner.id', 'partner-id');
         $app['config']->set('zapmizer.partner.secret', 'partner-secret');
+        $app['config']->set('zapmizer.api_token', 'team-token');
 
         // In your app this is the `http.transport` key of config/zapmizer.php.
         // With the default GuzzleTransport, Http::fake() would not see these calls.
@@ -32,6 +36,30 @@ class ZapmizerFakeTest extends TestCase
         Http::assertSent(fn (Request $request) => $request->method() === 'POST'
             && $request->url() === 'https://zapmizer.test/api/connect/sessions'
             && $request['state'] === 'state-123');
+    }
+
+    public function testMessageSendIsFaked()
+    {
+        Http::fake(['zapmizer.test/*' => Http::response(['id' => 1], 200)]);
+
+        ZapmizerMessage::create(from: '5581911110000', to: '5511999999999')->text('Hello')->send();
+
+        Http::assertSent(fn (Request $request) => $request->url() === 'https://zapmizer.test/api/messages'
+            && $request['to'] === '5511999999999'
+            && $request['metadata']['text'] === 'Hello');
+    }
+
+    public function testARefusedSendIsFaked()
+    {
+        Http::fake(['zapmizer.test/*' => Http::response(['error' => 'window_closed', 'message' => 'The 24 h window is closed.'], 409)]);
+
+        try {
+            ZapmizerMessage::create(from: '5581911110000', to: '5511999999999')->text('Hello')->send();
+            $this->fail('Expected ZapmizerApiException.');
+        } catch (ZapmizerApiException $exception) {
+            $this->assertSame(409, $exception->status());
+            $this->assertSame(ErrorCode::WINDOW_CLOSED, $exception->error());
+        }
     }
 
     public function testMediaDownloadIsFaked()

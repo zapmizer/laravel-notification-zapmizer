@@ -4,10 +4,15 @@ namespace NotificationChannels\Zapmizer\Test\Unit;
 
 use GuzzleHttp\Psr7\Response;
 use NotificationChannels\Zapmizer\Connect\ZapmizerApi;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerRateLimitedException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
+use NotificationChannels\Zapmizer\Support\ApiError;
 use NotificationChannels\Zapmizer\Test\Fixtures\RecordingTransport;
 use NotificationChannels\Zapmizer\Test\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class ZapmizerApiTest extends TestCase
 {
@@ -85,5 +90,54 @@ class ZapmizerApiTest extends TestCase
         $this->expectException(ZapmizerConnectException::class);
 
         (new ZapmizerApi($redirect))->send('GET', 'http://zap.test/api/m', [], [], false);
+    }
+
+    /** @dataProvider failures */
+    #[DataProvider('failures')]
+    public function testFailureNamesTheExceptionByStatus(int $status, string $class)
+    {
+        $exception = ZapmizerApi::failure(new Response($status, ['Content-Type' => 'application/json', 'Retry-After' => '5'], '{"message":"Nope."}'));
+
+        $this->assertSame($class, get_class($exception));
+        $this->assertSame($status, $exception->status());
+        $this->assertSame('Nope.', $exception->reason());
+    }
+
+    public static function failures(): array
+    {
+        return [
+            '401' => [401, ZapmizerUnauthorizedException::class],
+            '403' => [403, ZapmizerApiException::class],
+            '404' => [404, ZapmizerApiException::class],
+            '409' => [409, ZapmizerApiException::class],
+            '422' => [422, ZapmizerApiException::class],
+            '429' => [429, ZapmizerRateLimitedException::class],
+        ];
+    }
+
+    public function testFailureOn401IsTheTokenRefusal()
+    {
+        $exception = ZapmizerApi::failure(new Response(401, ['Content-Type' => 'application/json'], '{"message":"Unauthenticated."}'));
+
+        $this->assertSame('Zapmizer refused the connection token.', $exception->getMessage());
+        $this->assertSame('Unauthenticated.', $exception->reason());
+    }
+
+    public function testFailureOn429CarriesTheRetryAfter()
+    {
+        $exception = ZapmizerApi::failure(new Response(429, ['Retry-After' => '12'], '{"message":"Too Many Attempts."}'));
+
+        $this->assertSame(12, $exception->retryAfter());
+        $this->assertSame('Zapmizer rate-limited the request. Retry in 12 s.', $exception->getMessage());
+    }
+
+    public function testFailureWithAnApiErrorDoesNotReadTheBodyAgain()
+    {
+        $error = ApiError::from(new Response(409, ['Content-Type' => 'application/json'], '{"error":"window_closed"}'));
+
+        $exception = ZapmizerApi::failure($error);
+
+        $this->assertSame($error, $exception->apiError());
+        $this->assertSame('window_closed', $exception->error());
     }
 }

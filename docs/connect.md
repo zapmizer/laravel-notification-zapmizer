@@ -149,20 +149,20 @@ The panel that shows the connected number usually wants to say whether it is onl
 |---|---|---|
 | `connected` | `true`/`false` | Zapmizer's own state; `is_online` is its `is_online`. Other Zapmizer states (`disconnected`, `off`, `qrcode`, `booting`, ...) come through as they are. |
 | `reauth_required` | `false` | The stored token was revoked on Zapmizer — the user has to connect again. |
-| `instance_gone` | `false` | The instance was deleted on Zapmizer. |
-| `zapmizer_unavailable` | `false` | Zapmizer is down, or answered something that is not JSON. |
+| `instance_gone` | `false` | The instance was deleted on Zapmizer (404). |
+| `zapmizer_unavailable` | `false` | Zapmizer is down, refused the call with another 4xx (403, 422, 429, ...), or answered something that is not JSON. |
 | `null` | `false` | Nothing to query: no token or no instance stored. |
 
 Without `live` no request leaves your server and `state`/`is_online` are absent. The route is throttled (60/min) because `live` reaches Zapmizer — poll it on user action or every minute, not every second.
 
 ### JSON error codes
 
-The JSON endpoints (`show`, `start`, `destroy`) answer these through their exceptions:
+The JSON endpoints (`show`, `start`, `destroy`) answer these themselves, with or without `Accept: application/json` (the package's exceptions do not render):
 
 | `code` | HTTP | Meaning |
 |---|---|---|
-| `zapmizer_unavailable` | 503 | Zapmizer is down or misbehaving — back off and retry. |
-| `partner_unauthorized` | 503 | Your partner credentials were refused — configuration error, logged. |
+| `zapmizer_unavailable` | 503 | Zapmizer is down, misbehaving or refused the session (404, 409, 422, 429) — back off and retry. Reported. |
+| `partner_unauthorized` | 503 | Your partner credentials were refused — configuration error, logged and reported. |
 | `no_connectable` | 403 | The resolver found nothing to connect on this request (no user, a user without a team). |
 
 ### Inertia + Vue components
@@ -270,9 +270,9 @@ $download->stream();      // fresh read handle: Storage::disk('s3')->put($key, $
 $download->contents();    // the whole file as a string — only if you need it in memory
 ```
 
-`media()` streams the bytes into a temporary file; nothing is held in memory unless you call `contents()`. Move or copy the file (`Storage::put`, `putFileAs(new File($download->path()))`) before the object goes away. It needs the connection's `bot_instance_id` (a connection that lost its pairing throws `ZapmizerUnauthorizedException`, like `instanceClient()` without a token) and passes `$m->id` and `$m->sentAt` along — the timestamp is required over there: the 600 s window is counted from it, and it is what lets Zapmizer answer `unavailable` instead of `downloading` forever.
+`media()` streams the bytes into a temporary file; nothing is held in memory unless you call `contents()`. Move or copy the file (`Storage::put`, `putFileAs(new File($download->path()))`) before the object goes away. It needs the connection's `bot_instance_id` (a connection that lost its pairing throws `ZapmizerConnectException::notPaired()`; `instanceClient()` without a token throws `ZapmizerUnauthorizedException`) and passes `$m->id` and `$m->sentAt` along — the timestamp is required over there: the 600 s window is counted from it, and it is what lets Zapmizer answer `unavailable` instead of `downloading` forever.
 
-Two answers are exceptions rather than states, because asking again would not help — each has its own class under the `ZapmizerConnectException` base, so a `catch` can tell them apart:
+Two answers are exceptions rather than states, because asking again would not help — each has its own class under the `ZapmizerApiException` base, so a `catch` can tell them apart:
 
 ```php
 use NotificationChannels\Zapmizer\Exceptions\MediaRejectedException;
@@ -341,17 +341,22 @@ That also means **rotating once does not revoke a leaked secret**: the previous 
 ## Error handling
 
 ```php
-use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;      // base
-use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;   // partner key refused (renders 503 partner_unauthorized)
-use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;  // timeout / 5xx (renders 503 zapmizer_unavailable)
-use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException; // team token revoked (401)
-use NotificationChannels\Zapmizer\Exceptions\NoConnectableException;        // resolver has nothing to connect (renders 403 no_connectable)
-use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;         // instance deleted (4xx on its connection endpoint)
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerException;             // root of every exception of the package
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;      // base of the connect flow and of sending
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;          // Zapmizer refused the call (4xx) — ->status(), ->error(), ->reason(), ->errors(), ->payload()
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerRateLimitedException;  // 429 — ->retryAfter()
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException; // team token revoked or missing (401)
+use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;   // partner key refused (401/403)
+use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;         // instance deleted (404 on its connection endpoint)
 use NotificationChannels\Zapmizer\Exceptions\MediaRejectedException;        // media request refused (422) — ->reason()
 use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;     // media endpoint rate limit (429) — ->retryAfter()
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;  // timeout / 5xx / no answer
+use NotificationChannels\Zapmizer\Exceptions\NoConnectableException;        // resolver has nothing to connect
 ```
 
-The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceClient`) are container-bound with the configured transport — see "HTTP transport" in the README. With the default `GuzzleTransport`, swap `GuzzleHttp\Client` in the container to fake them in tests, like `VerificationClient`; with `LaravelHttpTransport`, use `Http::fake()`. Every client sends `Accept: application/json` and does **not** follow redirects: a revoked token makes Zapmizer redirect to its login page, and a redirect or a non-JSON answer is an exception (`unexpectedResponse`) instead of a silent "success". `InstanceClient` always acts for one connection: its token is mandatory, there is no fallback to `zapmizer.api_token` — get it through `$connection->instanceClient()`. It only knows `connection($id)`, `createWebhook($url)`, `rotateWebhookSecret($id)`, `deleteWebhook($id)` and `media($botInstanceId, $messageId, $timestamp)` — instances are created and paired on Zapmizer's page, not from here. `media()` is the one endpoint whose 200 is not JSON (the bytes); its 202/404 answers are, and a redirect is still refused; its 422 (bad request, Meta Cloud instance) is a `MediaRejectedException` and its 429 (rate limit) a `MediaRateLimitedException` — both `ZapmizerConnectException`s.
+None of them renders a response: the routes above answer their JSON codes themselves, and anywhere else your exception handler decides. "Errors" in the README shows how to read a `ZapmizerApiException` and the `ErrorCode` constants.
+
+The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceClient`) are container-bound with the configured transport — see "HTTP transport" in the README. With the default `GuzzleTransport`, swap `GuzzleHttp\Client` in the container to fake them in tests, like `VerificationClient`; with `LaravelHttpTransport`, use `Http::fake()`. Every client sends `Accept: application/json` and does **not** follow redirects: a revoked token makes Zapmizer redirect to its login page, and a redirect or a non-JSON answer is an exception (`unexpectedResponse`) instead of a silent "success". `InstanceClient` always acts for one connection: its token is mandatory, there is no fallback to `zapmizer.api_token` — get it through `$connection->instanceClient()`. It only knows `connection($id)`, `createWebhook($url)`, `rotateWebhookSecret($id)`, `deleteWebhook($id)` and `media($botInstanceId, $messageId, $timestamp)` — instances are created and paired on Zapmizer's page, not from here. `media()` is the one endpoint whose 200 is not JSON (the bytes); its 202/404 answers are, and a redirect is still refused; its 422 (bad request, Meta Cloud instance) is a `MediaRejectedException` and its 429 (rate limit) a `MediaRateLimitedException`. On `InstanceClient`, any other 4xx is a `ZapmizerApiException` (401 `ZapmizerUnauthorizedException`, 429 `ZapmizerRateLimitedException`), except the 404 of `connection()` (`InstanceGoneException`), of `deleteWebhook()` (done) and of `media()` (`unavailable`). On `PartnerClient`, a refused partner credential (401/403) is a `PartnerCredentialsException`, `exchangeCode()` returns `null` on 404 (unknown, expired or already used code), and any other 4xx is a `ZapmizerApiException` (429 `ZapmizerRateLimitedException`).
 
 `PartnerClient::createSession($redirectUri, $state, $webhookUrl = null, $expiresIn = null)` never asks for an `expires_in` below Zapmizer's floor of **900 seconds** (`PartnerClient::MIN_EXPIRES_IN`): the same signature covers the page, the authorization and the QR code, and a shorter one died mid-pairing.
 

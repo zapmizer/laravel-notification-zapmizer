@@ -8,6 +8,7 @@ use NotificationChannels\Zapmizer\Contracts\Transport;
 use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
+use NotificationChannels\Zapmizer\Support\ApiError;
 use Psr\Http\Message\ResponseInterface;
 
 /**
@@ -125,7 +126,7 @@ class PartnerClient
         ]);
 
         if (in_array($status, [401, 403], true)) {
-            throw new PartnerCredentialsException('Zapmizer refused the partner credentials.');
+            throw new PartnerCredentialsException(ApiError::from($response));
         }
 
         throw ZapmizerUnavailableException::dueTo();

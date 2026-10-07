@@ -2,6 +2,8 @@
 
 namespace NotificationChannels\Zapmizer\Exceptions;
 
+use NotificationChannels\Zapmizer\Support\ApiError;
+
 /**
  * Class ZapmizerConnectException.
  *
@@ -51,20 +53,32 @@ class ZapmizerConnectException extends ZapmizerException
     /**
      * Thrown when Zapmizer refused a media request (422): a `timestamp` in
      * the future, or an instance on Meta Cloud — there is no media endpoint
-     * for those. The request will not do better on a retry.
+     * for those. The request will not do better on a retry. Carries the
+     * `ApiError` of the answer; `reason()` is Zapmizer's own explanation.
      */
-    public static function mediaRejected(string $reason): MediaRejectedException
+    public static function mediaRejected(ApiError $error): MediaRejectedException
     {
-        return new MediaRejectedException($reason);
+        return new MediaRejectedException($error);
     }
 
     /**
      * Thrown when the media endpoint's rate limit was hit (429): 60 requests
-     * a minute per user and instance. Retry after the given seconds.
+     * a minute per user and instance. Carries the `ApiError` of the answer;
+     * `retryAfter()` is its `Retry-After` header, in seconds, when present.
      */
-    public static function mediaRateLimited(?int $retryAfterSeconds = null): MediaRateLimitedException
+    public static function mediaRateLimited(ApiError $error): MediaRateLimitedException
     {
-        return new MediaRateLimitedException($retryAfterSeconds);
+        return new MediaRateLimitedException($error);
+    }
+
+    public static function notPaired(): self
+    {
+        return new self('There is no paired Zapmizer instance for this connection.');
+    }
+
+    public static function unreadableFile(string $path): self
+    {
+        return new self("Could not open {$path} to send.");
     }
 
     /**

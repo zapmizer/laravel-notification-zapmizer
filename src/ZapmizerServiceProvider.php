@@ -49,7 +49,7 @@ class ZapmizerServiceProvider extends ServiceProvider
         ));
 
         $this->app->bind(InstanceClient::class, fn (Application $app, $config) => new InstanceClient(
-            Arr::get($config, 'api_token') ?? throw new ZapmizerUnauthorizedException(
+            Arr::get($config, 'api_token') ?? throw ZapmizerUnauthorizedException::withoutResponse(
                 'InstanceClient needs the connection token — resolve it through ZapmizerConnection::instanceClient().'
             ),
             $app->make(Transport::class),

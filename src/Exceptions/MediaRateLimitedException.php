@@ -2,6 +2,8 @@
 
 namespace NotificationChannels\Zapmizer\Exceptions;
 
+use NotificationChannels\Zapmizer\Support\ApiError;
+
 /**
  * Class MediaRateLimitedException.
  *
@@ -10,18 +12,14 @@ namespace NotificationChannels\Zapmizer\Exceptions;
  * when it sent one. `ZapmizerConnection::awaitMedia()` waits it out;
  * `media()` propagates it.
  */
-final class MediaRateLimitedException extends ZapmizerConnectException
+final class MediaRateLimitedException extends ZapmizerRateLimitedException
 {
-    public function __construct(private readonly ?int $retryAfterSeconds = null)
+    public function __construct(ApiError $error)
     {
         parent::__construct(
+            $error,
             'Zapmizer rate-limited the media request (60 a minute per user and instance).'
-            . ($retryAfterSeconds !== null ? " Retry in {$retryAfterSeconds} s." : '')
+            . ($error->retryAfter !== null ? " Retry in {$error->retryAfter} s." : ''),
         );
-    }
-
-    public function retryAfter(): ?int
-    {
-        return $this->retryAfterSeconds;
     }
 }

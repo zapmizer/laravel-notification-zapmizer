@@ -30,4 +30,15 @@ class SendMessageCommandTest extends TestCase
             && $request['metadata']['text'] === 'oi'
             && $request['to'] === '5511999999999');
     }
+
+    public function testCommandPrintsTheEffectiveFromWhenItComesFromConfig()
+    {
+        config(['zapmizer.from_number' => '5581888880000']);
+        Http::fake(['zap.test/*' => Http::response('{"id":1}', 200, ['Content-Type' => 'application/json'])]);
+
+        $this->artisan('zapmizer:send-message', ['message' => 'oi', '--to' => '5511999999999'])
+            ->expectsOutput('Message: oi from:5581888880000 to:5511999999999')
+            ->expectsOutput('Message sent!')
+            ->assertExitCode(0);
+    }
 }

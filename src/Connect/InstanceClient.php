@@ -327,7 +327,7 @@ class InstanceClient
     protected function guardUnauthorized(ResponseInterface $response): void
     {
         if ($response->getStatusCode() === 401) {
-            throw new ZapmizerUnauthorizedException(ApiError::from($response), 'Zapmizer refused the connection token.');
+            throw ZapmizerApi::failure($response);
         }
     }
 

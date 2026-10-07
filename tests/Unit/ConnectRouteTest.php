@@ -246,7 +246,6 @@ class ConnectRouteTest extends TestCase
         ];
     }
 
-
     // --- start ----------------------------------------------------------
 
     public function testStartStoresStateAndReturnsThePopupUrl()

@@ -388,6 +388,56 @@ class PartnerClientTest extends TestCase
         ];
     }
 
+    /** @dataProvider businessAnswers */
+    #[DataProvider('businessAnswers')]
+    public function testNotFoundAndConflictAreNotLogged(Response $response)
+    {
+        Log::spy();
+        $client = $this->makeClient(new MockHandler([$response]));
+
+        try {
+            $client->createSession('http://app.test/cb', 'state');
+            $this->fail('Expected ZapmizerApiException.');
+        } catch (ZapmizerApiException $exception) {
+            $this->assertSame(ZapmizerApiException::class, get_class($exception));
+            $this->assertSame($response->getStatusCode(), $exception->status());
+        }
+
+        Log::shouldNotHaveReceived('error');
+    }
+
+    public static function businessAnswers(): array
+    {
+        return [
+            '404 not found' => [new Response(404, ['Content-Type' => 'application/json'], '{"message":"Not Found"}')],
+            '409 known code' => [new Response(409, ['Content-Type' => 'application/json'], '{"error":"already_subscribed"}')],
+            '409 unknown code' => [new Response(409, ['Content-Type' => 'application/json'], '{"error":"something_new"}')],
+        ];
+    }
+
+    /** @dataProvider otherRefusals */
+    #[DataProvider('otherRefusals')]
+    public function testOtherRefusalsAreStillLogged(int $status)
+    {
+        Log::spy();
+        $client = $this->makeClient(new MockHandler([new Response($status, ['Content-Type' => 'application/json'], '{"message":"No."}')]));
+
+        try {
+            $client->createSession('http://app.test/cb', 'state');
+            $this->fail('Expected ZapmizerApiException.');
+        } catch (ZapmizerApiException $exception) {
+            $this->assertSame($status, $exception->status());
+        }
+
+        Log::shouldHaveReceived('error')->once()->withArgs(fn (string $message, array $context) => $message === 'zapmizer: partner call failed.'
+            && $context['status'] === $status);
+    }
+
+    public static function otherRefusals(): array
+    {
+        return ['400' => [400], '403' => [403], '410' => [410], '422' => [422], '429' => [429]];
+    }
+
     public function testM48ANonSeekableBodyIsReadOnceForTheExceptionAndTheLog()
     {
         Log::spy();

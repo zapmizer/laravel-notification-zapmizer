@@ -142,7 +142,8 @@ class PartnerClient
     /**
      * A refused partner credential (401/403) is PartnerCredentialsException;
      * any other 4xx comes out of ZapmizerApi::failure(). The body is read
-     * once and goes to the log too.
+     * once and goes to the log too, except on 404 and 409: those are
+     * business answers (no connect yet, already subscribed, payment pending).
      *
      * @throws ZapmizerConnectException
      */
@@ -154,11 +155,13 @@ class PartnerClient
 
         $error = ApiError::from($response);
 
-        Log::error('zapmizer: partner call failed.', [
-            'endpoint' => $endpoint,
-            'status' => $error->status,
-            'body' => $error->body,
-        ]);
+        if (!in_array($error->status, [404, 409], true)) {
+            Log::error('zapmizer: partner call failed.', [
+                'endpoint' => $endpoint,
+                'status' => $error->status,
+                'body' => $error->body,
+            ]);
+        }
 
         if (in_array($error->status, [401, 403], true)) {
             throw new PartnerCredentialsException($error);

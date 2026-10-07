@@ -80,6 +80,31 @@ class LaravelTransportEndToEndTest extends TestCase
         }
     }
 
+    public function testTheSameFakedMediaCanBeFetchedTwice()
+    {
+        Http::fake(['zap.test/*' => Http::response('bytes', 200, ['Content-Type' => 'image/png'])]);
+
+        $client = $this->instanceClient();
+
+        $this->assertSame('bytes', stream_get_contents($client->media(9, 'A', 1700000000)->stream()));
+        $this->assertSame('bytes', stream_get_contents($client->media(9, 'A', 1700000000)->stream()));
+    }
+
+    public function testTheSameFakedAnswerCanBeFetchedTwiceWithoutATemporaryFile()
+    {
+        Http::fake(['zap.test/*' => Http::response(['media_state' => 'downloading'], 202)]);
+
+        $client = new class ('tok', null, 'http://zap.test/api/', '2025-06-27', new LaravelHttpTransport()) extends InstanceClient {
+            protected function temporaryMediaPath(): ?string
+            {
+                return null;
+            }
+        };
+
+        $this->assertFalse($client->media(9, 'A', 1700000000)->isAttached());
+        $this->assertFalse($client->media(9, 'A', 1700000000)->isAttached());
+    }
+
     public function testC25GlobalMiddlewareReadingTheBodyDoesNotEmptyTheMedia()
     {
         if (!method_exists(Factory::class, 'globalMiddleware')) {

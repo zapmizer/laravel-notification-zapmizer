@@ -7,12 +7,14 @@ use GuzzleHttp\Exception\RequestException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
+use GuzzleHttp\Psr7\LazyOpenStream;
 use GuzzleHttp\Psr7\PumpStream;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Connect\MediaDownload;
 use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
+use NotificationChannels\Zapmizer\Contracts\Transport;
 use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\MediaRejectedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
@@ -20,6 +22,8 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
 use NotificationChannels\Zapmizer\Test\Fixtures\RecordingTransport;
 use NotificationChannels\Zapmizer\Test\TestCase;
+use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\StreamInterface;
 use Throwable;
 
 class InstanceClientMediaTest extends TestCase
@@ -143,6 +147,43 @@ class InstanceClientMediaTest extends TestCase
         $download = (new InstanceClient('tok', null, 'http://zap.test/api', null, $transport))->media(9, 'ABC', 1700000000);
 
         $this->assertSame('abc', stream_get_contents($download->stream()));
+    }
+
+    public function testTheSinkBodyIsClosedOnceStored()
+    {
+        $transport = new class implements Transport {
+            public ?StreamInterface $body = null;
+
+            public function send(string $method, string $url, array $options = []): ResponseInterface
+            {
+                $this->body = new LazyOpenStream($options['sink'], 'w+');
+                $this->body->write('bytes');
+
+                return new Response(200, ['Content-Length' => '5'], $this->body);
+            }
+        };
+
+        $download = (new InstanceClient('tok', null, 'http://zap.test/api', null, $transport))->media(9, 'ABC', 1700000000);
+
+        $this->assertSame('bytes', stream_get_contents($download->stream()));
+        $this->assertFalse($transport->body->isReadable());
+    }
+
+    public function testDetachedBodyIsLostNotARawStreamError()
+    {
+        $response = new Response(200, ['Content-Length' => '5'], 'bytes');
+        $response->getBody()->close();
+        $transport = new RecordingTransport($response);
+
+        try {
+            (new InstanceClient('tok', null, 'http://zap.test/api', null, $transport))->media(9, 'ABC', 1700000000);
+            $this->fail('expected ZapmizerConnectException');
+        } catch (ZapmizerUnavailableException $exception) {
+            $this->fail('a detached body is not a cut body');
+        } catch (ZapmizerConnectException $exception) {
+            $this->assertStringContainsString('lost', $exception->getMessage());
+            $this->assertFileDoesNotExist($transport->calls[0]['options']['sink']);
+        }
     }
 
     public function testC27BytesLostByTheTransportAreUnexpected()

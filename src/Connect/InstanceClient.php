@@ -173,7 +173,7 @@ class InstanceClient
 
             return $download = $this->mediaFrom($response, $path);
         } finally {
-            if ($response !== null) {
+            if ($response !== null && $this->ownsBody($response, $path)) {
                 $response->getBody()->close();
             }
 
@@ -203,6 +203,22 @@ class InstanceClient
 
         return implode(' ', array_filter([$payload['message'] ?? null, ...array_values($errors)]))
             ?: trim($body);
+    }
+
+    /**
+     * Whether the body is one this call opened and must close — the sink
+     * file, or, under `stream`, the 200 left unread on the connection (the
+     * other answers are read whole). A fake (`Http::fake` in array form)
+     * hands back the same response on every call; closing its body would
+     * break the next one.
+     */
+    protected function ownsBody(ResponseInterface $response, ?string $path): bool
+    {
+        if ($path === null) {
+            return $response->getStatusCode() === 200;
+        }
+
+        return $response->getBody()->getMetadata('uri') === $path;
     }
 
     protected function temporaryMediaPath(): ?string
@@ -267,6 +283,10 @@ class InstanceClient
         $body = $response->getBody();
 
         if ($total === 0) {
+            if (!$body->isReadable()) {
+                throw ZapmizerConnectException::unexpectedResponse('the media body was lost before it could be stored');
+            }
+
             if ($body->isSeekable()) {
                 $body->rewind();
             }

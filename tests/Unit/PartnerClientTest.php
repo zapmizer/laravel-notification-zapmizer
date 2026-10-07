@@ -109,12 +109,12 @@ class PartnerClientTest extends TestCase
         $this->assertMatchesContract('POST', '/connect/sessions', 201, $body);
         $client = $this->makeClient(new MockHandler([new Response(201, ['Content-Type' => 'application/json'], $body)]));
 
-        $session = $client->createSession(redirectUri: 'http://app.test/cb', state: 'state-123', externalId: '42');
+        $session = $client->createSession(redirectUri: 'http://app.test/cb', state: 'state 123', externalId: '42');
 
         $this->assertSame('http://localhost/connect/1?signature=abc', $session->url);
         $this->assertSame('2026-09-07T01:00:00+00:00', $session->expiresAt->toIso8601String());
         $this->assertSame(
-            ['redirect_uri' => 'http://app.test/cb', 'state' => 'state-123', 'external_id' => '42'],
+            ['redirect_uri' => 'http://app.test/cb', 'state' => 'state 123', 'external_id' => '42'],
             json_decode((string) $this->history[0]['request']->getBody(), true),
         );
     }
@@ -191,7 +191,15 @@ class PartnerClientTest extends TestCase
 
     public static function invalidStates(): array
     {
-        return ['empty' => [''], 'zero' => ['0']];
+        return [
+            'empty' => [''],
+            'zero' => ['0'],
+            'only spaces' => ['   '],
+            'leading space' => [' abc'],
+            'trailing newline' => ["abc\n"],
+            'leading tab' => ["\tabc"],
+            'trailing zero-width space' => ["abc\u{200B}"],
+        ];
     }
 
     public function testP4WithoutStateTheBodyHasNone()

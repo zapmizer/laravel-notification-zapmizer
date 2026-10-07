@@ -342,6 +342,8 @@ That also means **rotating once does not revoke a leaked secret**: the previous 
 
 `PartnerClient` also reads a customer's subscription and creates its checkout. The customer is identified by the `external_id` you sent with the connect session: it exists on Zapmizer once the customer approves that connect, and before that both calls answer 404. The package's own connect route (`zapmizer.connect.start`) does not send an `external_id` yet; call `createSession()` yourself to send one.
 
+Warning: Zapmizer matches `external_id` without regard to case (`Abc` and `abc` are the same customer), so the ids your app sends must be unique ignoring case.
+
 Starting the connect, sending the `external_id`, and then the user to Zapmizer:
 
 ```php
@@ -387,7 +389,8 @@ if ($subscription === null) {
 - `subscription(string $externalId): ?PartnerSubscription` — `GET /api/partner/users/{externalId}`. `null` on 404. `PartnerSubscription` carries `userId`, `teamId`, `externalId` (as Zapmizer answered it), `subscribed`, `quantity` (`null` when Zapmizer did not send a number: unknown, not zero), `trialEndsAt` (`?CarbonImmutable`), `paymentIncomplete`, and `hasAccess(?DateTimeInterface $now = null)`: subscribed, or a trial that ends after `$now` (default: now).
 - `checkout(string $externalId, string $redirectUri, ?string $state = null): PartnerCheckout` — `POST /api/partner/users/{externalId}/checkout`. Every call creates a new checkout. `PartnerCheckout` carries `url` and `expiresAt` (`?CarbonImmutable`, `null` when Zapmizer did not say). The customer comes back to `$redirectUri` with your `state` whether they paid or gave up: read `subscription()` again instead of trusting the return.
 - `checkout()` refusals are `ZapmizerApiException`: 404 (`status()` 404, unknown `external_id`), 409 (`error()` `already_subscribed` or `payment_incomplete`; a code Zapmizer adds later arrives the same way), 422 (`errors()['redirect_uri']` when the redirect is not on your partner allowlist), 429 (`ZapmizerRateLimitedException`, `retryAfter()`). 401/403 are `PartnerCredentialsException` and 5xx or no answer `ZapmizerUnavailableException`, as in every partner call.
-- `external_id` and `state` are checked before any request, in `createSession()` too: an `external_id` outside `/^[A-Za-z0-9_.-]{1,191}\z/` (letters, digits, `_`, `.`, `-`, 1 to 191 characters, no trailing newline), or `.`/`..`, and a `state` of `''` or `'0'` (Zapmizer would drop it) throw `InvalidArgumentException`.
+- `external_id` and `state` are checked before any request, in `createSession()` too: an `external_id` outside `/^[A-Za-z0-9_.-]{1,191}\z/` (letters, digits, `_`, `.`, `-`, 1 to 191 characters, no trailing newline), or `.`/`..`, and a `state` of `''` or `'0'`, or one that starts or ends with whitespace (Zapmizer trims it and drops it when empty), throw `InvalidArgumentException`.
+- Zapmizer matches `external_id` without regard to case (`Abc` and `abc` are the same customer). Use ids that are unique ignoring case (numeric ids or lowercased ones are safest); `PartnerSubscription::$externalId` comes back as Zapmizer stored it, possibly with different case.
 - Dates (`ConnectSession::$expiresAt`, `PartnerCheckout::$expiresAt`, `PartnerSubscription::$trialEndsAt`) are read only from ISO 8601 with a zone (`2026-09-07T01:00:00Z`, `…+00:00`, any number of decimals) and keep the zone they came in. A missing or empty value (`null` or `""`) is `null` with no warning; anything else unreadable is `null` and logs a warning `zapmizer: unreadable date.` with `field`, `value` and `external_id`; add your own context with `Log::withContext()`.
 - There is no subscription webhook, and `partner/users/*` allows 60 requests a minute and 2,000 a day per partner: cache the answer in your app.
 
@@ -432,7 +435,7 @@ The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceCli
 The partner client changed. The package's routes keep their behaviour, except the `start` JSON and a token answer without ids (below).
 
 - `PartnerClient::createSession($redirectUri, $state = null, $webhookUrl = null, $expiresIn = null, $externalId = null)`: `state` became optional and `externalId` was added at the end. Named and positional calls keep working; a subclass that overrides `createSession()` must update its signature.
-- `createSession()`, `subscription()` and `checkout()` throw `InvalidArgumentException` for an invalid `external_id` or `state` before calling Zapmizer.
+- `createSession()`, `subscription()` and `checkout()` throw `InvalidArgumentException` for an invalid `external_id` or `state` (`""`, `"0"` or whitespace at either end) before calling Zapmizer.
 - `createSession()` caps `expires_in` at 86400, and sends an empty `redirect_uri`/`webhook_url` (Zapmizer answers 422) instead of dropping it.
 - `ConnectSession::$expiresAt` is a `?CarbonImmutable` instead of a `?string`. The `start` JSON normalizes it: `2026-09-07T01:00:00Z` becomes `2026-09-07T01:00:00+00:00`, without fractions of a second.
 - `ConnectToken`: `teamId` is an `int` (never `null`), `userId` was added as the second constructor argument, and an answer without a valid `user_id`/`team_id` throws `unexpectedResponse`. The callback then reports `exchange_failed` and stores nothing (it used to store the connection with a `null` `zapmizer_team_id`).

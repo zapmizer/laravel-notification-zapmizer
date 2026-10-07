@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Log;
 use NotificationChannels\Zapmizer\Connect\ConnectSession;
 use NotificationChannels\Zapmizer\Connect\ConnectToken;
 use NotificationChannels\Zapmizer\Connect\PartnerClient;
+use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
 use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
@@ -29,7 +30,7 @@ class PartnerClientTest extends TestCase
         $stack = HandlerStack::create($mock);
         $stack->push(Middleware::history($this->history));
 
-        return new PartnerClient('partner-id', 'partner-secret', new HttpClient(['handler' => $stack]), 'http://localhost/api');
+        return new PartnerClient('partner-id', 'partner-secret', new GuzzleTransport(new HttpClient(['handler' => $stack])), 'http://localhost/api');
     }
 
     public function testCreateSessionSendsPartnerKeyAndReturnsPopupUrl()
@@ -188,7 +189,7 @@ class PartnerClientTest extends TestCase
 
     public function testMissingPartnerCredentialsThrowBeforeAnyRequest()
     {
-        $client = new PartnerClient(null, null, new HttpClient());
+        $client = new PartnerClient();
 
         $this->expectException(ZapmizerConnectException::class);
 

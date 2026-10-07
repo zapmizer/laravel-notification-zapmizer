@@ -35,7 +35,7 @@ class InstanceClientMediaTest extends TestCase
         $stack = HandlerStack::create(new MockHandler($queue));
         $stack->push(Middleware::history($this->history));
 
-        return new InstanceClient('tok', null, 'http://zap.test/api', null, new GuzzleTransport(new HttpClient(['handler' => $stack]), $connectTimeout, $timeout));
+        return new InstanceClient('tok', new GuzzleTransport(new HttpClient(['handler' => $stack]), $connectTimeout, $timeout), 'http://zap.test/api');
     }
 
     protected function sinkOf(int $call): string
@@ -131,7 +131,7 @@ class InstanceClientMediaTest extends TestCase
         $response->getBody()->getContents();
         $transport = new RecordingTransport($response);
 
-        $download = (new InstanceClient('tok', null, 'http://zap.test/api', null, $transport))->media(9, 'ABC', 1700000000);
+        $download = (new InstanceClient('tok', $transport, 'http://zap.test/api'))->media(9, 'ABC', 1700000000);
 
         $this->assertSame('bytes', stream_get_contents($download->stream()));
     }
@@ -144,7 +144,7 @@ class InstanceClientMediaTest extends TestCase
         });
         $transport = new RecordingTransport(new Response(200, [], $body));
 
-        $download = (new InstanceClient('tok', null, 'http://zap.test/api', null, $transport))->media(9, 'ABC', 1700000000);
+        $download = (new InstanceClient('tok', $transport, 'http://zap.test/api'))->media(9, 'ABC', 1700000000);
 
         $this->assertSame('abc', stream_get_contents($download->stream()));
     }
@@ -163,7 +163,7 @@ class InstanceClientMediaTest extends TestCase
             }
         };
 
-        $download = (new InstanceClient('tok', null, 'http://zap.test/api', null, $transport))->media(9, 'ABC', 1700000000);
+        $download = (new InstanceClient('tok', $transport, 'http://zap.test/api'))->media(9, 'ABC', 1700000000);
 
         $this->assertSame('bytes', stream_get_contents($download->stream()));
         $this->assertFalse($transport->body->isReadable());
@@ -176,7 +176,7 @@ class InstanceClientMediaTest extends TestCase
         $transport = new RecordingTransport($response);
 
         try {
-            (new InstanceClient('tok', null, 'http://zap.test/api', null, $transport))->media(9, 'ABC', 1700000000);
+            (new InstanceClient('tok', $transport, 'http://zap.test/api'))->media(9, 'ABC', 1700000000);
             $this->fail('expected ZapmizerConnectException');
         } catch (ZapmizerUnavailableException $exception) {
             $this->fail('a detached body is not a cut body');
@@ -192,7 +192,7 @@ class InstanceClientMediaTest extends TestCase
         $transport = new RecordingTransport(new Response(200, ['Content-Length' => '5'], $body));
 
         try {
-            (new InstanceClient('tok', null, 'http://zap.test/api', null, $transport))->media(9, 'ABC', 1700000000);
+            (new InstanceClient('tok', $transport, 'http://zap.test/api'))->media(9, 'ABC', 1700000000);
             $this->fail('expected ZapmizerConnectException');
         } catch (ZapmizerUnavailableException $exception) {
             $this->fail('lost bytes are not a cut body');
@@ -225,7 +225,7 @@ class InstanceClientMediaTest extends TestCase
             $stack = HandlerStack::create(new MockHandler($queue));
             $stack->push(Middleware::history($this->history));
 
-            return new class ('tok', null, 'http://zap.test/api', null, new GuzzleTransport(new HttpClient(['handler' => $stack]))) extends InstanceClient {
+            return new class ('tok', new GuzzleTransport(new HttpClient(['handler' => $stack])), 'http://zap.test/api') extends InstanceClient {
                 protected function temporaryMediaPath(): ?string
                 {
                     return null;

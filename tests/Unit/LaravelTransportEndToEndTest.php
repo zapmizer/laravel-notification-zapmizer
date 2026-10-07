@@ -94,7 +94,7 @@ class LaravelTransportEndToEndTest extends TestCase
     {
         Http::fake(['zap.test/*' => Http::response(['media_state' => 'downloading'], 202)]);
 
-        $client = new class ('tok', null, 'http://zap.test/api/', '2025-06-27', new LaravelHttpTransport()) extends InstanceClient {
+        $client = new class ('tok', new LaravelHttpTransport(), 'http://zap.test/api/', '2025-06-27') extends InstanceClient {
             protected function temporaryMediaPath(): ?string
             {
                 return null;

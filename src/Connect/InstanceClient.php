@@ -2,8 +2,6 @@
 
 namespace NotificationChannels\Zapmizer\Connect;
 
-use GuzzleHttp\Client as HttpClient;
-use NotificationChannels\Zapmizer\Connect\Concerns\UsesTransport;
 use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
 use NotificationChannels\Zapmizer\Contracts\Transport;
 use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;
@@ -25,13 +23,9 @@ use Psr\Http\Message\ResponseInterface;
  */
 class InstanceClient
 {
-    use UsesTransport;
-
     public const MEDIA_CONNECT_TIMEOUT = 60;
 
     public const MEDIA_TIMEOUT = 600;
-
-    protected HttpClient $http;
 
     protected Transport $transport;
 
@@ -39,13 +33,11 @@ class InstanceClient
 
     public function __construct(
         protected string $token,
-        ?HttpClient $httpClient = null,
+        ?Transport $transport = null,
         ?string $apiBaseUri = null,
         protected ?string $apiVersion = null,
-        ?Transport $transport = null,
     ) {
-        $this->transport = $transport ?? new GuzzleTransport($httpClient ?? new HttpClient());
-        $this->http = $this->transport instanceof GuzzleTransport ? $this->transport->client() : ($httpClient ?? new HttpClient());
+        $this->transport = $transport ?? new GuzzleTransport();
         $this->apiBaseUri = rtrim($apiBaseUri ?? 'https://app.zapmizer.com/api/', '/');
     }
 
@@ -346,7 +338,7 @@ class InstanceClient
 
     protected function request(string $method, string $path, array $options = [], bool $expectsJson = true): ResponseInterface
     {
-        return (new ZapmizerApi($this->currentTransport()))->send($method, $this->apiBaseUri . $path, $options, array_filter([
+        return (new ZapmizerApi($this->transport))->send($method, $this->apiBaseUri . $path, $options, array_filter([
             'Authorization' => 'Bearer ' . $this->token,
             'api-version' => $this->apiVersion,
         ]), $expectsJson);

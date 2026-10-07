@@ -127,21 +127,6 @@ class GuzzleTransportTest extends TestCase
         $transport->send('POST', 'http://zap.test/api/x', ['json' => ['a' => "\xB1"]]);
     }
 
-    public function testC9WithClientKeepsTimeoutsAndSubclass()
-    {
-        $original = new class (null, 5.0, 10.0) extends GuzzleTransport {
-        };
-        $client = $this->client([new Response(200)]);
-
-        $swapped = $original->withClient($client);
-        $swapped->send('GET', 'http://zap.test/api/x');
-
-        $this->assertInstanceOf(get_class($original), $swapped);
-        $this->assertSame($client, $swapped->client());
-        $this->assertNotSame($client, $original->client());
-        $this->assertSame(10.0, $this->history[0]['options']['timeout']);
-    }
-
     public function testDefaultsToANewGuzzleClient()
     {
         $this->assertInstanceOf(Client::class, (new GuzzleTransport())->client());

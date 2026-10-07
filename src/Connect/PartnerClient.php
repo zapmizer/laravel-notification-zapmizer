@@ -2,9 +2,7 @@
 
 namespace NotificationChannels\Zapmizer\Connect;
 
-use GuzzleHttp\Client as HttpClient;
 use Illuminate\Support\Facades\Log;
-use NotificationChannels\Zapmizer\Connect\Concerns\UsesTransport;
 use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
 use NotificationChannels\Zapmizer\Contracts\Transport;
 use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;
@@ -28,10 +26,6 @@ class PartnerClient
      */
     public const MIN_EXPIRES_IN = 900;
 
-    use UsesTransport;
-
-    protected HttpClient $http;
-
     protected Transport $transport;
 
     protected string $apiBaseUri;
@@ -39,12 +33,10 @@ class PartnerClient
     public function __construct(
         protected ?string $partnerId = null,
         protected ?string $partnerSecret = null,
-        ?HttpClient $httpClient = null,
-        ?string $apiBaseUri = null,
         ?Transport $transport = null,
+        ?string $apiBaseUri = null,
     ) {
-        $this->transport = $transport ?? new GuzzleTransport($httpClient ?? new HttpClient());
-        $this->http = $this->transport instanceof GuzzleTransport ? $this->transport->client() : ($httpClient ?? new HttpClient());
+        $this->transport = $transport ?? new GuzzleTransport();
         $this->apiBaseUri = rtrim($apiBaseUri ?? 'https://app.zapmizer.com/api/', '/');
     }
 
@@ -106,7 +98,7 @@ class PartnerClient
             throw ZapmizerConnectException::partnerCredentialsNotProvided();
         }
 
-        return (new ZapmizerApi($this->currentTransport()))->send($method, $this->apiBaseUri . $path, $options, [
+        return (new ZapmizerApi($this->transport))->send($method, $this->apiBaseUri . $path, $options, [
             'X-Partner-Key' => "{$this->partnerId}|{$this->partnerSecret}",
         ]);
     }

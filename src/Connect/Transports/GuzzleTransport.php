@@ -24,14 +24,6 @@ class GuzzleTransport implements Transport
         return $this->client;
     }
 
-    public function withClient(Client $client): static
-    {
-        $clone = clone $this;
-        $clone->client = $client;
-
-        return $clone;
-    }
-
     public function send(string $method, string $url, array $options = []): ResponseInterface
     {
         try {

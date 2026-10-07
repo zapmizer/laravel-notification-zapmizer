@@ -155,10 +155,13 @@ An app that already published `config/zapmizer.php` with an `http` key and wants
 
 An invalid `zapmizer.http.transport` throws `InvalidArgumentException` when the transport is resolved: a class that does not implement `Contracts\Transport`, the interface itself, or a value that is not a string. `null` or an empty string fall back to `GuzzleTransport`.
 
-On Laravel 8 to 11, a configured transport that the container cannot build makes an autowired client fall back to Guzzle silently. On Laravel 12 and 13 it throws. Through the normal path (the service provider) it always fails with an error.
-
 `GuzzleTransport` and `LaravelHttpTransport` are not `final`; extend either one.
 
-### Subclasses of the clients
+### Building a client by hand
 
-A subclass constructor must pass `$transport` on to `parent::__construct`; without it the client falls back to Guzzle and ignores `zapmizer.http.transport`. Swapping `$this->http` only has an effect with `GuzzleTransport`.
+Resolve the clients from the container (`app(PartnerClient::class)`, `$connection->instanceClient()`) to get the configured transport. Built by hand, they take the transport as an argument; without one they use a plain `GuzzleTransport` and ignore the config:
+
+```php
+new PartnerClient($partnerId, $partnerSecret, $transport, $apiBaseUri);
+new InstanceClient($token, $transport, $apiBaseUri, $apiVersion);
+```

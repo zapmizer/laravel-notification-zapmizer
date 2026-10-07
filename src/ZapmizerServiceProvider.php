@@ -44,19 +44,17 @@ class ZapmizerServiceProvider extends ServiceProvider
         $this->app->bind(PartnerClient::class, fn (Application $app, $config) => new PartnerClient(
             Arr::get($config, 'partner_id', config('zapmizer.partner.id')),
             Arr::get($config, 'partner_secret', config('zapmizer.partner.secret')),
-            null,
-            Arr::get($config, 'base_uri', config('zapmizer.base_uri')),
-            $app->make(Transport::class)
+            $app->make(Transport::class),
+            Arr::get($config, 'base_uri', config('zapmizer.base_uri'))
         ));
 
         $this->app->bind(InstanceClient::class, fn (Application $app, $config) => new InstanceClient(
             Arr::get($config, 'api_token') ?? throw new ZapmizerUnauthorizedException(
                 'InstanceClient needs the connection token — resolve it through ZapmizerConnection::instanceClient().'
             ),
-            null,
+            $app->make(Transport::class),
             Arr::get($config, 'base_uri', config('zapmizer.base_uri')),
-            Arr::get($config, 'api_version', config('zapmizer.api_version')),
-            $app->make(Transport::class)
+            Arr::get($config, 'api_version', config('zapmizer.api_version'))
         ));
 
         $this->app->bind(ResolvesConnectable::class, fn (Application $app) => $app->make(

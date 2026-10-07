@@ -177,4 +177,115 @@ class PayloadTest extends TestCase
     {
         return ['null' => [null], 'empty' => ['']];
     }
+
+    /** @dataProvider unsafeUrls */
+    #[DataProvider('unsafeUrls')]
+    public function testE3AnUnsafeUrlIsNull(mixed $value)
+    {
+        Log::spy();
+
+        $this->assertNull(Payload::url($value));
+
+        Log::shouldNotHaveReceived('warning');
+    }
+
+    public static function unsafeUrls(): array
+    {
+        return [
+            'javascript' => ['javascript:alert(1)'],
+            'without scheme' => ['//h/x'],
+            'user and password' => ['https://u:p@h'],
+            'empty user' => ['https://@h.com'],
+            'backslash' => ['https://h\evil'],
+            'ftp' => ['ftp://h'],
+            'empty' => [''],
+            'absent' => [null],
+            'number' => [123],
+            'array' => [['https://h.com']],
+            'newline in the host' => ["https://h.com\n.evil/x"],
+            'tab in the host' => ["https://h\tcom/x"],
+            'null byte before an at' => ["https://h.com\x00@evil.com"],
+            'delete character' => ["https://h.com/\x7F"],
+            'space in the host' => ['https://h com/x'],
+            'unicode host' => ['https://ação.com'],
+            'encoded slash in the host' => ['https://h.com%2f.evil'],
+            'leading space' => [' https://h'],
+            'trailing space' => ['https://h.com/ '],
+            'one slash' => ['https:/x'],
+            'three slashes' => ['https:///x'],
+            'no slashes' => ['http:h.com'],
+            'port 0' => ['https://h.com:0/x'],
+            'port 99999' => ['https://h.com:99999/x'],
+            'port 65536' => ['https://h.com:65536/x'],
+            'port with letters' => ['https://h.com:44a/x'],
+            'name between brackets' => ['https://[evil.com]/'],
+            'ipv6 with a zone id' => ['https://[fe80::1%25eth0]/'],
+        ];
+    }
+
+    /** @dataProvider safeUrls */
+    #[DataProvider('safeUrls')]
+    public function testE4ASafeUrlIsKeptAndItsOriginIsTheOneTheBrowserShows(string $url, string $origin)
+    {
+        Log::spy();
+
+        $this->assertSame($url, Payload::url($url));
+        $this->assertSame($origin, Payload::origin($url));
+
+        Log::shouldNotHaveReceived('warning');
+    }
+
+    public static function safeUrls(): array
+    {
+        return [
+            'E4 upper case and default port' => ['HTTPS://H.COM:443/x', 'https://h.com'],
+            'E4 ipv6 with a port' => ['https://[::1]:8443/x', 'https://[::1]:8443'],
+            'E4 punycode' => ['https://xn--ao-ana.com/x', 'https://xn--ao-ana.com'],
+            'E4 ipv6' => ['https://[::1]/x', 'https://[::1]'],
+            'E4 empty port' => ['https://h.com:/x', 'https://h.com'],
+            'other port' => ['https://h.com:8443/x', 'https://h.com:8443'],
+            'http default port' => ['http://h.com:80/x', 'http://h.com'],
+            'http on 443' => ['http://h.com:443/x', 'http://h.com:443'],
+            'port with a leading zero' => ['https://h.com:0443/x', 'https://h.com'],
+            'lowest port' => ['https://h.com:1/', 'https://h.com:1'],
+            'highest port' => ['https://h.com:65535', 'https://h.com:65535'],
+            'query and fragment' => ['https://h.com?x=1#y:2', 'https://h.com'],
+            'upper case ipv6' => ['https://[::FFFF:7F00:1]/x', 'https://[::ffff:7f00:1]'],
+            'ipv4 not canonical' => ['https://0x7f.1/x', 'https://0x7f.1'],
+        ];
+    }
+
+    /** @dataProvider sameOrigins */
+    #[DataProvider('sameOrigins')]
+    public function testE6TheSameOriginWrittenTwoWaysIsTheSame(string $url, string $other)
+    {
+        $this->assertSame(Payload::origin($url), Payload::origin($other));
+    }
+
+    public static function sameOrigins(): array
+    {
+        return [
+            'implicit and explicit 443' => ['https://h.com/embed', 'https://h.com:443/chats'],
+            'implicit and explicit 80' => ['http://h.com/embed', 'http://h.com:80/chats'],
+            'host in another case' => ['https://app.h.com/embed', 'https://APP.H.com/chats'],
+            'scheme in another case' => ['https://h.com/embed', 'HTTPS://h.com/chats'],
+        ];
+    }
+
+    /** @dataProvider otherOrigins */
+    #[DataProvider('otherOrigins')]
+    public function testE5AnotherHostSchemeOrPortIsAnotherOrigin(string $url, string $other)
+    {
+        $this->assertNotSame(Payload::origin($url), Payload::origin($other));
+    }
+
+    public static function otherOrigins(): array
+    {
+        return [
+            'host' => ['https://h.com/embed', 'https://evil.com/chats'],
+            'subdomain' => ['https://h.com/embed', 'https://app.h.com/chats'],
+            'scheme' => ['https://h.com/embed', 'http://h.com/chats'],
+            'port' => ['https://h.com/embed', 'https://h.com:8443/chats'],
+        ];
+    }
 }

@@ -53,6 +53,60 @@ final class Payload
         return $date;
     }
 
+    public static function url(mixed $value): ?string
+    {
+        if (!is_string($value) || preg_match('/[\x00-\x20\x7F\\\\]/', $value) === 1) {
+            return null;
+        }
+
+        $parts = parse_url($value);
+
+        if (
+            $parts === false
+            || !isset($parts['scheme'], $parts['host'])
+            || !in_array(strtolower($parts['scheme']), ['http', 'https'], true)
+            || isset($parts['user'])
+            || isset($parts['pass'])
+            || !self::isHost($parts['host'])
+        ) {
+            return null;
+        }
+
+        if (isset($parts['port']) && !self::hasPort($value, $parts['port'])) {
+            return null;
+        }
+
+        return $value;
+    }
+
+    public static function origin(string $url): string
+    {
+        $parts = parse_url($url);
+        $scheme = strtolower($parts['scheme']);
+        $port = $parts['port'] ?? null;
+        $default = $scheme === 'https' ? 443 : 80;
+
+        return $scheme . '://' . strtolower($parts['host']) . ($port === null || $port === $default ? '' : ':' . $port);
+    }
+
+    private static function isHost(string $host): bool
+    {
+        if (str_starts_with($host, '[') && str_ends_with($host, ']')) {
+            return filter_var(substr($host, 1, -1), FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false;
+        }
+
+        return preg_match('/^[A-Za-z0-9.-]+\z/', $host) === 1;
+    }
+
+    private static function hasPort(string $url, int $port): bool
+    {
+        return preg_match('#^[^:]+://([^/?\#]*)#', $url, $authority) === 1
+            && preg_match('/:\d+\z/', $authority[1]) === 1
+            && $port >= 1
+            && $port <= 65535;
+    }
+
+
     private static function parseDate(string $value): ?CarbonImmutable
     {
         if (preg_match(self::ISO_8601, $value, $parts) !== 1) {

@@ -4,6 +4,7 @@ namespace NotificationChannels\Zapmizer\Connect;
 
 use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
+use NotificationChannels\Zapmizer\Connect\Concerns\BuildsZapmizerRequests;
 use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
 use NotificationChannels\Zapmizer\Contracts\Transport;
 use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;
@@ -21,6 +22,8 @@ use Psr\Http\Message\ResponseInterface;
  */
 class PartnerClient
 {
+    use BuildsZapmizerRequests;
+
     /**
      * Zapmizer's floor for `expires_in`: the same signature covers the hosted
      * page, the authorization and the pairing (whose QR window alone is five
@@ -78,7 +81,7 @@ class PartnerClient
                 'redirect_uri' => $redirectUri,
                 'state' => $state,
                 'webhook_url' => $webhookUrl,
-                'expires_in' => $expiresIn === null ? null : min(max($expiresIn, self::MIN_EXPIRES_IN), self::MAX_EXPIRES_IN),
+                'expires_in' => $this->clampExpiresIn($expiresIn),
                 'external_id' => $externalId,
             ]),
         ]);
@@ -157,22 +160,6 @@ class PartnerClient
         if (preg_match('/^[A-Za-z0-9_.-]{1,191}\z/', $externalId) !== 1 || $externalId === '.' || $externalId === '..') {
             throw new InvalidArgumentException('The external id must be 1 to 191 characters among A-Z, a-z, 0-9, "_", "." and "-", and not "." or "..".');
         }
-    }
-
-    protected function guardState(?string $state): void
-    {
-        if ($state === null) {
-            return;
-        }
-
-        if ($state === '' || $state === '0' || preg_match('/^[\s\x{FEFF}\x{200B}\x{200E}]|[\s\x{FEFF}\x{200B}\x{200E}]$/u', $state)) {
-            throw new InvalidArgumentException('The state must not be "" or "0", nor start or end with whitespace: Zapmizer trims it and drops it when empty, and the redirect would come back without it or changed.');
-        }
-    }
-
-    protected function withoutNulls(array $body): array
-    {
-        return array_filter($body, fn ($value) => $value !== null);
     }
 
     protected function request(string $method, string $path, array $options = []): ResponseInterface

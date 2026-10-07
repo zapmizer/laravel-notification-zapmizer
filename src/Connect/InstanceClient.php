@@ -2,6 +2,7 @@
 
 namespace NotificationChannels\Zapmizer\Connect;
 
+use NotificationChannels\Zapmizer\Connect\Concerns\BuildsZapmizerRequests;
 use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
 use NotificationChannels\Zapmizer\Contracts\Transport;
 use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;
@@ -24,6 +25,8 @@ use Psr\Http\Message\ResponseInterface;
  */
 class InstanceClient
 {
+    use BuildsZapmizerRequests;
+
     public const MEDIA_CONNECT_TIMEOUT = 60;
 
     public const MEDIA_TIMEOUT = 600;

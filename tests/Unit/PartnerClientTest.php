@@ -51,8 +51,8 @@ class PartnerClientTest extends TestCase
 
         $this->assertInstanceOf(ConnectSession::class, $session);
         $this->assertEquals('http://localhost/connect/1?signature=abc', $session->url);
-        $this->assertEquals('2026-09-07T01:00:00.000000Z', $session->expiresAt);
-        $this->assertEquals(['url' => $session->url, 'expires_at' => $session->expiresAt], $session->jsonSerialize());
+        $this->assertSame('2026-09-07 01:00:00.000000+00:00', $session->expiresAt->format('Y-m-d H:i:s.uP'));
+        $this->assertSame(['url' => $session->url, 'expires_at' => '2026-09-07T01:00:00+00:00'], $session->jsonSerialize());
 
         $request = $this->history[0]['request'];
         $this->assertEquals('POST', $request->getMethod());
@@ -97,7 +97,7 @@ class PartnerClientTest extends TestCase
     {
         $client = $this->makeClient(new MockHandler([
             new Response(200, [], json_encode([
-                'token' => '1|sanctum', 'team_id' => 7, 'team_name' => 'Acme',
+                'token' => '1|sanctum', 'user_id' => 3, 'team_id' => 7, 'team_name' => 'Acme',
                 'phone_number' => '5511999990000', 'bot_instance_id' => 42, 'webhook_id' => 9, 'webhook_secret' => 'whsec_x',
             ])),
         ]));
@@ -106,7 +106,8 @@ class PartnerClientTest extends TestCase
 
         $this->assertInstanceOf(ConnectToken::class, $token);
         $this->assertEquals('1|sanctum', $token->token);
-        $this->assertEquals(7, $token->teamId);
+        $this->assertSame(3, $token->userId);
+        $this->assertSame(7, $token->teamId);
         $this->assertEquals('Acme', $token->teamName);
         $this->assertEquals('5511999990000', $token->phoneNumber);
         $this->assertEquals(42, $token->botInstanceId);
@@ -120,9 +121,9 @@ class PartnerClientTest extends TestCase
     {
         $client = $this->makeClient(new MockHandler([
             // Webhook reused on the team: id comes, secret does not.
-            new Response(200, [], json_encode(['token' => '1|sanctum', 'team_id' => 7, 'phone_number' => '5511999990000', 'bot_instance_id' => 42, 'webhook_id' => 9, 'webhook_secret' => null])),
+            new Response(200, [], json_encode(['token' => '1|sanctum', 'user_id' => 3, 'team_id' => 7, 'team_name' => 'Acme', 'phone_number' => '5511999990000', 'bot_instance_id' => 42, 'webhook_id' => 9, 'webhook_secret' => null])),
             // No webhook_url was sent: nothing to rotate.
-            new Response(200, [], json_encode(['token' => '1|sanctum', 'team_id' => 7, 'phone_number' => '5511999990000', 'bot_instance_id' => 42, 'webhook_id' => null, 'webhook_secret' => null])),
+            new Response(200, [], json_encode(['token' => '1|sanctum', 'user_id' => 3, 'team_id' => 7, 'team_name' => 'Acme', 'phone_number' => '5511999990000', 'bot_instance_id' => 42, 'webhook_id' => null, 'webhook_secret' => null])),
         ]));
 
         $reused = $client->exchangeCode('c');

@@ -2,8 +2,10 @@
 
 namespace NotificationChannels\Zapmizer\Connect;
 
+use Carbon\CarbonImmutable;
 use JsonSerializable;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
+use NotificationChannels\Zapmizer\Support\Payload;
 
 /**
  * Class ConnectSession.
@@ -15,14 +17,14 @@ final class ConnectSession implements JsonSerializable
 {
     public function __construct(
         public readonly string $url,
-        public readonly ?string $expiresAt = null,
+        public readonly ?CarbonImmutable $expiresAt = null,
     ) {
     }
 
     /**
      * @throws ZapmizerConnectException
      */
-    public static function fromArray(array $payload): self
+    public static function fromArray(array $payload, ?string $externalId = null): self
     {
         $data = $payload['data'] ?? $payload;
 
@@ -32,7 +34,7 @@ final class ConnectSession implements JsonSerializable
 
         return new self(
             url: (string) $data['url'],
-            expiresAt: isset($data['expires_at']) ? (string) $data['expires_at'] : null,
+            expiresAt: Payload::date($data['expires_at'] ?? null, 'expires_at', $externalId),
         );
     }
 
@@ -40,7 +42,7 @@ final class ConnectSession implements JsonSerializable
     {
         return [
             'url' => $this->url,
-            'expires_at' => $this->expiresAt,
+            'expires_at' => $this->expiresAt?->toIso8601String(),
         ];
     }
 }

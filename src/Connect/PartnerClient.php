@@ -15,8 +15,9 @@ use Psr\Http\Message\ResponseInterface;
  * Class PartnerClient.
  *
  * Zapmizer's partner endpoints, authenticated by X-Partner-Key — never by a
- * team token. Creates the authorization session the popup opens and
- * exchanges the callback code for the authorized team's token.
+ * team token. Creates the authorization session the popup opens, exchanges
+ * the callback code for the authorized team's token, and reads the
+ * subscription and creates the checkout of a customer by its `external_id`.
  */
 class PartnerClient
 {
@@ -127,6 +128,28 @@ class PartnerClient
         $this->guardFailure($response, $endpoint);
 
         return PartnerSubscription::fromArray($this->decode($response), $externalId);
+    }
+
+    /**
+     * @throws InvalidArgumentException
+     * @throws ZapmizerConnectException
+     */
+    public function checkout(string $externalId, string $redirectUri, ?string $state = null): PartnerCheckout
+    {
+        $this->guardExternalId($externalId);
+        $this->guardState($state);
+
+        $endpoint = 'partner/users/' . rawurlencode($externalId) . '/checkout';
+        $response = $this->request('POST', "/{$endpoint}", [
+            'json' => $this->withoutNulls([
+                'redirect_uri' => $redirectUri,
+                'state' => $state,
+            ]),
+        ]);
+
+        $this->guardFailure($response, $endpoint);
+
+        return PartnerCheckout::fromArray($this->decode($response), $externalId);
     }
 
     protected function guardExternalId(string $externalId): void

@@ -15,9 +15,11 @@ use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
 use NotificationChannels\Zapmizer\Connect\ConnectSession;
 use NotificationChannels\Zapmizer\Connect\ConnectToken;
+use NotificationChannels\Zapmizer\Connect\PartnerCheckout;
 use NotificationChannels\Zapmizer\Connect\PartnerClient;
 use NotificationChannels\Zapmizer\Connect\PartnerSubscription;
 use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
+use NotificationChannels\Zapmizer\Exceptions\ErrorCode;
 use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
@@ -576,6 +578,188 @@ class PartnerClientTest extends TestCase
     public static function externalIdsThatWouldMoveThePath(): array
     {
         return ['slash' => ['a/b'], 'two dots' => ['..'], 'dot' => ['.'], 'query' => ['a?b'], 'empty' => ['']];
+    }
+
+    public function testP25CheckoutSendsTheStateAndReadsTheAnswerOfTheContract()
+    {
+        $body = '{"url":"https://checkout.test/c/1","expires_at":"2026-09-07T01:00:00Z"}';
+        $this->assertMatchesContract('POST', '/partner/users/{externalId}/checkout', 200, $body);
+        $client = $this->makeClient(new MockHandler([new Response(200, ['Content-Type' => 'application/json'], $body)]));
+
+        $checkout = $client->checkout('42', 'http://app.test/billing/return', 'state-123');
+
+        $this->assertInstanceOf(PartnerCheckout::class, $checkout);
+        $this->assertSame('https://checkout.test/c/1', $checkout->url);
+        $this->assertSame('2026-09-07T01:00:00+00:00', $checkout->expiresAt->toIso8601String());
+
+        $request = $this->history[0]['request'];
+        $this->assertSame('POST', $request->getMethod());
+        $this->assertSame('http://localhost/api/partner/users/42/checkout', (string) $request->getUri());
+        $this->assertSame('partner-id|partner-secret', $request->getHeaderLine('X-Partner-Key'));
+        $this->assertSame(
+            ['redirect_uri' => 'http://app.test/billing/return', 'state' => 'state-123'],
+            json_decode((string) $request->getBody(), true),
+        );
+    }
+
+    public function testCheckoutWithoutStateSendsOnlyTheRedirect()
+    {
+        $client = $this->makeClient(new MockHandler([new Response(200, [], '{"url":"https://checkout.test/c/1","expires_at":null}')]));
+
+        $this->assertNull($client->checkout('42', 'http://app.test/billing/return')->expiresAt);
+
+        $this->assertSame(['redirect_uri' => 'http://app.test/billing/return'], json_decode((string) $this->history[0]['request']->getBody(), true));
+    }
+
+    /** @dataProvider checkoutConflictsFromTheContract */
+    #[DataProvider('checkoutConflictsFromTheContract')]
+    public function testP21CheckoutConflictFromTheContractIsAnApiExceptionWithTheCode(string $code)
+    {
+        $body = json_encode(['error' => $code, 'message' => 'No checkout.']);
+        $this->assertMatchesContract('POST', '/partner/users/{externalId}/checkout', 409, $body);
+        Log::spy();
+        $client = $this->makeClient(new MockHandler([new Response(409, ['Content-Type' => 'application/json'], $body)]));
+
+        try {
+            $client->checkout('42', 'http://app.test/billing/return', 'state');
+            $this->fail('Expected ZapmizerApiException.');
+        } catch (ZapmizerApiException $exception) {
+            $this->assertSame(ZapmizerApiException::class, get_class($exception));
+            $this->assertSame(409, $exception->status());
+            $this->assertSame($code, $exception->error());
+        }
+
+        Log::shouldNotHaveReceived('error');
+    }
+
+    public static function checkoutConflictsFromTheContract(): array
+    {
+        return [
+            'already_subscribed' => [ErrorCode::ALREADY_SUBSCRIBED],
+            'payment_incomplete' => [ErrorCode::PAYMENT_INCOMPLETE],
+        ];
+    }
+
+    public function testP22CheckoutConflictWithAnUnknownCodeKeepsTheCode()
+    {
+        Log::spy();
+        $client = $this->makeClient(new MockHandler([new Response(409, ['Content-Type' => 'application/json'], '{"error":"plan_paused"}')]));
+
+        try {
+            $client->checkout('42', 'http://app.test/billing/return');
+            $this->fail('Expected ZapmizerApiException.');
+        } catch (ZapmizerApiException $exception) {
+            $this->assertSame(ZapmizerApiException::class, get_class($exception));
+            $this->assertSame('plan_paused', $exception->error());
+        }
+
+        Log::shouldNotHaveReceived('error');
+    }
+
+    public function testP23CheckoutOfAnUnknownCustomerIsAnApiExceptionWithTheStatus()
+    {
+        $body = '{"message":"Not found."}';
+        $this->assertMatchesContract('POST', '/partner/users/{externalId}/checkout', 404, $body);
+        Log::spy();
+        $client = $this->makeClient(new MockHandler([new Response(404, ['Content-Type' => 'application/json'], $body)]));
+
+        try {
+            $client->checkout('42', 'http://app.test/billing/return');
+            $this->fail('Expected ZapmizerApiException.');
+        } catch (ZapmizerApiException $exception) {
+            $this->assertSame(ZapmizerApiException::class, get_class($exception));
+            $this->assertSame(404, $exception->status());
+        }
+
+        Log::shouldNotHaveReceived('error');
+    }
+
+    public function testP24CheckoutRefusingTheRedirectCarriesTheFieldError()
+    {
+        $body = '{"message":"The redirect uri is not allowed.","errors":{"redirect_uri":["The redirect uri is not allowed."]}}';
+        $this->assertMatchesContract('POST', '/partner/users/{externalId}/checkout', 422, $body);
+        Log::spy();
+        $client = $this->makeClient(new MockHandler([new Response(422, ['Content-Type' => 'application/json'], $body)]));
+
+        try {
+            $client->checkout('42', 'http://evil.test/return');
+            $this->fail('Expected ZapmizerApiException.');
+        } catch (ZapmizerApiException $exception) {
+            $this->assertSame(422, $exception->status());
+            $this->assertSame(['The redirect uri is not allowed.'], $exception->errors()['redirect_uri']);
+        }
+
+        Log::shouldHaveReceived('error')->once()->withArgs(fn (string $message, array $context) => $context['endpoint'] === 'partner/users/42/checkout'
+            && $context['status'] === 422);
+    }
+
+    public function testCheckoutRateLimitFromTheContract()
+    {
+        $body = '{"message":"Too Many Attempts."}';
+        $this->assertMatchesContract('POST', '/partner/users/{externalId}/checkout', 429, $body, ['Retry-After' => '15']);
+        $client = $this->makeClient(new MockHandler([new Response(429, ['Content-Type' => 'application/json', 'Retry-After' => '15'], $body)]));
+
+        try {
+            $client->checkout('42', 'http://app.test/billing/return');
+            $this->fail('Expected ZapmizerRateLimitedException.');
+        } catch (ZapmizerRateLimitedException $exception) {
+            $this->assertSame(15, $exception->retryAfter());
+        }
+    }
+
+    /** @dataProvider checkoutFailuresOutsideTheContract */
+    #[DataProvider('checkoutFailuresOutsideTheContract')]
+    public function testCheckoutFailureOutsideTheContract(mixed $answer, string $class)
+    {
+        Log::spy();
+        $client = $this->makeClient(new MockHandler([$answer]));
+
+        $this->expectException($class);
+
+        $client->checkout('42', 'http://app.test/billing/return');
+    }
+
+    public static function checkoutFailuresOutsideTheContract(): array
+    {
+        return [
+            '401' => [new Response(401, ['Content-Type' => 'application/json'], '{"message":"Unauthenticated."}'), PartnerCredentialsException::class],
+            '403' => [new Response(403, ['Content-Type' => 'application/json'], '{"message":"Forbidden."}'), PartnerCredentialsException::class],
+            '500' => [new Response(500, [], 'boom'), ZapmizerUnavailableException::class],
+            'network' => [new ConnectException('timed out', new Request('POST', 'partner/users/42/checkout')), ZapmizerUnavailableException::class],
+            'redirect' => [new Response(302, ['Location' => 'http://localhost/login'], ''), ZapmizerConnectException::class],
+            'html 200' => [new Response(200, ['Content-Type' => 'text/html'], '<html></html>'), ZapmizerConnectException::class],
+            'answer without url' => [new Response(200, ['Content-Type' => 'application/json'], '{"expires_at":null}'), ZapmizerConnectException::class],
+        ];
+    }
+
+    /** @dataProvider externalIdsThatWouldMoveThePath */
+    #[DataProvider('externalIdsThatWouldMoveThePath')]
+    public function testP19CheckoutRefusesAnExternalIdBeforeAnyRequest(string $externalId)
+    {
+        $transport = new RecordingTransport();
+        $client = new PartnerClient('partner-id', 'partner-secret', $transport, 'http://localhost/api');
+
+        try {
+            $client->checkout($externalId, 'http://app.test/billing/return');
+            $this->fail('Expected InvalidArgumentException.');
+        } catch (InvalidArgumentException) {
+            $this->assertSame([], $transport->calls);
+        }
+    }
+
+    /** @dataProvider invalidStates */
+    #[DataProvider('invalidStates')]
+    public function testCheckoutRefusesAStateTheApiWouldDropBeforeAnyRequest(string $state)
+    {
+        $transport = new RecordingTransport();
+        $client = new PartnerClient('partner-id', 'partner-secret', $transport, 'http://localhost/api');
+
+        try {
+            $client->checkout('42', 'http://app.test/billing/return', $state);
+            $this->fail('Expected InvalidArgumentException.');
+        } catch (InvalidArgumentException) {
+            $this->assertSame([], $transport->calls);
+        }
     }
 
     public function testServerErrorAndNetworkFailureBecomeUnavailable()

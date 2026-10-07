@@ -63,7 +63,7 @@ class InstanceClient
 
         $this->guardUnauthorized($response);
 
-        if ($response->getStatusCode() >= 400 && $response->getStatusCode() < 500) {
+        if ($response->getStatusCode() === 404) {
             throw new InstanceGoneException(ApiError::from($response), $id);
         }
 
@@ -337,9 +337,7 @@ class InstanceClient
     protected function guardFailure(ResponseInterface $response): void
     {
         if ($response->getStatusCode() >= 400) {
-            throw ZapmizerConnectException::unexpectedResponse(
-                "HTTP {$response->getStatusCode()} - " . (string) $response->getBody()
-            );
+            throw ZapmizerApi::failure($response);
         }
     }
 

@@ -223,6 +223,30 @@ class ConnectRouteTest extends TestCase
         ];
     }
 
+    /** @dataProvider undeclaredLiveRefusals */
+    #[DataProvider('undeclaredLiveRefusals')]
+    public function testM9AnUndeclaredRefusalOfTheInstanceIsUnavailableNotGone(Response $response)
+    {
+        $this->fakeHttp($response);
+        $this->actingAsUser();
+        $this->authorizedTeam(['phone_number' => '5581911110000', 'bot_instance_id' => 9, 'is_active' => true]);
+
+        $this->getJson(route('zapmizer.connect.show', ['live' => 1]))
+            ->assertOk()
+            ->assertJsonPath('connection.state', 'zapmizer_unavailable')
+            ->assertJsonPath('connection.is_online', false);
+    }
+
+    public static function undeclaredLiveRefusals(): array
+    {
+        return [
+            '429' => [new Response(429, ['Content-Type' => 'application/json', 'Retry-After' => '5'], '{"message":"Too Many Attempts."}')],
+            '403' => [new Response(403, ['Content-Type' => 'application/json'], '{"message":"This action is unauthorized."}')],
+            '422' => [new Response(422, ['Content-Type' => 'application/json'], '{"message":"Invalid.","errors":{"id":["Invalid."]}}')],
+        ];
+    }
+
+
     // --- start ----------------------------------------------------------
 
     public function testStartStoresStateAndReturnsThePopupUrl()

@@ -16,6 +16,7 @@ use InvalidArgumentException;
 use NotificationChannels\Zapmizer\Connect\ConnectSession;
 use NotificationChannels\Zapmizer\Connect\ConnectToken;
 use NotificationChannels\Zapmizer\Connect\PartnerClient;
+use NotificationChannels\Zapmizer\Connect\PartnerSubscription;
 use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
 use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
@@ -470,6 +471,111 @@ class PartnerClientTest extends TestCase
         }
 
         Log::shouldHaveReceived('error')->withArgs(fn (string $message, array $context) => $context['body'] === substr($html, 0, 500));
+    }
+
+    protected function subscriptionBody(array $overrides = []): string
+    {
+        return json_encode(array_merge([
+            'user_id' => 3, 'team_id' => 7, 'external_id' => '42', 'subscribed' => true,
+            'quantity' => 2, 'trial_ends_at' => null, 'payment_incomplete' => false,
+        ], $overrides));
+    }
+
+    public function testP13SubscriptionReadsTheAnswerOfTheContract()
+    {
+        $body = $this->subscriptionBody();
+        $this->assertMatchesContract('GET', '/partner/users/{externalId}', 200, $body);
+        $client = $this->makeClient(new MockHandler([new Response(200, ['Content-Type' => 'application/json'], $body)]));
+
+        $subscription = $client->subscription('42');
+
+        $this->assertInstanceOf(PartnerSubscription::class, $subscription);
+        $this->assertSame(3, $subscription->userId);
+        $this->assertSame(7, $subscription->teamId);
+        $this->assertSame('42', $subscription->externalId);
+        $this->assertTrue($subscription->subscribed);
+        $this->assertSame(2, $subscription->quantity);
+        $this->assertTrue($subscription->hasAccess());
+
+        $request = $this->history[0]['request'];
+        $this->assertSame('GET', $request->getMethod());
+        $this->assertSame('http://localhost/api/partner/users/42', (string) $request->getUri());
+        $this->assertSame('partner-id|partner-secret', $request->getHeaderLine('X-Partner-Key'));
+        $this->assertSame('application/json', $request->getHeaderLine('Accept'));
+        $this->assertSame('', (string) $request->getBody());
+    }
+
+    public function testP17SubscriptionOfAnUnknownCustomerIsNull()
+    {
+        $body = '{"message":"Not found."}';
+        $this->assertMatchesContract('GET', '/partner/users/{externalId}', 404, $body);
+        Log::spy();
+        $client = $this->makeClient(new MockHandler([new Response(404, ['Content-Type' => 'application/json'], $body)]));
+
+        $this->assertNull($client->subscription('42'));
+
+        Log::shouldNotHaveReceived('error');
+    }
+
+    public function testP18SubscriptionRateLimitFromTheContract()
+    {
+        $body = '{"message":"Too Many Attempts."}';
+        $this->assertMatchesContract('GET', '/partner/users/{externalId}', 429, $body, ['Retry-After' => '20']);
+        $client = $this->makeClient(new MockHandler([new Response(429, ['Content-Type' => 'application/json', 'Retry-After' => '20'], $body)]));
+
+        try {
+            $client->subscription('42');
+            $this->fail('Expected ZapmizerRateLimitedException.');
+        } catch (ZapmizerRateLimitedException $exception) {
+            $this->assertSame(429, $exception->status());
+            $this->assertSame(20, $exception->retryAfter());
+        }
+    }
+
+    /** @dataProvider subscriptionFailuresOutsideTheContract */
+    #[DataProvider('subscriptionFailuresOutsideTheContract')]
+    public function testP18SubscriptionFailureOutsideTheContract(mixed $answer, string $class)
+    {
+        Log::spy();
+        $client = $this->makeClient(new MockHandler([$answer]));
+
+        $this->expectException($class);
+
+        $client->subscription('42');
+    }
+
+    public static function subscriptionFailuresOutsideTheContract(): array
+    {
+        return [
+            'P18 401' => [new Response(401, ['Content-Type' => 'application/json'], '{"message":"Unauthenticated."}'), PartnerCredentialsException::class],
+            '403' => [new Response(403, ['Content-Type' => 'application/json'], '{"message":"Forbidden."}'), PartnerCredentialsException::class],
+            '422' => [new Response(422, ['Content-Type' => 'application/json'], '{"message":"Invalid.","errors":{"external_id":["Invalid."]}}'), ZapmizerApiException::class],
+            'P18 500' => [new Response(500, [], 'boom'), ZapmizerUnavailableException::class],
+            'network' => [new ConnectException('timed out', new Request('GET', 'partner/users/42')), ZapmizerUnavailableException::class],
+            'redirect' => [new Response(302, ['Location' => 'http://localhost/login'], ''), ZapmizerConnectException::class],
+            'html 200' => [new Response(200, ['Content-Type' => 'text/html'], '<html></html>'), ZapmizerConnectException::class],
+            'answer without ids' => [new Response(200, ['Content-Type' => 'application/json'], '{"subscribed":true}'), ZapmizerConnectException::class],
+        ];
+    }
+
+    /** @dataProvider externalIdsThatWouldMoveThePath */
+    #[DataProvider('externalIdsThatWouldMoveThePath')]
+    public function testP19SubscriptionRefusesAnExternalIdBeforeAnyRequest(string $externalId)
+    {
+        $transport = new RecordingTransport();
+        $client = new PartnerClient('partner-id', 'partner-secret', $transport, 'http://localhost/api');
+
+        try {
+            $client->subscription($externalId);
+            $this->fail('Expected InvalidArgumentException.');
+        } catch (InvalidArgumentException) {
+            $this->assertSame([], $transport->calls);
+        }
+    }
+
+    public static function externalIdsThatWouldMoveThePath(): array
+    {
+        return ['slash' => ['a/b'], 'two dots' => ['..'], 'dot' => ['.'], 'query' => ['a?b'], 'empty' => ['']];
     }
 
     public function testServerErrorAndNetworkFailureBecomeUnavailable()

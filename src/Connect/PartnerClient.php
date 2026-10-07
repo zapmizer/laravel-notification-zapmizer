@@ -109,6 +109,26 @@ class PartnerClient
         return ConnectToken::fromArray($this->decode($response));
     }
 
+    /**
+     * @throws InvalidArgumentException
+     * @throws ZapmizerConnectException
+     */
+    public function subscription(string $externalId): ?PartnerSubscription
+    {
+        $this->guardExternalId($externalId);
+
+        $endpoint = 'partner/users/' . rawurlencode($externalId);
+        $response = $this->request('GET', "/{$endpoint}");
+
+        if ($response->getStatusCode() === 404) {
+            return null;
+        }
+
+        $this->guardFailure($response, $endpoint);
+
+        return PartnerSubscription::fromArray($this->decode($response), $externalId);
+    }
+
     protected function guardExternalId(string $externalId): void
     {
         if (preg_match('/^[A-Za-z0-9_.-]{1,191}\z/', $externalId) !== 1 || $externalId === '.' || $externalId === '..') {

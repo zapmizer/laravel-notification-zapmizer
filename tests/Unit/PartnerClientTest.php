@@ -7,21 +7,29 @@ use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
+use GuzzleHttp\Psr7\NoSeekStream;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
+use GuzzleHttp\Psr7\Utils;
 use Illuminate\Support\Facades\Log;
 use NotificationChannels\Zapmizer\Connect\ConnectSession;
 use NotificationChannels\Zapmizer\Connect\ConnectToken;
 use NotificationChannels\Zapmizer\Connect\PartnerClient;
 use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
 use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
+use NotificationChannels\Zapmizer\Test\Concerns\AssertsContract;
+use NotificationChannels\Zapmizer\Test\Fixtures\RecordingTransport;
 use NotificationChannels\Zapmizer\Test\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 class PartnerClientTest extends TestCase
 {
+    use AssertsContract;
+
     /** @var array<int, array{request: Request}> */
     protected array $history = [];
 
@@ -157,16 +165,133 @@ class PartnerClientTest extends TestCase
         return ['401' => [401], '403' => [403]];
     }
 
-    public function testOtherClientErrorsBecomeUnavailable()
+    protected function callEndpoint(PartnerClient $client, string $endpoint): mixed
     {
-        $client = $this->makeClient(new MockHandler([new Response(422, [], '{"message":"The redirect uri field is required."}')]));
+        return $endpoint === '/connect/sessions'
+            ? $client->createSession('http://app.test/cb', 'state')
+            : $client->exchangeCode('12.secret');
+    }
+
+    public function testM1ValidationErrorIsAnApiExceptionWithTheFieldErrorsAndIsLogged()
+    {
+        $body = '{"message":"The redirect uri field is required.","errors":{"redirect_uri":["The redirect uri field is required."]}}';
+        $this->assertMatchesContract('POST', '/connect/sessions', 422, $body);
+        Log::spy();
+        $client = $this->makeClient(new MockHandler([new Response(422, ['Content-Type' => 'application/json'], $body)]));
 
         try {
             $client->createSession('http://app.test/cb', 'state');
-            $this->fail('Expected ZapmizerUnavailableException.');
-        } catch (ZapmizerUnavailableException $exception) {
-            $this->assertSame('Zapmizer is unavailable.', $exception->getMessage());
+            $this->fail('Expected ZapmizerApiException.');
+        } catch (ZapmizerApiException $exception) {
+            $this->assertSame(ZapmizerApiException::class, get_class($exception));
+            $this->assertSame(422, $exception->status());
+            $this->assertNull($exception->error());
+            $this->assertSame(['redirect_uri' => ['The redirect uri field is required.']], $exception->errors());
+            $this->assertSame('The redirect uri field is required. The redirect uri field is required.', $exception->reason());
+            $this->assertSame('Zapmizer refused the request (HTTP 422): The redirect uri field is required. The redirect uri field is required.', $exception->getMessage());
         }
+
+        Log::shouldHaveReceived('error')->once()->withArgs(fn (string $message, array $context) => $message === 'zapmizer: partner call failed.'
+            && $context === ['endpoint' => 'connect/sessions', 'status' => 422, 'body' => $body]);
+    }
+
+    /** @dataProvider refusalsFromTheContract */
+    #[DataProvider('refusalsFromTheContract')]
+    public function testRefusalFromTheContract(string $endpoint, int $status, string $body, array $headers, string $class, ?int $retryAfter)
+    {
+        $this->assertMatchesContract('POST', $endpoint, $status, $body, $headers);
+        Log::spy();
+        $client = $this->makeClient(new MockHandler([new Response($status, ['Content-Type' => 'application/json'] + $headers, $body)]));
+
+        try {
+            $this->callEndpoint($client, $endpoint);
+            $this->fail("Expected {$class}.");
+        } catch (ZapmizerApiException $exception) {
+            $this->assertSame($class, get_class($exception));
+            $this->assertSame($status, $exception->status());
+
+            if ($exception instanceof ZapmizerRateLimitedException) {
+                $this->assertSame($retryAfter, $exception->retryAfter());
+            }
+        }
+    }
+
+    public static function refusalsFromTheContract(): array
+    {
+        return [
+            'M3 sessions 429' => ['/connect/sessions', 429, '{"message":"Too Many Attempts."}', ['Retry-After' => '12'], ZapmizerRateLimitedException::class, 12],
+            'token 422' => ['/connect/token', 422, '{"message":"The code field is required.","errors":{"code":["The code field is required."]}}', [], ZapmizerApiException::class, null],
+            'token 429' => ['/connect/token', 429, '{"message":"Too Many Attempts."}', ['Retry-After' => '30'], ZapmizerRateLimitedException::class, 30],
+        ];
+    }
+
+    /** @dataProvider refusalsOutsideTheContract */
+    #[DataProvider('refusalsOutsideTheContract')]
+    public function testRefusalOutsideTheContract(string $endpoint, Response $response, string $class, ?int $retryAfter)
+    {
+        Log::spy();
+        $client = $this->makeClient(new MockHandler([$response]));
+
+        try {
+            $this->callEndpoint($client, $endpoint);
+            $this->fail("Expected {$class}.");
+        } catch (ZapmizerApiException $exception) {
+            $this->assertSame($class, get_class($exception));
+            $this->assertSame($response->getStatusCode(), $exception->status());
+
+            if ($exception instanceof ZapmizerRateLimitedException) {
+                $this->assertSame($retryAfter, $exception->retryAfter());
+            }
+        }
+    }
+
+    public static function refusalsOutsideTheContract(): array
+    {
+        $tooMany = '{"message":"Too Many Attempts."}';
+
+        return [
+            'sessions 404' => ['/connect/sessions', new Response(404, ['Content-Type' => 'application/json'], '{"message":"Not Found"}'), ZapmizerApiException::class, null],
+            'sessions 409' => ['/connect/sessions', new Response(409, ['Content-Type' => 'application/json'], '{"error":"something_new"}'), ZapmizerApiException::class, null],
+            'token 409' => ['/connect/token', new Response(409, ['Content-Type' => 'application/json'], '{"message":"Conflict."}'), ZapmizerApiException::class, null],
+            'M4 429 without Retry-After' => ['/connect/sessions', new Response(429, [], $tooMany), ZapmizerRateLimitedException::class, null],
+            'M4 429 with an HTTP date' => ['/connect/sessions', new Response(429, ['Retry-After' => 'Wed, 21 Oct 2026 07:28:00 GMT'], $tooMany), ZapmizerRateLimitedException::class, null],
+            'M4 429 with -1' => ['/connect/sessions', new Response(429, ['Retry-After' => '-1'], $tooMany), ZapmizerRateLimitedException::class, null],
+            'M4 429 with text' => ['/connect/sessions', new Response(429, ['Retry-After' => 'abc'], $tooMany), ZapmizerRateLimitedException::class, null],
+        ];
+    }
+
+    public function testM48ANonSeekableBodyIsReadOnceForTheExceptionAndTheLog()
+    {
+        Log::spy();
+        $body = '{"message":"The redirect uri field is required.","errors":{"redirect_uri":["required"]}}';
+        $transport = new RecordingTransport(new Response(422, ['Content-Type' => 'application/json'], new NoSeekStream(Utils::streamFor($body))));
+        $client = new PartnerClient('partner-id', 'partner-secret', $transport, 'http://localhost/api');
+
+        try {
+            $client->createSession('http://app.test/cb', 'state');
+            $this->fail('Expected ZapmizerApiException.');
+        } catch (ZapmizerApiException $exception) {
+            $this->assertSame('The redirect uri field is required. required', $exception->reason());
+            $this->assertSame(['redirect_uri' => ['required']], $exception->errors());
+        }
+
+        Log::shouldHaveReceived('error')->withArgs(fn (string $message, array $context) => $context['body'] === $body);
+    }
+
+    public function testTheLoggedBodyIsCutAt500Characters()
+    {
+        Log::spy();
+        $html = '<html>' . str_repeat('x', 800) . '</html>';
+        $client = $this->makeClient(new MockHandler([new Response(422, ['Content-Type' => 'text/html'], $html)]));
+
+        try {
+            $client->createSession('http://app.test/cb', 'state');
+            $this->fail('Expected ZapmizerApiException.');
+        } catch (ZapmizerApiException $exception) {
+            $this->assertSame(substr($html, 0, 500), $exception->reason());
+        }
+
+        Log::shouldHaveReceived('error')->withArgs(fn (string $message, array $context) => $context['body'] === substr($html, 0, 500));
     }
 
     public function testServerErrorAndNetworkFailureBecomeUnavailable()

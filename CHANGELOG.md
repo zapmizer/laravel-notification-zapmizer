@@ -5,7 +5,7 @@
 Sem breaking para quem usa o pacote direto; há mudanças para quem estende os clientes.
 
 - **Transporte HTTP plugável.** `PartnerClient` e `InstanceClient` mandam as requisições por um transporte: `zapmizer.http.transport` nomeia uma classe que implementa `Contracts\Transport`. Vêm `GuzzleTransport` (padrão) e `LaravelHttpTransport` (`Http::fake`, `preventStrayRequests`, middleware global).
-- Com o `LaravelHttpTransport`, o `getPrevious()` da `ZapmizerUnavailableException` passa a ser uma exceção do `Http` do Laravel (`ConnectionException` etc.) em vez da do Guzzle. É opt-in.
+- Com o `LaravelHttpTransport`, o `getPrevious()` da `ZapmizerUnavailableException` pode mudar de classe conforme a versão do Laravel: uma exceção do `Http` do Laravel (`ConnectionException` etc.) ou, do Laravel 8 ao 11 em alguns casos (corpo cortado), a do Guzzle. É opt-in.
 - `zapmizer.http.connect_timeout` e `zapmizer.http.timeout` (`ZAPMIZER_HTTP_CONNECT_TIMEOUT`, `ZAPMIZER_HTTP_TIMEOUT`), `null` por padrão.
 - `illuminate/http` declarado como dependência.
 - Um app que já tinha `zapmizer.http.connect_timeout`/`timeout` na config agora aplica esses timeouts nas chamadas JSON de partner e instância.

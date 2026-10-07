@@ -147,7 +147,7 @@ The rules:
 
 Set the class in `zapmizer.http.transport`. If you register the class in the container yourself, the timeout config does not apply: whoever registered it defines its timeouts. Binding `Contracts\Transport` directly works too.
 
-An app that already published `config/zapmizer.php` with the `http` key (or that wants to switch transport) must add `'transport' => ...` inside it: the package merges only the first level of the config, so the new key does not arrive by itself.
+An app that already published `config/zapmizer.php` with an `http` key and wants to switch transport must add `'transport' => ...` inside it: the package merges only the first level of the config, so the new key does not arrive by itself. Without it, the default `GuzzleTransport` is used.
 
 An invalid `zapmizer.http.transport` throws `InvalidArgumentException` when the transport is resolved: a class that does not implement `Contracts\Transport`, the interface itself, or a value that is not a string. `null` or an empty string fall back to `GuzzleTransport`.
 

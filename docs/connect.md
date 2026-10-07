@@ -11,7 +11,7 @@ your app ──(X-Partner-Key)──> POST /api/connect/sessions { redirect_uri,
 user authorizes a team AND pairs a number (QR code) on the hosted page
         ──> redirect to your callback with ?code&state   (or ?error=access_denied|plan_limit|qr_unavailable)
 your app ──(X-Partner-Key)──> POST /api/connect/token { code }
-        ──> { token, team_id, team_name, phone_number, bot_instance_id, webhook_id, webhook_secret }
+        ──> { token, user_id, team_id, team_name, phone_number, bot_instance_id, webhook_id, webhook_secret }
 everything stored (token and secret encrypted), connection ACTIVE
 Zapmizer ──(signed)──> POST /zapmizer/webhook ──> MessageReceived event
 ```
@@ -22,7 +22,7 @@ There is no wizard on your side: no instance creation, no QR code rendering, no 
 
 You need **partner credentials** (id + secret), issued by Zapmizer for your application. They authenticate the hosted connect flow; each connected team's own token is obtained through it and stored by the package.
 
-**This flow needs a Zapmizer with the hosted pairing** — `POST /api/connect/sessions` accepting `webhook_url` and the token exchange answering `phone_number`/`bot_instance_id`/`webhook_id`/`webhook_secret`. That is Zapmizer **1.149.0 or later** (the release after `connect-pareamento`). Against an older Zapmizer the callback still stores the token, but no number comes and the connection stays inactive — see "Upgrading from 0.1.x".
+**This flow needs a Zapmizer with the hosted pairing** — `POST /api/connect/sessions` accepting `webhook_url` and the token exchange answering `phone_number`/`bot_instance_id`/`webhook_id`/`webhook_secret`. That is Zapmizer **1.149.0 or later** (the release after `connect-pareamento`). The token exchange must also answer `user_id` and `team_id`, which the contract requires: without them the callback reports `exchange_failed` and stores nothing.
 
 Zapmizer validates `webhook_url` the way it validates `redirect_uri`: **https in production**, host on your partner allowlist, public address (anti-SSRF). The package sends `route('zapmizer.webhook')` — make sure `APP_URL` resolves to the public https host, and that this host is on your partner allowlist over there.
 
@@ -112,7 +112,7 @@ All under the package prefix (`zapmizer`), behind `web` + `auth`:
 | Route name | Method | Returns |
 |---|---|---|
 | `zapmizer.connect.show` | GET | `{ connection }` — the model's connection, or `null`. With `?live=1` the paired instance is queried on Zapmizer and `connection` also carries `state` and `is_online` (below). |
-| `zapmizer.connect.start` | POST | `{ url, expires_at }` — open `url` in a popup (520×720 works). Stores the `state` in the session and sends `route('zapmizer.webhook')` as the session's `webhook_url`. |
+| `zapmizer.connect.start` | POST | `{ url, expires_at }` — open `url` in a popup (520×720 works). `expires_at` is ISO 8601 with the offset (`2026-09-07T01:00:00+00:00`), or `null`. Stores the `state` in the session and sends `route('zapmizer.webhook')` as the session's `webhook_url`. |
 | `zapmizer.connect.callback` | GET | HTML page that `postMessage`s `{ source: 'zapmizer-connect', status, message }` to the opener and closes — it never answers a 500 (that would leave the opener waiting). Stores token, team, number, instance and webhook; the connection is born **active**. |
 | `zapmizer.connect.destroy` | DELETE | Deletes the webhook on Zapmizer (best-effort: a failure is logged and the local row goes anyway) and the local connection with its credentials. Zapmizer has no endpoint to revoke the team token — it is forgotten here, not revoked there. |
 
@@ -338,6 +338,47 @@ Calls `POST /api/webhooks/{id}/secret` and stores both the new secret and the pr
 
 That also means **rotating once does not revoke a leaked secret**: the previous one keeps signing (and validating) until the next rotation. To retire a compromised secret, rotate **twice**.
 
+## 8. Subscription and checkout
+
+`PartnerClient` also reads a customer's subscription and creates its checkout. The customer is identified by the `external_id` you sent with the connect session: it exists on Zapmizer once the customer approves that connect, and before that both calls answer 404. The package's own connect route (`zapmizer.connect.start`) does not send an `external_id` yet; call `createSession()` yourself to send one.
+
+```php
+use NotificationChannels\Zapmizer\Connect\PartnerClient;
+use NotificationChannels\Zapmizer\Exceptions\ErrorCode;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
+
+$partner = app(PartnerClient::class);
+
+$session = $partner->createSession(
+    redirectUri: route('billing.connected'),
+    state: $state,
+    externalId: (string) $team->id,
+);
+
+$subscription = $partner->subscription((string) $team->id);
+
+if ($subscription === null) {
+    // No approved connect with this external_id yet.
+} elseif (!$subscription->hasAccess()) {
+    try {
+        return redirect()->away($partner->checkout((string) $team->id, route('billing.return'), $state)->url);
+    } catch (ZapmizerApiException $e) {
+        match ($e->error()) {
+            ErrorCode::ALREADY_SUBSCRIBED => null, // read the subscription again
+            ErrorCode::PAYMENT_INCOMPLETE => null, // the customer finishes the payment on Zapmizer
+            default => throw $e,
+        };
+    }
+}
+```
+
+- `subscription(string $externalId): ?PartnerSubscription` — `GET /api/partner/users/{externalId}`. `null` on 404. `PartnerSubscription` carries `userId`, `teamId`, `externalId` (as Zapmizer answered it), `subscribed`, `quantity` (`null` when Zapmizer did not send a number: unknown, not zero), `trialEndsAt` (`?CarbonImmutable`), `paymentIncomplete`, and `hasAccess(?DateTimeInterface $now = null)`: subscribed, or a trial that ends after `$now` (default: now).
+- `checkout(string $externalId, string $redirectUri, ?string $state = null): PartnerCheckout` — `POST /api/partner/users/{externalId}/checkout`. Every call creates a new checkout. `PartnerCheckout` carries `url` and `expiresAt` (`?CarbonImmutable`, `null` when Zapmizer did not say). The customer comes back to `$redirectUri` with your `state` whether they paid or gave up: read `subscription()` again instead of trusting the return.
+- `checkout()` refusals are `ZapmizerApiException`: 404 (`status()` 404, unknown `external_id`), 409 (`error()` `already_subscribed` or `payment_incomplete`; a code Zapmizer adds later arrives the same way), 422 (`errors()['redirect_uri']` when the redirect is not on your partner allowlist), 429 (`ZapmizerRateLimitedException`, `retryAfter()`). 401/403 are `PartnerCredentialsException` and 5xx or no answer `ZapmizerUnavailableException`, as in every partner call.
+- `external_id` and `state` are checked before any request, in `createSession()` too: an `external_id` outside `^[A-Za-z0-9_.-]{1,191}$`, or `.`/`..`, and a `state` of `''` or `'0'` (Zapmizer would drop it) throw `InvalidArgumentException`.
+- Dates (`ConnectSession::$expiresAt`, `PartnerCheckout::$expiresAt`, `PartnerSubscription::$trialEndsAt`) are read only from ISO 8601 with a zone (`2026-09-07T01:00:00Z`, `…+00:00`, any number of decimals) and keep the zone they came in. Anything else is `null` and logs a warning `zapmizer: unreadable date.` with `field`, `value` and `external_id`; add your own context with `Log::withContext()`.
+- There is no subscription webhook, and `partner/users/*` allows 60 requests a minute and 2,000 a day per partner: cache the answer in your app.
+
 ## Error handling
 
 ```php
@@ -356,9 +397,9 @@ use NotificationChannels\Zapmizer\Exceptions\NoConnectableException;        // r
 
 None of them renders a response: the routes above answer their JSON codes themselves, and anywhere else your exception handler decides. "Errors" in the README shows how to read a `ZapmizerApiException` and the `ErrorCode` constants.
 
-The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceClient`) are container-bound with the configured transport — see "HTTP transport" in the README. With the default `GuzzleTransport`, swap `GuzzleHttp\Client` in the container to fake them in tests, like `VerificationClient`; with `LaravelHttpTransport`, use `Http::fake()`. Every client sends `Accept: application/json` and does **not** follow redirects: a revoked token makes Zapmizer redirect to its login page, and a redirect or a non-JSON answer is an exception (`unexpectedResponse`) instead of a silent "success". `InstanceClient` always acts for one connection: its token is mandatory, there is no fallback to `zapmizer.api_token` — get it through `$connection->instanceClient()`. It only knows `connection($id)`, `createWebhook($url)`, `rotateWebhookSecret($id)`, `deleteWebhook($id)` and `media($botInstanceId, $messageId, $timestamp)` — instances are created and paired on Zapmizer's page, not from here. `media()` is the one endpoint whose 200 is not JSON (the bytes); its 202/404 answers are, and a redirect is still refused; its 422 (bad request, Meta Cloud instance) is a `MediaRejectedException` and its 429 (rate limit) a `MediaRateLimitedException`. On `InstanceClient`, any other 4xx is a `ZapmizerApiException` (401 `ZapmizerUnauthorizedException`, 429 `ZapmizerRateLimitedException`), except the 404 of `connection()` (`InstanceGoneException`), of `deleteWebhook()` (done) and of `media()` (`unavailable`). On `PartnerClient`, a refused partner credential (401/403) is a `PartnerCredentialsException`, `exchangeCode()` returns `null` on 404 (unknown, expired or already used code), and any other 4xx is a `ZapmizerApiException` (429 `ZapmizerRateLimitedException`).
+The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceClient`) are container-bound with the configured transport — see "HTTP transport" in the README. With the default `GuzzleTransport`, swap `GuzzleHttp\Client` in the container to fake them in tests, like `VerificationClient`; with `LaravelHttpTransport`, use `Http::fake()`. Every client sends `Accept: application/json` and does **not** follow redirects: a revoked token makes Zapmizer redirect to its login page, and a redirect or a non-JSON answer is an exception (`unexpectedResponse`) instead of a silent "success". `InstanceClient` always acts for one connection: its token is mandatory, there is no fallback to `zapmizer.api_token` — get it through `$connection->instanceClient()`. It only knows `connection($id)`, `createWebhook($url)`, `rotateWebhookSecret($id)`, `deleteWebhook($id)` and `media($botInstanceId, $messageId, $timestamp)` — instances are created and paired on Zapmizer's page, not from here. `media()` is the one endpoint whose 200 is not JSON (the bytes); its 202/404 answers are, and a redirect is still refused; its 422 (bad request, Meta Cloud instance) is a `MediaRejectedException` and its 429 (rate limit) a `MediaRateLimitedException`. On `InstanceClient`, any other 4xx is a `ZapmizerApiException` (401 `ZapmizerUnauthorizedException`, 429 `ZapmizerRateLimitedException`), except the 404 of `connection()` (`InstanceGoneException`), of `deleteWebhook()` (done) and of `media()` (`unavailable`). On `PartnerClient`, a refused partner credential (401/403) is a `PartnerCredentialsException`, `exchangeCode()` and `subscription()` return `null` on 404 (unknown, expired or already used code; no approved connect with that `external_id`), and any other 4xx is a `ZapmizerApiException` (429 `ZapmizerRateLimitedException`). A 4xx of a partner call is logged as `zapmizer: partner call failed.`, except 404 and 409: those are business answers (no connect yet, already subscribed, payment pending).
 
-`PartnerClient::createSession($redirectUri, $state, $webhookUrl = null, $expiresIn = null)` never asks for an `expires_in` below Zapmizer's floor of **900 seconds** (`PartnerClient::MIN_EXPIRES_IN`): the same signature covers the page, the authorization and the QR code, and a shorter one died mid-pairing.
+`PartnerClient::createSession($redirectUri, $state = null, $webhookUrl = null, $expiresIn = null, $externalId = null)` keeps `expires_in` between Zapmizer's floor of **900 seconds** (`PartnerClient::MIN_EXPIRES_IN`) and its ceiling of **86400** (`PartnerClient::MAX_EXPIRES_IN`): the same signature covers the page, the authorization and the QR code, and a shorter one died mid-pairing. `ConnectToken` carries `userId` and `teamId` (both `int`) and `hasNumber()`: `false` when `phone_number` or `bot_instance_id` came `null` (the number ceased to exist between the approval and the exchange; Zapmizer says to start a new session).
 
 ## Customization summary
 
@@ -373,6 +414,17 @@ The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceCli
 | `zapmizer.webhook.tolerance` | accepted timestamp drift in seconds (default 300) |
 | `zapmizer.models.connection` | subclass the connection model |
 | `zapmizer.routes.*` | enable/prefix/middleware of the package routes |
+
+## Upgrading from 0.3.x
+
+The partner client changed. The package's routes keep their behaviour, except the `start` JSON and a token answer without ids (below).
+
+- `PartnerClient::createSession($redirectUri, $state = null, $webhookUrl = null, $expiresIn = null, $externalId = null)`: `state` became optional and `externalId` was added at the end. Named and positional calls keep working; a subclass that overrides `createSession()` must update its signature.
+- `createSession()`, `subscription()` and `checkout()` throw `InvalidArgumentException` for an invalid `external_id` or `state` before calling Zapmizer.
+- `createSession()` caps `expires_in` at 86400, and sends an empty `redirect_uri`/`webhook_url` (Zapmizer answers 422) instead of dropping it.
+- `ConnectSession::$expiresAt` is a `?CarbonImmutable` instead of a `?string`. The `start` JSON normalizes it: `2026-09-07T01:00:00Z` becomes `2026-09-07T01:00:00+00:00`, without fractions of a second.
+- `ConnectToken`: `teamId` is an `int` (never `null`), `userId` was added as the second constructor argument, and an answer without a valid `user_id`/`team_id` throws `unexpectedResponse`. The callback then reports `exchange_failed` and stores nothing (it used to store the connection with a `null` `zapmizer_team_id`).
+- A partner call answered 404 or 409 no longer logs `zapmizer: partner call failed.`.
 
 ## Upgrading from 0.1.x
 

@@ -6,6 +6,8 @@
 
 **Breaking nos erros:** o envio lança as mesmas exceções dos clientes Connect e `CouldNotSendNotification` foi removida. Veja "Erros" abaixo, com o de/para.
 
+**Breaking no cliente de parceiro:** `ConnectToken`, `ConnectSession::$expiresAt` e a assinatura do `createSession()` mudaram. Veja "Cliente de parceiro" abaixo.
+
 - **Transporte HTTP plugável.** `PartnerClient` e `InstanceClient` mandam as requisições por um transporte: `zapmizer.http.transport` nomeia uma classe que implementa `Contracts\Transport`. Vêm `GuzzleTransport` (padrão, com o `GuzzleHttp\Client` registrado no container) e `LaravelHttpTransport` (`Http::fake`, `preventStrayRequests`, middleware global).
 - Com o `LaravelHttpTransport`, o `getPrevious()` da `ZapmizerUnavailableException` pode mudar de classe conforme a versão do Laravel: uma exceção do `Http` do Laravel (`ConnectionException` etc.) ou, do Laravel 8 ao 11 em alguns casos (corpo cortado), a do Guzzle. É opt-in.
 - `zapmizer.http.connect_timeout` e `zapmizer.http.timeout` (`ZAPMIZER_HTTP_CONNECT_TIMEOUT`, `ZAPMIZER_HTTP_TIMEOUT`), `null` por padrão.
@@ -61,6 +63,25 @@ Outras mudanças que podem quebrar:
 - Subclasses: `InstanceClient::reasonFrom()` saiu (a regra está em `Support\ApiError`); `Zapmizer` ganhou `$transport`, `guardToken()` e as constantes `UPLOAD_CONNECT_TIMEOUT`/`UPLOAD_TIMEOUT`, que podem colidir com nomes de uma subclasse.
 - Não quebra: `catch` de `ZapmizerConnectException`, `ZapmizerUnavailableException`, `ZapmizerUnauthorizedException`, `PartnerCredentialsException`, `InstanceGoneException`, `MediaRejectedException`, `MediaRateLimitedException`, `ZapmizerVerificationException` e filhas.
 
+**Cliente de parceiro:**
+
+- `PartnerClient::subscription(string $externalId): ?PartnerSubscription` lê `GET /partner/users/{externalId}`; 404 devolve `null`. `Connect\PartnerSubscription` tem `userId`, `teamId`, `externalId`, `subscribed`, `quantity` (`null` quando não veio número), `trialEndsAt` (`?CarbonImmutable`), `paymentIncomplete` e `hasAccess(?DateTimeInterface $now = null)`.
+- `PartnerClient::checkout(string $externalId, string $redirectUri, ?string $state = null): PartnerCheckout` cria o checkout (`POST /partner/users/{externalId}/checkout`). `Connect\PartnerCheckout` tem `url` e `expiresAt` (`?CarbonImmutable`). 404 → `ZapmizerApiException` com `status()` 404; 409 → `ZapmizerApiException` com `error()` `already_subscribed` ou `payment_incomplete`; 422 do redirect → `errors()['redirect_uri']`.
+- `createSession()` ganha `externalId` (o id do cliente no app, chave das duas chamadas acima) e limita `expires_in` a 900..86400 (`PartnerClient::MAX_EXPIRES_IN`).
+- `ConnectToken` ganha `userId` e `hasNumber()` (`false` quando `phone_number` ou `bot_instance_id` vieram `null`).
+- Datas ilegíveis (`expires_at`, `trial_ends_at`) viram `null` e logam `zapmizer: unreadable date.` (warning) com `field`, `value` e `external_id`.
+
+Quebras:
+
+- `createSession()`: `state` passa a ser opcional e o 2º parâmetro; entra `externalId` no fim. Quem chama com argumentos nomeados não muda; posicionais seguem na mesma ordem. Subclasse que sobrescreve `createSession()` com a assinatura antiga dá erro fatal de assinatura incompatível ao carregar e precisa atualizar a assinatura.
+- `ConnectSession::$expiresAt` passa de `?string` a `?CarbonImmutable`; o JSON segue ISO 8601.
+- `ConnectToken`: `teamId` deixa de ser nulo; entra `userId` (2º parâmetro do construtor); `user_id`/`team_id` inválidos lançam `unexpectedResponse`.
+- `createSession()`, `subscription()` e `checkout()` lançam `InvalidArgumentException` para `external_id`/`state` inválidos antes de chamar a API.
+- O JSON do `start()` passa a normalizar `expires_at` (`Z` → `+00:00`, sem frações).
+- `connect/token` sem `user_id`/`team_id` válidos: o callback da lib responde `exchange_failed` e não grava a conexão (antes gravava com `zapmizer_team_id` null).
+- `createSession()`: `expires_in` acima de 86400 é cortado; `redirect_uri`/`webhook_url` vazios vão no corpo (422 da API) em vez de sumirem.
+- 404 e 409 de chamadas de parceiro deixam de logar `zapmizer: partner call failed.`.
+
 **Upgrade da 0.3:**
 
 - `new PartnerClient($id, $secret, $guzzle, $uri)` → `new PartnerClient($id, $secret, new GuzzleTransport($guzzle), $uri)`.
@@ -70,6 +91,8 @@ Outras mudanças que podem quebrar:
 - Quem publicou `config/zapmizer.php` com a chave `http` e quer trocar de transporte precisa acrescentar `'transport' => ...` dentro dela: o merge da config é só no primeiro nível.
 - `new Zapmizer($token, $guzzle, $uri, $version)` → `new Zapmizer($token, new GuzzleTransport($guzzle), $uri, $version)`; `$zapmizer->setHttpClient($guzzle)` não existe mais: construa com o transporte.
 - `catch (CouldNotSendNotification $e)` → `catch (ZapmizerException $e)` ou as classes da tabela "De/para do envio". Quem lia o status do `getPrevious()` (`ClientException`) passa a usar `$e->status()` de `ZapmizerApiException`.
+- `new ConnectToken($token, $teamId, ...)` → `new ConnectToken($token, $userId, $teamId, ...)`.
+- `$session->expiresAt` (string) → `$session->expiresAt?->toIso8601String()`.
 
 # 0.3.1
 

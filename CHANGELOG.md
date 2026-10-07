@@ -81,6 +81,7 @@ Quebras:
 - `connect/token` sem `user_id`/`team_id` válidos: o callback da lib responde `exchange_failed` e não grava a conexão (antes gravava com `zapmizer_team_id` null).
 - `createSession()`: `expires_in` acima de 86400 é cortado; `redirect_uri`/`webhook_url` vazios vão no corpo (422 da API) em vez de sumirem.
 - 404 e 409 de chamadas de parceiro deixam de logar `zapmizer: partner call failed.`.
+- Subclasses: `PartnerClient` ganhou os métodos públicos `subscription()` e `checkout()`, a constante `MAX_EXPIRES_IN` e os métodos protegidos `guardExternalId()`, `guardState()` e `withoutNulls()`, que podem colidir com nomes de uma subclasse.
 
 **Upgrade da 0.3:**
 

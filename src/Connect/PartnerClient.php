@@ -3,6 +3,7 @@
 namespace NotificationChannels\Zapmizer\Connect;
 
 use Illuminate\Support\Facades\Log;
+use InvalidArgumentException;
 use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
 use NotificationChannels\Zapmizer\Contracts\Transport;
 use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;
@@ -14,8 +15,9 @@ use Psr\Http\Message\ResponseInterface;
  * Class PartnerClient.
  *
  * Zapmizer's partner endpoints, authenticated by X-Partner-Key — never by a
- * team token. Creates the authorization session the popup opens and
- * exchanges the callback code for the authorized team's token.
+ * team token. Creates the authorization session the popup opens, exchanges
+ * the callback code for the authorized team's token, and reads the
+ * subscription and creates the checkout of a customer by its `external_id`.
  */
 class PartnerClient
 {
@@ -25,6 +27,8 @@ class PartnerClient
      * minutes) — below it the session would die mid-pairing.
      */
     public const MIN_EXPIRES_IN = 900;
+
+    public const MAX_EXPIRES_IN = 86400;
 
     protected Transport $transport;
 
@@ -50,24 +54,38 @@ class PartnerClient
      * sends the user back with the single-use `code`; `state` rides along and
      * must be checked on the way back. `webhookUrl` is the receiver Zapmizer
      * registers on the team once the number pairs — its id and secret come
-     * back with the token.
+     * back with the token. `externalId` is the app's id for the customer,
+     * the key of subscription() and checkout() once the connect is approved.
      *
+     * @throws InvalidArgumentException
      * @throws ZapmizerConnectException
      */
-    public function createSession(string $redirectUri, string $state, ?string $webhookUrl = null, ?int $expiresIn = null): ConnectSession
-    {
+    public function createSession(
+        string $redirectUri,
+        ?string $state = null,
+        ?string $webhookUrl = null,
+        ?int $expiresIn = null,
+        ?string $externalId = null,
+    ): ConnectSession {
+        if ($externalId !== null) {
+            $this->guardExternalId($externalId);
+        }
+
+        $this->guardState($state);
+
         $response = $this->request('POST', '/connect/sessions', [
-            'json' => array_filter([
+            'json' => $this->withoutNulls([
                 'redirect_uri' => $redirectUri,
                 'state' => $state,
                 'webhook_url' => $webhookUrl,
-                'expires_in' => $expiresIn === null ? null : max($expiresIn, self::MIN_EXPIRES_IN),
+                'expires_in' => $expiresIn === null ? null : min(max($expiresIn, self::MIN_EXPIRES_IN), self::MAX_EXPIRES_IN),
+                'external_id' => $externalId,
             ]),
         ]);
 
         $this->guardFailure($response, 'connect/sessions');
 
-        return ConnectSession::fromArray($this->decode($response));
+        return ConnectSession::fromArray($this->decode($response), $externalId);
     }
 
     /**
@@ -92,6 +110,71 @@ class PartnerClient
         return ConnectToken::fromArray($this->decode($response));
     }
 
+    /**
+     * @throws InvalidArgumentException
+     * @throws ZapmizerConnectException
+     */
+    public function subscription(string $externalId): ?PartnerSubscription
+    {
+        $this->guardExternalId($externalId);
+
+        $endpoint = 'partner/users/' . rawurlencode($externalId);
+        $response = $this->request('GET', "/{$endpoint}");
+
+        if ($response->getStatusCode() === 404) {
+            return null;
+        }
+
+        $this->guardFailure($response, $endpoint);
+
+        return PartnerSubscription::fromArray($this->decode($response), $externalId);
+    }
+
+    /**
+     * @throws InvalidArgumentException
+     * @throws ZapmizerConnectException
+     */
+    public function checkout(string $externalId, string $redirectUri, ?string $state = null): PartnerCheckout
+    {
+        $this->guardExternalId($externalId);
+        $this->guardState($state);
+
+        $endpoint = 'partner/users/' . rawurlencode($externalId) . '/checkout';
+        $response = $this->request('POST', "/{$endpoint}", [
+            'json' => $this->withoutNulls([
+                'redirect_uri' => $redirectUri,
+                'state' => $state,
+            ]),
+        ]);
+
+        $this->guardFailure($response, $endpoint);
+
+        return PartnerCheckout::fromArray($this->decode($response), $externalId);
+    }
+
+    protected function guardExternalId(string $externalId): void
+    {
+        if (preg_match('/^[A-Za-z0-9_.-]{1,191}\z/', $externalId) !== 1 || $externalId === '.' || $externalId === '..') {
+            throw new InvalidArgumentException('The external id must be 1 to 191 characters among A-Z, a-z, 0-9, "_", "." and "-", and not "." or "..".');
+        }
+    }
+
+    protected function guardState(?string $state): void
+    {
+        if ($state === null) {
+            return;
+        }
+
+        if ($state === '' || $state === '0' || preg_match('/^[\s\x{FEFF}\x{200B}\x{200E}]|[\s\x{FEFF}\x{200B}\x{200E}]$/u', $state)) {
+            throw new InvalidArgumentException('The state must not be "" or "0", nor start or end with whitespace: Zapmizer trims it and drops it when empty, and the redirect would come back without it or changed.');
+        }
+    }
+
+    protected function withoutNulls(array $body): array
+    {
+        return array_filter($body, fn ($value) => $value !== null);
+    }
+
     protected function request(string $method, string $path, array $options = []): ResponseInterface
     {
         if (blank($this->partnerId) || blank($this->partnerSecret)) {
@@ -106,7 +189,8 @@ class PartnerClient
     /**
      * A refused partner credential (401/403) is PartnerCredentialsException;
      * any other 4xx comes out of ZapmizerApi::failure(). The body is read
-     * once and goes to the log too.
+     * once and goes to the log too, except on 404 and 409: those are
+     * business answers (no connect yet, already subscribed, payment pending).
      *
      * @throws ZapmizerConnectException
      */
@@ -118,11 +202,13 @@ class PartnerClient
 
         $error = ApiError::from($response);
 
-        Log::error('zapmizer: partner call failed.', [
-            'endpoint' => $endpoint,
-            'status' => $error->status,
-            'body' => $error->body,
-        ]);
+        if (!in_array($error->status, [404, 409], true)) {
+            Log::error('zapmizer: partner call failed.', [
+                'endpoint' => $endpoint,
+                'status' => $error->status,
+                'body' => $error->body,
+            ]);
+        }
 
         if (in_array($error->status, [401, 403], true)) {
             throw new PartnerCredentialsException($error);

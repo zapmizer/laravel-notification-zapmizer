@@ -95,7 +95,7 @@ class ConnectRouteTest extends TestCase
     protected function tokenPayload(array $overrides = []): string
     {
         return json_encode(array_merge([
-            'token' => '1|sanctum', 'team_id' => 7, 'team_name' => 'Acme',
+            'token' => '1|sanctum', 'user_id' => 3, 'team_id' => 7, 'team_name' => 'Acme',
             'phone_number' => '5581911110000', 'bot_instance_id' => 9,
             'webhook_id' => 42, 'webhook_secret' => 'whsec_new',
         ], $overrides));
@@ -255,7 +255,7 @@ class ConnectRouteTest extends TestCase
 
         $this->postJson(route('zapmizer.connect.start'))
             ->assertOk()
-            ->assertExactJson(['url' => 'http://zap.test/connect/1?s=abc', 'expires_at' => '2026-09-07T01:00:00Z']);
+            ->assertExactJson(['url' => 'http://zap.test/connect/1?s=abc', 'expires_at' => '2026-09-07T01:00:00+00:00']);
 
         $pending = session(ConnectController::SESSION_KEY);
         $this->assertEquals(40, strlen($pending['state']));
@@ -269,6 +269,7 @@ class ConnectRouteTest extends TestCase
         $this->assertEquals('http://localhost/zapmizer/webhook', $body['webhook_url']);
         // The TTL is left to Zapmizer (never below its 900s floor).
         $this->assertArrayNotHasKey('expires_in', $body);
+        $this->assertArrayNotHasKey('external_id', $body);
         $this->assertEquals('partner-id|partner-secret', $this->history[0]['request']->getHeaderLine('X-Partner-Key'));
     }
 
@@ -499,9 +500,9 @@ class ConnectRouteTest extends TestCase
 
     public function testCallbackWithoutAPairedNumberStaysInactive()
     {
-        // A Zapmizer without the hosted pairing (or a session without one)
-        // answers only the token: nothing to send from, nothing to activate.
-        $this->fakeHttp(new Response(200, [], json_encode(['token' => '1|sanctum', 'team_id' => 7, 'team_name' => 'Acme'])));
+        $body = $this->tokenPayload(['phone_number' => null, 'bot_instance_id' => null, 'webhook_id' => null, 'webhook_secret' => null]);
+        $this->assertMatchesContract('POST', '/connect/token', 200, $body);
+        $this->fakeHttp(new Response(200, [], $body));
         $this->actingAsUser();
 
         $this->withSession($this->pendingSession())
@@ -776,6 +777,10 @@ class ConnectRouteTest extends TestCase
         return [
             'html instead of json' => [new Response(200, ['Content-Type' => 'text/html'], '<html>maintenance</html>')],
             'json without token' => [new Response(200, [], '{"team_id": 7}')],
+            'P9 json without user_id' => [new Response(200, [], '{"token":"1|sanctum","team_id":7,"team_name":"Acme"}')],
+            'P9 user_id 0' => [new Response(200, [], '{"token":"1|sanctum","user_id":0,"team_id":7,"team_name":"Acme"}')],
+            'P9 team_id null' => [new Response(200, [], '{"token":"1|sanctum","user_id":3,"team_id":null,"team_name":"Acme"}')],
+            'P9 team_id "12.7"' => [new Response(200, [], '{"token":"1|sanctum","user_id":3,"team_id":"12.7","team_name":"Acme"}')],
             'partner key refused' => [new Response(401, [], '{}')],
             'zapmizer down' => [new Response(502, [], '')],
         ];

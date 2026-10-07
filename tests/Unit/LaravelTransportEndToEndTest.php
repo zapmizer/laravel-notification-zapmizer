@@ -8,8 +8,10 @@ use Illuminate\Support\Facades\Http;
 use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Connect\PartnerClient;
 use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
+use NotificationChannels\Zapmizer\Exceptions\ErrorCode;
 use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\MediaRejectedException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Test\Concerns\AssertsContract;
 use NotificationChannels\Zapmizer\Test\TestCase;
@@ -43,6 +45,75 @@ class LaravelTransportEndToEndTest extends TestCase
         Http::assertSent(fn (Request $request) => $request->url() === 'http://zap.test/api/connect/sessions'
             && $request->header('X-Partner-Key')[0] === 'id|secret'
             && $request->header('Accept')[0] === 'application/json');
+    }
+
+    public function testP26TheFourPartnerCallsGoThroughTheFake()
+    {
+        $session = '{"url":"http://zap.test/connect/1","expires_at":"2026-09-07T01:00:00Z"}';
+        $token = '{"token":"1|sanctum","user_id":3,"team_id":7,"team_name":"Acme","phone_number":"5581911110000","bot_instance_id":9,"webhook_id":null,"webhook_secret":null}';
+        $subscription = '{"user_id":3,"team_id":7,"external_id":"42","subscribed":false,"quantity":null,"trial_ends_at":"2999-01-01T00:00:00Z","payment_incomplete":false}';
+        $checkout = '{"url":"https://checkout.test/c/1","expires_at":null}';
+        $this->assertMatchesContract('POST', '/connect/sessions', 201, $session);
+        $this->assertMatchesContract('POST', '/connect/token', 200, $token);
+        $this->assertMatchesContract('GET', '/partner/users/{externalId}', 200, $subscription);
+        $this->assertMatchesContract('POST', '/partner/users/{externalId}/checkout', 200, $checkout);
+        $json = ['Content-Type' => 'application/json'];
+        Http::fake([
+            'zap.test/api/connect/sessions' => Http::response($session, 201, $json),
+            'zap.test/api/connect/token' => Http::response($token, 200, $json),
+            'zap.test/api/partner/users/42/checkout' => Http::response($checkout, 200, $json),
+            'zap.test/api/partner/users/42' => Http::response($subscription, 200, $json),
+        ]);
+        $client = app(PartnerClient::class);
+
+        $this->assertSame('2026-09-07T01:00:00+00:00', $client->createSession('https://app.test/cb', 'state-1', externalId: '42')->expiresAt->toIso8601String());
+        $connectToken = $client->exchangeCode('12.secret');
+        $this->assertSame(3, $connectToken->userId);
+        $this->assertSame(7, $connectToken->teamId);
+        $this->assertTrue($connectToken->hasNumber());
+        $this->assertTrue($client->subscription('42')->hasAccess());
+        $this->assertSame('https://checkout.test/c/1', $client->checkout('42', 'https://app.test/billing', 'state-2')->url);
+
+        Http::assertSentCount(4);
+        Http::assertSent(fn (Request $request) => $request->method() === 'POST'
+            && $request->url() === 'http://zap.test/api/connect/sessions'
+            && $request['external_id'] === '42'
+            && $request['state'] === 'state-1');
+        Http::assertSent(fn (Request $request) => $request->method() === 'GET'
+            && $request->url() === 'http://zap.test/api/partner/users/42'
+            && $request->header('X-Partner-Key')[0] === 'id|secret'
+            && $request->header('Accept')[0] === 'application/json');
+        Http::assertSent(fn (Request $request) => $request->method() === 'POST'
+            && $request->url() === 'http://zap.test/api/partner/users/42/checkout'
+            && $request['redirect_uri'] === 'https://app.test/billing'
+            && $request['state'] === 'state-2');
+    }
+
+    public function testP26PartnerRefusalsThroughTheFake()
+    {
+        $notFound = '{"message":"Not found."}';
+        $conflict = '{"error":"already_subscribed","message":"Already subscribed."}';
+        $this->assertMatchesContract('POST', '/connect/token', 404, $notFound);
+        $this->assertMatchesContract('GET', '/partner/users/{externalId}', 404, $notFound);
+        $this->assertMatchesContract('POST', '/partner/users/{externalId}/checkout', 409, $conflict);
+        $json = ['Content-Type' => 'application/json'];
+        Http::fake([
+            'zap.test/api/connect/token' => Http::response($notFound, 404, $json),
+            'zap.test/api/partner/users/42/checkout' => Http::response($conflict, 409, $json),
+            'zap.test/api/partner/users/42' => Http::response($notFound, 404, $json),
+        ]);
+        $client = app(PartnerClient::class);
+
+        $this->assertNull($client->exchangeCode('used'));
+        $this->assertNull($client->subscription('42'));
+
+        try {
+            $client->checkout('42', 'https://app.test/billing');
+            $this->fail('Expected ZapmizerApiException.');
+        } catch (ZapmizerApiException $exception) {
+            $this->assertSame(409, $exception->status());
+            $this->assertSame(ErrorCode::ALREADY_SUBSCRIBED, $exception->error());
+        }
     }
 
     public function testM29TextSendIsAFormThroughTheFake()

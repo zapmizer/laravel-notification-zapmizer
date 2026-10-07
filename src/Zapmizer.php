@@ -2,10 +2,11 @@
 
 namespace NotificationChannels\Zapmizer;
 
-use Exception;
-use GuzzleHttp\Client as HttpClient;
-use GuzzleHttp\Exception\ClientException;
-use NotificationChannels\Zapmizer\Exceptions\CouldNotSendNotification;
+use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
+use NotificationChannels\Zapmizer\Connect\ZapmizerApi;
+use NotificationChannels\Zapmizer\Contracts\Transport;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Support\JsonResponse;
 use Psr\Http\Message\ResponseInterface;
 
@@ -14,8 +15,11 @@ use Psr\Http\Message\ResponseInterface;
  */
 class Zapmizer
 {
-    /** @var HttpClient HTTP Client */
-    protected HttpClient $http;
+    public const UPLOAD_CONNECT_TIMEOUT = 60;
+
+    public const UPLOAD_TIMEOUT = 600;
+
+    protected Transport $transport;
 
     /** @var null|string Zapmizer Bot API Token. */
     protected ?string $token;
@@ -23,10 +27,10 @@ class Zapmizer
     /** @var string Zapmizer Bot API Base URI */
     protected string $apiBaseUri;
 
-    public function __construct(?string $token = null, ?HttpClient $httpClient = null, ?string $apiBaseUri = null, protected ?string $apiVersion = null)
+    public function __construct(?string $token = null, ?Transport $transport = null, ?string $apiBaseUri = null, protected ?string $apiVersion = null)
     {
         $this->token = $token;
-        $this->http = $httpClient;
+        $this->transport = $transport ?? new GuzzleTransport();
         $this->setApiBaseUri($apiBaseUri ?? 'https://app.zapmizer.com/api/');
     }
 
@@ -71,18 +75,6 @@ class Zapmizer
     }
 
     /**
-     * Set HTTP Client.
-     *
-     * @return $this
-     */
-    public function setHttpClient(HttpClient $http): self
-    {
-        $this->http = $http;
-
-        return $this;
-    }
-
-    /**
      * Send text message.
      *
      * <code>
@@ -98,34 +90,35 @@ class Zapmizer
      *
      * @see https://app.zapmizer.com/docs
      *
-     * @throws CouldNotSendNotification
+     * @throws Exceptions\ZapmizerException
      */
     public function sendMessage(array $params): ?ResponseInterface
     {
-        if (blank($this->token)) {
-            throw CouldNotSendNotification::zapmizerBotTokenNotProvided('You must provide your zapmizer bot token to make any API requests.');
-        }
+        $this->guardToken();
 
         return $this->post(['form_params' => $params]);
     }
 
+    /**
+     * @throws Exceptions\ZapmizerException
+     */
     public function sendMessageWithFile(array $params, string $filePath): ?ResponseInterface
     {
-        if (blank($this->token)) {
-            throw CouldNotSendNotification::zapmizerBotTokenNotProvided('You must provide your zapmizer bot token to make any API requests.');
+        $this->guardToken();
+
+        $file = @fopen($filePath, 'r');
+
+        if ($file === false) {
+            throw ZapmizerConnectException::unreadableFile($filePath);
         }
 
-        try {
-            $multipart = [
-                [
-                    'name' => 'uploaded_media',
-                    'contents' => fopen($filePath, 'r'),
-                    'filename' => basename($filePath),
-                ],
-            ];
-        } catch (Exception $exception) {
-            throw CouldNotSendNotification::couldNotCommunicateWithZapmizer($exception);
-        }
+        $multipart = [
+            [
+                'name' => 'uploaded_media',
+                'contents' => $file,
+                'filename' => basename($filePath),
+            ],
+        ];
 
         foreach ($params as $key => $value) {
             $multipart[] = [
@@ -134,46 +127,48 @@ class Zapmizer
             ];
         }
 
-        return $this->post(['multipart' => $multipart]);
+        return $this->post([
+            'multipart' => $multipart,
+            'connect_timeout' => self::UPLOAD_CONNECT_TIMEOUT,
+            'timeout' => self::UPLOAD_TIMEOUT,
+        ]);
     }
 
     /**
-     * POST to the messages API and make sure what came back is an API
-     * answer. Redirects are not followed: with a revoked token Zapmizer
-     * redirects to its login page, and following it would turn a lost
-     * message into a 200.
+     * POST to the messages API through the transport and make sure what
+     * came back is an API answer. Redirects are not followed: with a revoked
+     * token Zapmizer redirects to its login page, and following it would
+     * turn a lost message into a 200.
      *
-     * @throws CouldNotSendNotification
+     * @throws Exceptions\ZapmizerException
      */
     protected function post(array $options): ResponseInterface
     {
-        try {
-            $response = $this->httpClient()->post($this->getApiBaseUri() . '/messages', $options + [
-                'allow_redirects' => false,
-                'headers' => array_filter([
-                    'Authorization' => 'Bearer ' . $this->token,
-                    'Accept' => 'application/json',
-                    'api-version' => $this->apiVersion,
-                ]),
-            ]);
-        } catch (ClientException $exception) {
-            throw CouldNotSendNotification::zapmizerRespondedWithAnError($exception);
-        } catch (Exception $exception) {
-            throw CouldNotSendNotification::couldNotCommunicateWithZapmizer($exception);
+        $response = (new ZapmizerApi($this->transport))->send('POST', $this->getApiBaseUri() . '/messages', $options, array_filter([
+            'Authorization' => 'Bearer ' . $this->token,
+            'api-version' => $this->apiVersion,
+        ]));
+
+        if ($response->getStatusCode() >= 400) {
+            throw ZapmizerApi::failure($response);
         }
 
         if (($problem = JsonResponse::problem($response)) !== null) {
-            throw CouldNotSendNotification::zapmizerRespondedUnexpectedly($problem);
+            throw ZapmizerConnectException::unexpectedResponse($problem);
         }
 
         return $response;
     }
 
     /**
-     * Get HttpClient.
+     * @throws ZapmizerUnauthorizedException
      */
-    protected function httpClient(): HttpClient
+    protected function guardToken(): void
     {
-        return $this->http;
+        if (blank($this->token)) {
+            $message = 'You must provide your zapmizer bot token to make any API requests.';
+
+            throw ZapmizerUnauthorizedException::withoutResponse($message);
+        }
     }
 }

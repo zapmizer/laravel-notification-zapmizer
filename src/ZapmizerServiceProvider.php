@@ -27,7 +27,7 @@ class ZapmizerServiceProvider extends ServiceProvider
     {
         $this->app->bind(Zapmizer::class, fn (Application $app, $config) => new Zapmizer(
             Arr::get($config, 'api_token', config('zapmizer.api_token')),
-            app(HttpClient::class),
+            $app->make(Transport::class),
             Arr::get($config, 'base_uri', config('zapmizer.base_uri')),
             Arr::get($config, 'api_version', config('zapmizer.api_version'))
         ));

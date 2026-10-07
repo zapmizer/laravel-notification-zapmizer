@@ -146,14 +146,14 @@ class ZapmizerSendErrorsTest extends TestCase
         ];
     }
 
-    public function testRateLimitCarriesTheRetryAfter()
+    public function testRateLimitCarriesTheRetryAfterOutsideTheContract()
     {
         $exception = $this->sendAndCatch(new Response(429, ['Retry-After' => '10'], '{"message":"Too Many Attempts."}'));
 
         $this->assertSame(10, $exception->retryAfter());
     }
 
-    public function testM33AnEmptyBodyLeavesTheReasonOutOfTheMessage()
+    public function testM33AnEmptyBodyLeavesTheReasonOutOfTheMessageOutsideTheContract()
     {
         $this->assertSame('Zapmizer refused the request (HTTP 400).', $this->sendAndCatch(new Response(400, [], ''))->getMessage());
     }

@@ -11,12 +11,15 @@ use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
 use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\MediaRejectedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
+use NotificationChannels\Zapmizer\Test\Concerns\AssertsContract;
 use NotificationChannels\Zapmizer\Test\TestCase;
 use NotificationChannels\Zapmizer\Zapmizer;
 use RuntimeException;
 
 class LaravelTransportEndToEndTest extends TestCase
 {
+    use AssertsContract;
+
     protected function defineEnvironment($app)
     {
         $app['config']->set('zapmizer.base_uri', 'http://zap.test/api/');
@@ -44,7 +47,9 @@ class LaravelTransportEndToEndTest extends TestCase
 
     public function testM29TextSendIsAFormThroughTheFake()
     {
-        Http::fake(['zap.test/*' => Http::response(['id' => 1], 200)]);
+        $body = '{"id":1}';
+        $this->assertMatchesContract('POST', '/messages', 200, $body);
+        Http::fake(['zap.test/*' => Http::response($body, 200, ['Content-Type' => 'application/json'])]);
 
         app(Zapmizer::class, ['api_token' => 'bot-token', 'api_version' => '2025-06-27'])
             ->sendMessage(['type' => 'chat', 'from' => '5581999990000', 'to' => '5511999999999', 'metadata' => ['text' => 'hi']]);
@@ -59,7 +64,9 @@ class LaravelTransportEndToEndTest extends TestCase
 
     public function testM28FileSendIsMultipartThroughTheFake()
     {
-        Http::fake(['zap.test/*' => Http::response(['id' => 1], 200)]);
+        $body = '{"id":1}';
+        $this->assertMatchesContract('POST', '/messages', 200, $body);
+        Http::fake(['zap.test/*' => Http::response($body, 200, ['Content-Type' => 'application/json'])]);
 
         app(Zapmizer::class, ['api_token' => 'bot-token'])
             ->sendMessageWithFile(['type' => 'document', 'from' => '5581999990000', 'to' => '5511999999999'], __FILE__);
@@ -72,7 +79,9 @@ class LaravelTransportEndToEndTest extends TestCase
 
     public function testAFileWithNestedMetadataSendsTheNestedFieldThroughTheFake()
     {
-        Http::fake(['zap.test/*' => Http::response(['id' => 1], 200)]);
+        $body = '{"id":1}';
+        $this->assertMatchesContract('POST', '/messages', 200, $body);
+        Http::fake(['zap.test/*' => Http::response($body, 200, ['Content-Type' => 'application/json'])]);
 
         app(Zapmizer::class, ['api_token' => 'bot-token'])
             ->sendMessageWithFile(['type' => 'image', 'text' => 'caption', 'metadata' => ['text' => 'hi']], __FILE__);
@@ -90,7 +99,6 @@ class LaravelTransportEndToEndTest extends TestCase
 
         app(Zapmizer::class, ['api_token' => 'bot-token'])->sendMessage(['type' => 'chat', 'to' => '5511999999999']);
     }
-
 
     public function testC3InstanceCallCarriesTokenAndVersion()
     {

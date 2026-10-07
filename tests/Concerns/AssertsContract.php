@@ -56,6 +56,10 @@ trait AssertsContract
         }
 
         if (!isset($response->content)) {
+            if ($rawBody !== '') {
+                $this->fail(sprintf('%s %s %d declares no body, but the fake sends one: %s', strtoupper($method), $pathTemplate, $status, $rawBody));
+            }
+
             $this->addToAssertionCount(1);
 
             return;

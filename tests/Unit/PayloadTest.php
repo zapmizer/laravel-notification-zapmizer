@@ -218,6 +218,11 @@ class PayloadTest extends TestCase
             'port 99999' => ['https://h.com:99999/x'],
             'port 65536' => ['https://h.com:65536/x'],
             'port with letters' => ['https://h.com:44a/x'],
+            'semicolon before an at' => ['https://h.com;@evil.com/'],
+            'port before an at' => ['https://h.com:443@evil.com/'],
+            'port before an at and a port' => ['https://h.com:443@evil.com:443/'],
+            'two ports' => ['https://h.com:80:90/x'],
+            'port with a letter in the middle' => ['https://h.com:4a4/x'],
             'name between brackets' => ['https://[evil.com]/'],
             'ipv6 with a zone id' => ['https://[fe80::1%25eth0]/'],
         ];

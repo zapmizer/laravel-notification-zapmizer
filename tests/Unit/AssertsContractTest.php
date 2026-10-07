@@ -95,6 +95,14 @@ class AssertsContractTest extends TestCase
         );
     }
 
+    public function testADeclaredResponseWithoutBodyFailsWhenTheFakeSendsOne()
+    {
+        $this->assertContractRefuses(
+            fn () => $this->assertMatchesContract('DELETE', '/connect/token', 204, '{"ok":true}'),
+            'declares no body',
+        );
+    }
+
     public function testADeclaredRetryAfterIsRequired()
     {
         $this->assertMatchesContract('POST', '/connect/sessions', 429, '{"message":"Too Many Attempts."}', ['retry-after' => '12']);

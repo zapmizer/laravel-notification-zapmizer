@@ -31,12 +31,14 @@ final class EmbedSession
 
         $origin = Payload::origin($url);
 
+        $resumeUrl = self::resumeUrl($payload['resume_url'] ?? null, $origin);
+
         return new self(
             url: $url,
             origin: $origin,
             expiresAt: Payload::date($payload['expires_at'] ?? null, 'expires_at'),
-            resumeUrl: self::resumeUrl($payload['resume_url'] ?? null, $origin),
-            resumeUntil: Payload::date($payload['resume_until'] ?? null, 'resume_until'),
+            resumeUrl: $resumeUrl,
+            resumeUntil: $resumeUrl === null ? null : Payload::date($payload['resume_until'] ?? null, 'resume_until'),
         );
     }
 

@@ -106,7 +106,6 @@ final class Payload
             && $port <= 65535;
     }
 
-
     private static function parseDate(string $value): ?CarbonImmutable
     {
         if (preg_match(self::ISO_8601, $value, $parts) !== 1) {

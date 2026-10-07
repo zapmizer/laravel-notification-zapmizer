@@ -159,7 +159,11 @@ class EmbedSessionTest extends TestCase
     {
         Log::spy();
 
-        $session = EmbedSession::fromArray(['url' => 'https://app.parlichat.com/embed/start/x', $field => 'tomorrow']);
+        $session = EmbedSession::fromArray([
+            'url' => 'https://app.parlichat.com/embed/start/x',
+            'resume_url' => 'https://app.parlichat.com/chats?embed_inbox=1',
+            $field => 'tomorrow',
+        ]);
 
         $this->assertNull($field === 'expires_at' ? $session->expiresAt : $session->resumeUntil);
         Log::shouldHaveReceived('warning')->once()->withArgs(fn (string $message, array $context) => $message === 'zapmizer: unreadable date.'
@@ -169,6 +173,34 @@ class EmbedSessionTest extends TestCase
     public static function unreadableDates(): array
     {
         return ['E8 expires_at' => ['expires_at'], 'resume_until' => ['resume_until']];
+    }
+
+    public function testAResumeUntilWithAResumeUrlOfAnotherOriginIsNull()
+    {
+        Log::spy();
+
+        $session = EmbedSession::fromArray([
+            'url' => 'https://app.parlichat.com/embed-inbox/start/x',
+            'resume_url' => 'https://evil.com/chats',
+            'resume_until' => '2026-09-26T16:01:00+00:00',
+        ]);
+
+        $this->assertNull($session->resumeUrl);
+        $this->assertNull($session->resumeUntil);
+    }
+
+    public function testAResumeUntilWithoutAResumeUrlIsNullWithoutAWarning()
+    {
+        Log::spy();
+
+        $session = EmbedSession::fromArray([
+            'url' => 'https://app.parlichat.com/embed-inbox/start/x',
+            'resume_until' => 'tomorrow',
+        ]);
+
+        $this->assertNull($session->resumeUrl);
+        $this->assertNull($session->resumeUntil);
+        Log::shouldNotHaveReceived('warning');
     }
 
     public function testAMissingExpiryIsNullWithoutAWarning()

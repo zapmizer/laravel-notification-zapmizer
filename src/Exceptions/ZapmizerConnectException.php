@@ -34,8 +34,9 @@ class ZapmizerConnectException extends ZapmizerException
 
     /**
      * Thrown by a resolver that has nothing to connect on the request (no
-     * authenticated user, a user without a team). Renders 403 with the code
-     * `no_connectable`; the popup callback reports it on the result page.
+     * authenticated user, a user without a team). The connect routes answer 403
+     * with the code `no_connectable`; the popup callback reports it on the
+     * result page.
      */
     public static function noConnectable(?string $reason = null): NoConnectableException
     {

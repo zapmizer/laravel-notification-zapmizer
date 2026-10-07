@@ -145,8 +145,8 @@ class PartnerClientTest extends TestCase
             $client->createSession('http://app.test/cb', 'state');
             $this->fail('Expected PartnerCredentialsException.');
         } catch (PartnerCredentialsException $exception) {
-            $this->assertEquals(503, $exception->render()->getStatusCode());
-            $this->assertEquals(['code' => 'partner_unauthorized'], $exception->render()->getData(true));
+            $this->assertSame($status, $exception->status());
+            $this->assertSame('Zapmizer refused the partner credentials.', $exception->getMessage());
         }
 
         Log::shouldHaveReceived('error')->withArgs(fn (string $message, array $context) => $context['status'] === $status);
@@ -165,8 +165,7 @@ class PartnerClientTest extends TestCase
             $client->createSession('http://app.test/cb', 'state');
             $this->fail('Expected ZapmizerUnavailableException.');
         } catch (ZapmizerUnavailableException $exception) {
-            $this->assertEquals(['code' => 'zapmizer_unavailable'], $exception->render()->getData(true));
-            $this->assertStringNotContainsString('redirect uri', $exception->render()->getContent());
+            $this->assertSame('Zapmizer is unavailable.', $exception->getMessage());
         }
     }
 

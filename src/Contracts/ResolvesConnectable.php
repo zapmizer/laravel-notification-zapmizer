@@ -14,9 +14,9 @@ use Illuminate\Http\Request;
  * — e.g. return `$request->user()->currentTeam` for team-scoped connections.
  *
  * When there is nothing to connect (no user, a user without a team), throw
- * `ZapmizerConnectException::noConnectable()`: it renders 403 with the code
- * `no_connectable` on the JSON endpoints and a result page on the popup
- * callback. Returning null is not an option — the return type is the
+ * `ZapmizerConnectException::noConnectable()`: the package's JSON endpoints
+ * answer 403 with the code `no_connectable` and the popup callback a result
+ * page. Returning null is not an option — the return type is the
  * contract, and a null would surface as a TypeError (500).
  */
 interface ResolvesConnectable

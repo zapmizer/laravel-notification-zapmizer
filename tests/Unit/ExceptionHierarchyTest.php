@@ -145,4 +145,18 @@ class ExceptionHierarchyTest extends TestCase
         $this->assertSame('Could not open /tmp/missing.png to send.', ZapmizerConnectException::unreadableFile('/tmp/missing.png')->getMessage());
         $this->assertNotInstanceOf(ZapmizerApiException::class, ZapmizerConnectException::notPaired());
     }
+
+    public function testThePackageExceptionsDoNotRender()
+    {
+        foreach ([
+            ZapmizerConnectException::class,
+            ZapmizerApiException::class,
+            ZapmizerUnavailableException::class,
+            PartnerCredentialsException::class,
+            NoConnectableException::class,
+            ZapmizerUnauthorizedException::class,
+        ] as $class) {
+            $this->assertFalse(method_exists($class, 'render'), $class);
+        }
+    }
 }

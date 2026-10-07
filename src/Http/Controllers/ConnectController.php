@@ -18,6 +18,8 @@ use NotificationChannels\Zapmizer\Contracts\Connectable;
 use NotificationChannels\Zapmizer\Contracts\ResolvesConnectable;
 use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;
 use NotificationChannels\Zapmizer\Exceptions\NoConnectableException;
+use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
@@ -38,8 +40,8 @@ use Throwable;
  * `ok`, `denied`, `plan_limit`, `qr_unavailable`, `invalid_state`,
  * `exchange_failed`, `webhook_failed`, `team_already_connected`,
  * `no_connectable`. The JSON endpoints answer `zapmizer_unavailable` (503),
- * `partner_unauthorized` (503) and `no_connectable` (403) through their
- * exceptions.
+ * `partner_unauthorized` (503) and `no_connectable` (403) themselves: the
+ * package's exceptions do not render.
  */
 class ConnectController extends Controller
 {
@@ -70,7 +72,11 @@ class ConnectController extends Controller
      */
     public function show(Request $request): JsonResponse
     {
-        $connection = $this->connectable($request)->zapmizerConnection;
+        try {
+            $connection = $this->connectable($request)->zapmizerConnection;
+        } catch (NoConnectableException) {
+            return $this->code('no_connectable', 403);
+        }
 
         if ($connection === null || !$request->boolean('live')) {
             return new JsonResponse(['connection' => $connection]);
@@ -86,20 +92,32 @@ class ConnectController extends Controller
      */
     public function start(Request $request): JsonResponse
     {
-        $connectable = $this->connectable($request);
-        $state = Str::random(40);
+        try {
+            $connectable = $this->connectable($request);
+            $state = Str::random(40);
 
-        $request->session()->put(self::SESSION_KEY, [
-            'state' => $state,
-            'connectable' => $this->connectableKey($connectable),
-            'expires_at' => now()->addMinutes((int) config('zapmizer.connect.state_ttl_minutes', 10))->toIso8601String(),
-        ]);
+            $request->session()->put(self::SESSION_KEY, [
+                'state' => $state,
+                'connectable' => $this->connectableKey($connectable),
+                'expires_at' => now()->addMinutes((int) config('zapmizer.connect.state_ttl_minutes', 10))->toIso8601String(),
+            ]);
 
-        $session = $this->partnerClient->createSession(
-            redirectUri: route('zapmizer.connect.callback'),
-            state: $state,
-            webhookUrl: route('zapmizer.webhook'),
-        );
+            $session = $this->partnerClient->createSession(
+                redirectUri: route('zapmizer.connect.callback'),
+                state: $state,
+                webhookUrl: route('zapmizer.webhook'),
+            );
+        } catch (PartnerCredentialsException $exception) {
+            report($exception);
+
+            return $this->code('partner_unauthorized', 503);
+        } catch (ZapmizerUnavailableException | ZapmizerApiException $exception) {
+            report($exception);
+
+            return $this->code('zapmizer_unavailable', 503);
+        } catch (NoConnectableException) {
+            return $this->code('no_connectable', 403);
+        }
 
         return new JsonResponse($session);
     }
@@ -236,7 +254,11 @@ class ConnectController extends Controller
      */
     public function destroy(Request $request): JsonResponse
     {
-        $connection = $this->connectable($request)->zapmizerConnection;
+        try {
+            $connection = $this->connectable($request)->zapmizerConnection;
+        } catch (NoConnectableException) {
+            return $this->code('no_connectable', 403);
+        }
 
         if ($connection !== null) {
             $this->forgetRemoteWebhook($connection);
@@ -354,11 +376,16 @@ class ConnectController extends Controller
      * (`Model&Connectable`) is the contract: a resolver handing back a model
      * without it fails right there, with a TypeError naming the class. A
      * resolver with nothing to connect throws NoConnectableException, which
-     * renders itself (403, `no_connectable`) on the JSON endpoints.
+     * the JSON endpoints answer with 403 `no_connectable`.
      */
     protected function connectable(Request $request): Model&Connectable
     {
         return $this->resolver->resolve($request);
+    }
+
+    protected function code(string $code, int $status): JsonResponse
+    {
+        return new JsonResponse(['code' => $code], $status);
     }
 
     protected function connectableKey(Model $connectable): string

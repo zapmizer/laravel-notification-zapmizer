@@ -7,6 +7,7 @@ use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Response;
+use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
@@ -14,7 +15,9 @@ use NotificationChannels\Zapmizer\Connect\ResolvesAuthenticatedUser;
 use NotificationChannels\Zapmizer\Http\Controllers\ConnectController;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
 use NotificationChannels\Zapmizer\Exceptions\NoConnectableException;
+use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
+use NotificationChannels\Zapmizer\Test\Concerns\AssertsContract;
 use NotificationChannels\Zapmizer\Test\Fixtures\CreatesConnectionTables;
 use NotificationChannels\Zapmizer\Test\Fixtures\PlainModel;
 use NotificationChannels\Zapmizer\Test\Fixtures\PlainUser;
@@ -28,10 +31,14 @@ use PHPUnit\Framework\Attributes\DataProvider;
 
 class ConnectRouteTest extends TestCase
 {
+    use AssertsContract;
     use CreatesConnectionTables;
 
     /** @var array<int, array{request: \GuzzleHttp\Psr7\Request}> */
     protected array $history = [];
+
+    /** @var array<int, \Throwable> */
+    protected array $reported = [];
 
     protected function defineEnvironment($app)
     {
@@ -281,6 +288,145 @@ class ConnectRouteTest extends TestCase
             ->assertExactJson(['code' => 'zapmizer_unavailable']);
 
         $this->assertStringNotContainsString('redirect uri', $response->getContent());
+    }
+
+    protected function recordReports(): void
+    {
+        $this->app->make(ExceptionHandler::class)->reportable(function (\Throwable $exception) {
+            $this->reported[] = $exception;
+        });
+    }
+
+    /** @dataProvider partnerRefusalsFromTheContract */
+    #[DataProvider('partnerRefusalsFromTheContract')]
+    public function testM37StartAnswersUnavailableForAPartnerRefusalFromTheContract(int $status, string $body, array $headers)
+    {
+        $this->assertMatchesContract('POST', '/connect/sessions', $status, $body, $headers);
+        $this->assertStartAnswersUnavailableAndReports(new Response($status, ['Content-Type' => 'application/json'] + $headers, $body));
+    }
+
+    public static function partnerRefusalsFromTheContract(): array
+    {
+        return [
+            '422' => [422, '{"message":"The redirect uri field is required.","errors":{"redirect_uri":["The redirect uri field is required."]}}', []],
+            '429' => [429, '{"message":"Too Many Attempts."}', ['Retry-After' => '30']],
+        ];
+    }
+
+    /** @dataProvider partnerRefusalsOutsideTheContract */
+    #[DataProvider('partnerRefusalsOutsideTheContract')]
+    public function testM37StartAnswersUnavailableForAPartnerRefusalOutsideTheContract(int $status, string $body)
+    {
+        $this->assertStartAnswersUnavailableAndReports(new Response($status, ['Content-Type' => 'application/json'], $body));
+    }
+
+    public static function partnerRefusalsOutsideTheContract(): array
+    {
+        return [
+            '404' => [404, '{"message":"Not Found"}'],
+            '409' => [409, '{"error":"something_new","message":"Conflict."}'],
+            '429 without Retry-After' => [429, '{"message":"Too Many Attempts."}'],
+        ];
+    }
+
+    protected function assertStartAnswersUnavailableAndReports(Response $response): void
+    {
+        Log::spy();
+        $this->fakeHttp($response);
+        $this->actingAsUser();
+        $this->recordReports();
+
+        $answer = $this->postJson(route('zapmizer.connect.start'))
+            ->assertStatus(503)
+            ->assertExactJson(['code' => 'zapmizer_unavailable']);
+
+        $this->assertStringNotContainsString('redirect uri', $answer->getContent());
+        $this->assertCount(1, $this->reported);
+        $this->assertInstanceOf(ZapmizerConnectException::class, $this->reported[0]);
+    }
+
+    public function testM42StartReportsARefusedPartnerKey()
+    {
+        Log::spy();
+        $this->fakeHttp(new Response(401, ['Content-Type' => 'application/json'], '{"message":"Unauthenticated."}'));
+        $this->actingAsUser();
+        $this->recordReports();
+
+        $this->postJson(route('zapmizer.connect.start'))
+            ->assertStatus(503)
+            ->assertExactJson(['code' => 'partner_unauthorized']);
+
+        $this->assertCount(1, $this->reported);
+        $this->assertInstanceOf(PartnerCredentialsException::class, $this->reported[0]);
+    }
+
+    /** @dataProvider withAndWithoutJson */
+    #[DataProvider('withAndWithoutJson')]
+    public function testM44StartAnswersTheSameJsonWithOrWithoutAcceptJson(array $headers)
+    {
+        Log::spy();
+        $this->fakeHttp(
+            new Response(401, ['Content-Type' => 'application/json'], '{"message":"Unauthenticated."}'),
+            new Response(503, [], ''),
+        );
+        $this->actingAsUser();
+
+        $this->post(route('zapmizer.connect.start'), [], $headers)
+            ->assertStatus(503)
+            ->assertExactJson(['code' => 'partner_unauthorized']);
+        $this->post(route('zapmizer.connect.start'), [], $headers)
+            ->assertStatus(503)
+            ->assertExactJson(['code' => 'zapmizer_unavailable']);
+    }
+
+    /** @dataProvider withAndWithoutJson */
+    #[DataProvider('withAndWithoutJson')]
+    public function testM44NothingToConnectAnswersTheSameJsonWithOrWithoutAcceptJsonAndIsNotReported(array $headers)
+    {
+        $this->fakeHttp();
+        config()->set('zapmizer.connect.resolver', ResolvesNothing::class);
+        $this->actingAsUser();
+        $this->recordReports();
+
+        $this->get(route('zapmizer.connect.show'), $headers)->assertForbidden()->assertExactJson(['code' => 'no_connectable']);
+        $this->post(route('zapmizer.connect.start'), [], $headers)->assertForbidden()->assertExactJson(['code' => 'no_connectable']);
+        $this->delete(route('zapmizer.connect.destroy'), [], $headers)->assertForbidden()->assertExactJson(['code' => 'no_connectable']);
+
+        $this->assertSame([], $this->reported);
+        $this->assertCount(0, $this->history);
+    }
+
+    public static function withAndWithoutJson(): array
+    {
+        return [
+            'Accept: application/json' => [['Accept' => 'application/json']],
+            'browser Accept' => [['Accept' => 'text/html']],
+        ];
+    }
+
+    /** @dataProvider tokenRefusalsFromTheContract */
+    #[DataProvider('tokenRefusalsFromTheContract')]
+    public function testM38CallbackAnswersExchangeFailedForATokenRefusalFromTheContract(int $status, string $body, array $headers)
+    {
+        $this->assertMatchesContract('POST', '/connect/token', $status, $body, $headers);
+        Log::spy();
+        $this->fakeHttp(new Response($status, ['Content-Type' => 'application/json'] + $headers, $body));
+        $this->actingAsUser();
+
+        $this->withSession($this->pendingSession())
+            ->get(route('zapmizer.connect.callback', ['code' => 'c', 'state' => 's']))
+            ->assertOk()
+            ->assertSee('status: "exchange_failed"', false);
+
+        $this->assertNull($this->team()->zapmizerConnection);
+    }
+
+    public static function tokenRefusalsFromTheContract(): array
+    {
+        return [
+            '422' => [422, '{"message":"The code field is required.","errors":{"code":["The code field is required."]}}', []],
+            '429' => [429, '{"message":"Too Many Attempts."}', ['Retry-After' => '30']],
+        ];
     }
 
     public function testGuestsAreRejected()

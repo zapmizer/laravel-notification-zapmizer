@@ -12,6 +12,7 @@ use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use GuzzleHttp\Psr7\Utils;
 use Illuminate\Support\Facades\Log;
+use InvalidArgumentException;
 use NotificationChannels\Zapmizer\Connect\ConnectSession;
 use NotificationChannels\Zapmizer\Connect\ConnectToken;
 use NotificationChannels\Zapmizer\Connect\PartnerClient;
@@ -76,21 +77,147 @@ class PartnerClientTest extends TestCase
 
     /** @dataProvider expiresIn */
     #[DataProvider('expiresIn')]
-    public function testCreateSessionNeverAsksForLessThanZapmizerAllows(int $requested, int $sent)
+    public function testP5CreateSessionKeepsExpiresInWithinWhatZapmizerAllows(int $requested, int $sent)
     {
-        // Below 900 the signed session dies while the user is still reading
-        // the QR code — Zapmizer refuses it, so the floor is applied here.
         $client = $this->makeClient(new MockHandler([new Response(201, [], json_encode(['url' => 'http://localhost/connect/1']))]));
 
         $client->createSession('http://app.test/cb', 'state', null, $requested);
 
-        $this->assertEquals($sent, json_decode((string) $this->history[0]['request']->getBody(), true)['expires_in']);
+        $this->assertSame($sent, json_decode((string) $this->history[0]['request']->getBody(), true)['expires_in']);
         $this->assertGreaterThanOrEqual(PartnerClient::MIN_EXPIRES_IN, $sent);
+        $this->assertLessThanOrEqual(PartnerClient::MAX_EXPIRES_IN, $sent);
     }
 
     public static function expiresIn(): array
     {
-        return ['below the floor' => [300, 900], 'at the floor' => [900, 900], 'above' => [3600, 3600]];
+        return [
+            'P5 far below the floor' => [100, 900],
+            'below the floor' => [300, 900],
+            'at the floor' => [900, 900],
+            'P5 within' => [3600, 3600],
+            'at the ceiling' => [86400, 86400],
+            'P5 above the ceiling' => [100000, 86400],
+        ];
+    }
+
+    public function testP1CreateSessionSendsTheExternalId()
+    {
+        $body = '{"url":"http://localhost/connect/1?signature=abc","expires_at":"2026-09-07T01:00:00Z"}';
+        $this->assertMatchesContract('POST', '/connect/sessions', 201, $body);
+        $client = $this->makeClient(new MockHandler([new Response(201, ['Content-Type' => 'application/json'], $body)]));
+
+        $session = $client->createSession(redirectUri: 'http://app.test/cb', state: 'state-123', externalId: '42');
+
+        $this->assertSame('http://localhost/connect/1?signature=abc', $session->url);
+        $this->assertSame('2026-09-07T01:00:00+00:00', $session->expiresAt->toIso8601String());
+        $this->assertSame(
+            ['redirect_uri' => 'http://app.test/cb', 'state' => 'state-123', 'external_id' => '42'],
+            json_decode((string) $this->history[0]['request']->getBody(), true),
+        );
+    }
+
+    /** @dataProvider validExternalIds */
+    #[DataProvider('validExternalIds')]
+    public function testAValidExternalIdGoesAsItIs(string $externalId)
+    {
+        $client = $this->makeClient(new MockHandler([new Response(201, [], json_encode(['url' => 'http://localhost/connect/1']))]));
+
+        $client->createSession('http://app.test/cb', 'state', externalId: $externalId);
+
+        $this->assertSame($externalId, json_decode((string) $this->history[0]['request']->getBody(), true)['external_id']);
+    }
+
+    public static function validExternalIds(): array
+    {
+        return [
+            'one digit' => ['1'],
+            'all the characters' => ['Team_42.a-B'],
+            '191 characters' => [str_repeat('a', 191)],
+            'three dots' => ['...'],
+            'dot inside' => ['a.b'],
+        ];
+    }
+
+    /** @dataProvider invalidExternalIds */
+    #[DataProvider('invalidExternalIds')]
+    public function testP2AnInvalidExternalIdFailsBeforeAnyRequest(string $externalId)
+    {
+        $transport = new RecordingTransport();
+        $client = new PartnerClient('partner-id', 'partner-secret', $transport, 'http://localhost/api');
+
+        try {
+            $client->createSession('http://app.test/cb', 'state', externalId: $externalId);
+            $this->fail('Expected InvalidArgumentException.');
+        } catch (InvalidArgumentException $exception) {
+            $this->assertStringContainsString('external id', $exception->getMessage());
+        }
+
+        $this->assertSame([], $transport->calls);
+    }
+
+    public static function invalidExternalIds(): array
+    {
+        return [
+            'space' => ['a b'],
+            'empty' => [''],
+            '192 characters' => [str_repeat('a', 192)],
+            'accent' => ['ção'],
+            'trailing newline' => ["abc\n"],
+            'dot' => ['.'],
+            'two dots' => ['..'],
+            'slash' => ['a/b'],
+        ];
+    }
+
+    /** @dataProvider invalidStates */
+    #[DataProvider('invalidStates')]
+    public function testP3AStateTheApiWouldDropFailsBeforeAnyRequest(string $state)
+    {
+        $transport = new RecordingTransport();
+        $client = new PartnerClient('partner-id', 'partner-secret', $transport, 'http://localhost/api');
+
+        try {
+            $client->createSession('http://app.test/cb', $state);
+            $this->fail('Expected InvalidArgumentException.');
+        } catch (InvalidArgumentException $exception) {
+            $this->assertStringContainsString('state', $exception->getMessage());
+        }
+
+        $this->assertSame([], $transport->calls);
+    }
+
+    public static function invalidStates(): array
+    {
+        return ['empty' => [''], 'zero' => ['0']];
+    }
+
+    public function testP4WithoutStateTheBodyHasNone()
+    {
+        $client = $this->makeClient(new MockHandler([new Response(201, [], json_encode(['url' => 'http://localhost/connect/1']))]));
+
+        $client->createSession('http://app.test/cb');
+
+        $this->assertSame(['redirect_uri' => 'http://app.test/cb'], json_decode((string) $this->history[0]['request']->getBody(), true));
+    }
+
+    public function testEmptyUrisGoInTheBodyForTheApiToRefuse()
+    {
+        $client = $this->makeClient(new MockHandler([new Response(201, [], json_encode(['url' => 'http://localhost/connect/1']))]));
+
+        $client->createSession('', 'state', '');
+
+        $this->assertSame(['redirect_uri' => '', 'state' => 'state', 'webhook_url' => ''], json_decode((string) $this->history[0]['request']->getBody(), true));
+    }
+
+    public function testAnUnreadableExpiryOfTheSessionIsLoggedWithTheExternalId()
+    {
+        Log::spy();
+        $client = $this->makeClient(new MockHandler([new Response(201, [], json_encode(['url' => 'http://localhost/connect/1', 'expires_at' => 'tomorrow']))]));
+
+        $this->assertNull($client->createSession('http://app.test/cb', 'state', externalId: '42')->expiresAt);
+
+        Log::shouldHaveReceived('warning')->once()->withArgs(fn (string $message, array $context) => $message === 'zapmizer: unreadable date.'
+            && $context === ['field' => 'expires_at', 'value' => 'tomorrow', 'external_id' => '42']);
     }
 
     public function testExchangeCodeReturnsTheTeamTokenWithThePairing()

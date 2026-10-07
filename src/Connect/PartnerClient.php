@@ -3,6 +3,7 @@
 namespace NotificationChannels\Zapmizer\Connect;
 
 use Illuminate\Support\Facades\Log;
+use InvalidArgumentException;
 use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
 use NotificationChannels\Zapmizer\Contracts\Transport;
 use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;
@@ -25,6 +26,8 @@ class PartnerClient
      * minutes) — below it the session would die mid-pairing.
      */
     public const MIN_EXPIRES_IN = 900;
+
+    public const MAX_EXPIRES_IN = 86400;
 
     protected Transport $transport;
 
@@ -50,24 +53,38 @@ class PartnerClient
      * sends the user back with the single-use `code`; `state` rides along and
      * must be checked on the way back. `webhookUrl` is the receiver Zapmizer
      * registers on the team once the number pairs — its id and secret come
-     * back with the token.
+     * back with the token. `externalId` is the app's id for the customer,
+     * the key of subscription() and checkout() once the connect is approved.
      *
+     * @throws InvalidArgumentException
      * @throws ZapmizerConnectException
      */
-    public function createSession(string $redirectUri, string $state, ?string $webhookUrl = null, ?int $expiresIn = null): ConnectSession
-    {
+    public function createSession(
+        string $redirectUri,
+        ?string $state = null,
+        ?string $webhookUrl = null,
+        ?int $expiresIn = null,
+        ?string $externalId = null,
+    ): ConnectSession {
+        if ($externalId !== null) {
+            $this->guardExternalId($externalId);
+        }
+
+        $this->guardState($state);
+
         $response = $this->request('POST', '/connect/sessions', [
-            'json' => array_filter([
+            'json' => $this->withoutNulls([
                 'redirect_uri' => $redirectUri,
                 'state' => $state,
                 'webhook_url' => $webhookUrl,
-                'expires_in' => $expiresIn === null ? null : max($expiresIn, self::MIN_EXPIRES_IN),
+                'expires_in' => $expiresIn === null ? null : min(max($expiresIn, self::MIN_EXPIRES_IN), self::MAX_EXPIRES_IN),
+                'external_id' => $externalId,
             ]),
         ]);
 
         $this->guardFailure($response, 'connect/sessions');
 
-        return ConnectSession::fromArray($this->decode($response));
+        return ConnectSession::fromArray($this->decode($response), $externalId);
     }
 
     /**
@@ -90,6 +107,25 @@ class PartnerClient
         $this->guardFailure($response, 'connect/token');
 
         return ConnectToken::fromArray($this->decode($response));
+    }
+
+    protected function guardExternalId(string $externalId): void
+    {
+        if (preg_match('/^[A-Za-z0-9_.-]{1,191}\z/', $externalId) !== 1 || $externalId === '.' || $externalId === '..') {
+            throw new InvalidArgumentException('The external id must be 1 to 191 characters among A-Z, a-z, 0-9, "_", "." and "-", and not "." or "..".');
+        }
+    }
+
+    protected function guardState(?string $state): void
+    {
+        if ($state === '' || $state === '0') {
+            throw new InvalidArgumentException('The state must not be "" or "0": Zapmizer drops it, and the redirect would come back without one.');
+        }
+    }
+
+    protected function withoutNulls(array $body): array
+    {
+        return array_filter($body, fn ($value) => $value !== null);
     }
 
     protected function request(string $method, string $path, array $options = []): ResponseInterface

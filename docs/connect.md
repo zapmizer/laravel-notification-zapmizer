@@ -487,7 +487,12 @@ $conversation = $client->conversationSession(
     userName: $user->name,
 );
 
-$inbox = $client->inboxSession('https://app.example.com', (string) $user->id, $user->name);
+$inbox = $client->inboxSession(
+    parentOrigin: 'https://app.example.com',
+    appearance: ['theme' => 'dark', 'color_accent' => '#7FA6FF', 'dark_background' => '#141a24'],
+    userId: (string) $user->id,
+    userName: $user->name,
+);
 
 return response()->json([
     'url' => $inbox->url,
@@ -497,7 +502,7 @@ return response()->json([
 ]);
 ```
 
-- `conversationSession(string $phone, string $parentOrigin, array $appearance = [], ?string $userId = null, ?string $userName = null): EmbedSession` and `inboxSession(string $parentOrigin, ?string $userId = null, ?string $userName = null): EmbedSession` — `POST /api/embed/sessions` with `component` `conversation` or `inbox`. `appearance` goes only with the conversation, without its `null` values and only when something is left; the package does not validate it (Zapmizer answers 422). `user` carries the id and the name that are not `null` or blank, and is left out when neither is. `phone` and `parent_origin` go as given.
+- `conversationSession(string $phone, string $parentOrigin, array $appearance = [], ?string $userId = null, ?string $userName = null): EmbedSession` and `inboxSession(string $parentOrigin, array $appearance = [], ?string $userId = null, ?string $userName = null): EmbedSession` — `POST /api/embed/sessions` with `component` `conversation` or `inbox`. `appearance` goes with both components, without its `null` values and only when something is left; the package does not validate it (Zapmizer answers 422). Its fields are `theme`, `color_primary`, `color_accent`, `radius` and `font_family`, plus `dark_background` for the inbox only (accepted and ignored on the conversation). Colors are `#RRGGBB`. A `dark_background` that is not dark enough is a 422 with the field in `errors()`. `user` carries the id and the name that are not `null` or blank, and is left out when neither is. `phone` and `parent_origin` go as given.
 - `EmbedSession` carries `url` (open it in the iframe within 60 seconds; it opens once, never cache it), `origin` (the iframe's origin as the browser serializes it: lowercase, without the default port; compare `event.origin` with it), `expiresAt`, and, for the inbox, `resumeUrl` and `resumeUntil` (keep the `resumeUrl` per person and load it until `resumeUntil`; `resumeUntil` is `null` whenever `resumeUrl` is, including when Zapmizer sent a `resume_until` but the `resume_url` was absent, unsafe or of another origin). Dates are `?CarbonImmutable`, read like the others.
 - The `url` must be safe for the iframe: `http` or `https`, no user or password, no whitespace, control character or backslash, a port from 1 to 65535, and an ASCII host (an IDN only in punycode) or a bracketed IPv6. Anything else is `unexpectedResponse`. A `resume_url` that is not safe, or of another origin than `url`, becomes `null` and logs a warning `zapmizer: unexpected resume url.` with `resume_origin` and `url_origin` only, never the URL.
 - Refusals are `ZapmizerApiException` with `status()`, `error()` and `errors()`: 402 `subscription_required` (checkout), 403 `not_a_partner_connection`, `origin_not_allowed` or `missing_ability` (the inbox needs a connect made after its ability existed: connect again), 422 `connection_without_number`, `number_unavailable`, `approver_without_access`, or the field errors. 401 is a `ZapmizerUnauthorizedException`, 429 a `ZapmizerRateLimitedException`, 5xx a `ZapmizerUnavailableException`, and any answer other than a 201 with a safe `url` is `unexpectedResponse`.

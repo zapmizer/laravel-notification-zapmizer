@@ -161,13 +161,16 @@ class InstanceClient
     }
 
     /**
+     * @param array<string, mixed> $appearance
+     *
      * @throws ZapmizerConnectException
      */
-    public function inboxSession(string $parentOrigin, ?string $userId = null, ?string $userName = null): EmbedSession
+    public function inboxSession(string $parentOrigin, array $appearance = [], ?string $userId = null, ?string $userName = null): EmbedSession
     {
         return $this->embedSession($this->withoutNulls([
             'component' => 'inbox',
             'parent_origin' => $parentOrigin,
+            'appearance' => $this->withoutNulls($appearance) ?: null,
             'user' => $this->embedUser($userId, $userName),
         ]));
     }

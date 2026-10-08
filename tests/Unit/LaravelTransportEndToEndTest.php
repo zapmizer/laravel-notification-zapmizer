@@ -144,7 +144,7 @@ class LaravelTransportEndToEndTest extends TestCase
         $client->revokeToken();
         $client->revokeToken();
         $this->assertSame('https://app.parlichat.com', $client->conversationSession('5521988887777', 'https://app.test', ['theme' => 'dark'], 'u-1')->origin);
-        $this->assertSame('https://app.parlichat.com/chats?embed_inbox=1', $client->inboxSession('https://app.test', 'u-1', 'Ana')->resumeUrl);
+        $this->assertSame('https://app.parlichat.com/chats?embed_inbox=1', $client->inboxSession('https://app.test', [], 'u-1', 'Ana')->resumeUrl);
 
         Http::assertSentCount(6);
         Http::assertSent(fn (Request $request) => $request->method() === 'POST'

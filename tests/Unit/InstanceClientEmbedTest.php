@@ -117,12 +117,12 @@ class InstanceClientEmbedTest extends TestCase
         ];
     }
 
-    public function testE12TheInboxSendsNoPhoneNorAppearance()
+    public function testE12TheInboxSendsNoPhoneAndNoAppearanceWhenNoneIsGiven()
     {
         $body = '{"url":"https://app.parlichat.com/embed-inbox/start/Zr8kQ2","expires_at":"2026-09-26T14:01:00+00:00","resume_url":"https://app.parlichat.com/chats?embed_inbox=9b2f6c1e-4d7a-4f0e-9a51-2c8e7d3b6a10","resume_until":"2026-09-26T16:01:00+00:00"}';
         $this->assertMatchesContract('POST', '/embed/sessions', 201, $body);
 
-        $session = $this->created($body)->inboxSession('https://app.test', 'u-1', 'Ana');
+        $session = $this->created($body)->inboxSession('https://app.test', [], 'u-1', 'Ana');
 
         $this->assertSame('https://app.parlichat.com/chats?embed_inbox=9b2f6c1e-4d7a-4f0e-9a51-2c8e7d3b6a10', $session->resumeUrl);
         $this->assertSame('2026-09-26T16:01:00+00:00', $session->resumeUntil->toIso8601String());
@@ -134,6 +134,30 @@ class InstanceClientEmbedTest extends TestCase
         $this->created()->inboxSession('https://app.test');
 
         $this->assertSame(['component' => 'inbox', 'parent_origin' => 'https://app.test'], $this->sentBody());
+    }
+
+    public function testTheInboxSendsItsAppearanceWithoutNulls()
+    {
+        $this->created()->inboxSession('https://app.test', ['theme' => 'dark', 'color_accent' => '#7FA6FF', 'dark_background' => '#141a24', 'radius' => null]);
+
+        $this->assertSame(
+            ['component' => 'inbox', 'parent_origin' => 'https://app.test', 'appearance' => ['theme' => 'dark', 'color_accent' => '#7FA6FF', 'dark_background' => '#141a24']],
+            $this->sentBody()
+        );
+    }
+
+    public function testTheInboxWithAnEmptyAppearanceSendsNone()
+    {
+        $this->created()->inboxSession('https://app.test', ['theme' => null], 'u-1');
+
+        $this->assertSame(['component' => 'inbox', 'parent_origin' => 'https://app.test', 'user' => ['id' => 'u-1']], $this->sentBody());
+    }
+
+    public function testTheConversationPassesTheColorAccentThrough()
+    {
+        $this->created()->conversationSession('5521988887777', 'https://app.test', ['color_accent' => '#7FA6FF']);
+
+        $this->assertSame(['color_accent' => '#7FA6FF'], $this->sentBody()['appearance']);
     }
 
     public function testThePhoneAndTheOriginGoAsTheyCame()

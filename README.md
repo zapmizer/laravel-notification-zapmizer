@@ -121,7 +121,7 @@ ZapmizerException
 │  │  ├─ ZapmizerUnauthorizedException   401, or no token to send
 │  │  ├─ PartnerCredentialsException     partner key refused (401/403)
 │  │  ├─ MediaRejectedException          media request refused (422)
-│  │  └─ InstanceGoneException           instance deleted (404)
+│  │  └─ InstanceGoneException           instance deleted, or not this connection's number on reconnect() (404)
 │  ├─ ZapmizerUnavailableException       timeout, 5xx, no answer at all
 │  └─ NoConnectableException             the resolver has nothing to connect
 └─ ZapmizerVerificationException         verify-number

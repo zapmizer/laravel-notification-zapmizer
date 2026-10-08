@@ -9,10 +9,12 @@ use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Connect\PartnerClient;
 use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
 use NotificationChannels\Zapmizer\Exceptions\ErrorCode;
+use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;
 use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\MediaRejectedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerRateLimitedException;
 use NotificationChannels\Zapmizer\Test\Concerns\AssertsContract;
 use NotificationChannels\Zapmizer\Test\TestCase;
 use NotificationChannels\Zapmizer\Zapmizer;
@@ -113,6 +115,99 @@ class LaravelTransportEndToEndTest extends TestCase
         } catch (ZapmizerApiException $exception) {
             $this->assertSame(409, $exception->status());
             $this->assertSame(ErrorCode::ALREADY_SUBSCRIBED, $exception->error());
+        }
+    }
+
+    public function testT1TheNewInstanceCallsGoThroughTheFake()
+    {
+        $online = '{"status":"online"}';
+        $needsReconnect = '{"error":"needs_reconnect","message":"O número precisa ser reconectado pelo cliente.","url":"https://zap.test/connect/reconnect/9","expires_at":"2026-10-07T15:00:00Z"}';
+        $unauthenticated = '{"message":"Unauthenticated."}';
+        $conversation = '{"url":"https://app.parlichat.com/embed/start/Zr8kQ2","expires_at":"2026-09-26T14:01:00+00:00"}';
+        $inbox = '{"url":"https://app.parlichat.com/embed-inbox/start/Zr8kQ2","expires_at":"2026-09-26T14:01:00+00:00","resume_url":"https://app.parlichat.com/chats?embed_inbox=1","resume_until":"2026-09-26T16:01:00+00:00"}';
+        $this->assertMatchesContract('POST', '/bot-instances/{id}/reconnect', 200, $online);
+        $this->assertMatchesContract('POST', '/bot-instances/{id}/reconnect', 409, $needsReconnect);
+        $this->assertMatchesContract('DELETE', '/connect/token', 204, '');
+        $this->assertMatchesContract('DELETE', '/connect/token', 401, $unauthenticated);
+        $this->assertMatchesContract('POST', '/embed/sessions', 201, $conversation);
+        $this->assertMatchesContract('POST', '/embed/sessions', 201, $inbox);
+        $json = ['Content-Type' => 'application/json'];
+        Http::fake([
+            'zap.test/api/bot-instances/9/reconnect' => Http::sequence()->push($online, 200, $json)->push($needsReconnect, 409, $json),
+            'zap.test/api/connect/token' => Http::sequence()->push('', 204)->push($unauthenticated, 401, $json),
+            'zap.test/api/embed/sessions' => Http::sequence()->push($conversation, 201, $json)->push($inbox, 201, $json),
+        ]);
+        $client = $this->instanceClient();
+
+        $this->assertTrue($client->reconnect(9, 'https://app.test/reconnected', 'state-1')->isOnline());
+        $this->assertSame('https://zap.test/connect/reconnect/9', $client->reconnect(9, 'https://app.test/reconnected', 'state-1', 100)->url);
+        $client->revokeToken();
+        $client->revokeToken();
+        $this->assertSame('https://app.parlichat.com', $client->conversationSession('5521988887777', 'https://app.test', ['theme' => 'dark'], 'u-1')->origin);
+        $this->assertSame('https://app.parlichat.com/chats?embed_inbox=1', $client->inboxSession('https://app.test', [], 'u-1', 'Ana')->resumeUrl);
+
+        Http::assertSentCount(6);
+        Http::assertSent(fn (Request $request) => $request->method() === 'POST'
+            && $request->url() === 'http://zap.test/api/bot-instances/9/reconnect'
+            && $request->data() === ['redirect_uri' => 'https://app.test/reconnected', 'state' => 'state-1', 'expires_in' => 900]
+            && $request->header('Authorization')[0] === 'Bearer tok'
+            && $request->header('api-version')[0] === '2025-06-27');
+        Http::assertSent(fn (Request $request) => $request->method() === 'DELETE'
+            && $request->url() === 'http://zap.test/api/connect/token'
+            && $request->body() === ''
+            && $request->header('Authorization')[0] === 'Bearer tok');
+        Http::assertSent(fn (Request $request) => $request->method() === 'POST'
+            && $request->url() === 'http://zap.test/api/embed/sessions'
+            && $request->data() === ['component' => 'conversation', 'phone' => '5521988887777', 'parent_origin' => 'https://app.test', 'appearance' => ['theme' => 'dark'], 'user' => ['id' => 'u-1']]);
+        Http::assertSent(fn (Request $request) => $request->method() === 'POST'
+            && $request->url() === 'http://zap.test/api/embed/sessions'
+            && $request->data() === ['component' => 'inbox', 'parent_origin' => 'https://app.test', 'user' => ['id' => 'u-1', 'name' => 'Ana']]);
+    }
+
+    public function testT1InstanceRefusalsThroughTheFake()
+    {
+        $tooMany = '{"message":"Too Many Attempts."}';
+        $notFound = '{"message":"Not found."}';
+        $originNotAllowed = '{"error":"origin_not_allowed","message":"Origem não liberada."}';
+        $this->assertMatchesContract('POST', '/bot-instances/{id}/reconnect', 429, $tooMany, ['Retry-After' => '42']);
+        $this->assertMatchesContract('POST', '/bot-instances/{id}/reconnect', 404, $notFound);
+        $this->assertMatchesContract('DELETE', '/connect/token', 404, $notFound);
+        $this->assertMatchesContract('POST', '/embed/sessions', 403, $originNotAllowed);
+        $json = ['Content-Type' => 'application/json'];
+        Http::fake([
+            'zap.test/api/bot-instances/9/reconnect' => Http::sequence()->push($tooMany, 429, $json + ['Retry-After' => '42'])->push($notFound, 404, $json),
+            'zap.test/api/connect/token' => Http::response($notFound, 404, $json),
+            'zap.test/api/embed/sessions' => Http::response($originNotAllowed, 403, $json),
+        ]);
+        $client = $this->instanceClient();
+
+        try {
+            $client->reconnect(9, 'https://app.test/reconnected');
+            $this->fail('Expected ZapmizerRateLimitedException.');
+        } catch (ZapmizerRateLimitedException $exception) {
+            $this->assertSame(42, $exception->retryAfter());
+        }
+
+        try {
+            $client->reconnect(9, 'https://app.test/reconnected');
+            $this->fail('Expected InstanceGoneException.');
+        } catch (InstanceGoneException $exception) {
+            $this->assertSame(404, $exception->status());
+        }
+
+        try {
+            $client->revokeToken();
+            $this->fail('Expected ZapmizerApiException.');
+        } catch (ZapmizerApiException $exception) {
+            $this->assertSame(404, $exception->status());
+        }
+
+        try {
+            $client->inboxSession('https://app.test');
+            $this->fail('Expected ZapmizerApiException.');
+        } catch (ZapmizerApiException $exception) {
+            $this->assertSame(403, $exception->status());
+            $this->assertSame(ErrorCode::ORIGIN_NOT_ALLOWED, $exception->error());
         }
     }
 

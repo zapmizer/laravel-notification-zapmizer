@@ -394,6 +394,125 @@ if ($subscription === null) {
 - Dates (`ConnectSession::$expiresAt`, `PartnerCheckout::$expiresAt`, `PartnerSubscription::$trialEndsAt`) are read only from ISO 8601 with a zone (`2026-09-07T01:00:00Z`, `…+00:00`, any number of decimals) and keep the zone they came in. A missing or empty value (`null` or `""`) is `null` with no warning; anything else unreadable is `null` and logs a warning `zapmizer: unreadable date.` with `field`, `value` and `external_id`; add your own context with `Log::withContext()`.
 - There is no subscription webhook, and `partner/users/*` allows 60 requests a minute and 2,000 a day per partner: cache the answer in your app.
 
+## 9. Reconnect, revoke and embed
+
+These calls act for one connection, with its token: get the client through `$connection->instanceClient()`. None of them is called by the package's routes; your app decides when.
+
+### Reconnecting a number
+
+```php
+use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerRateLimitedException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
+
+$connection = $team->zapmizerConnection;
+
+if ($connection->bot_instance_id === null) {
+    // no paired number is stored (the pairing was forgotten): start a new connect instead
+    return redirect()->route('numbers.connect');
+}
+
+try {
+    $result = $connection->instanceClient()->reconnect($connection->bot_instance_id, route('numbers.reconnected'), $state);
+
+    if ($result->needsClient()) {
+        return redirect()->away($result->url);
+    }
+} catch (ZapmizerUnauthorizedException $e) {
+    // the token is no longer valid: connect again
+} catch (ZapmizerRateLimitedException $e) {
+    // try again in $e->retryAfter() seconds
+} catch (InstanceGoneException $e) {
+    // the number does not exist, or it is not this connection's
+} catch (ZapmizerApiException $e) {
+    // 402 plan_limit / subscription_required, 403, 409, 422 errors()['redirect_uri']
+} catch (ZapmizerUnavailableException $e) {
+    // 5xx or no answer
+} catch (ZapmizerConnectException $e) {
+    // unexpectedResponse: a redirect, a body that is not JSON, an unsafe url
+}
+```
+
+- `reconnect(int $botInstanceId, string $redirectUri, ?string $state = null, ?int $expiresIn = null): ReconnectResult` — `POST /api/bot-instances/{id}/reconnect`. The result comes from the HTTP status, not from the body: 200 `isOnline()`; 202 `isStarting()` (follow it with `connection()`); 409 `needs_reconnect` `needsClient()`, with `url` (send the customer there; Zapmizer brings them back to `$redirectUri` with your `state` and `status=reconnected` or `error`) and `expiresAt` (`?CarbonImmutable`, `null` when Zapmizer did not say).
+- `state` and `expires_in` only matter on that 409: a 200 or 202 never comes back to `$redirectUri`, so discard the state. `state` is checked like in `createSession()` (`InvalidArgumentException` before any request), `expires_in` is kept between 900 and 86400, and both are only sent when not `null`.
+- Refusals: 402 is a `ZapmizerApiException` with `error()` `plan_limit` (upgrade the plan) or `subscription_required` (checkout); read Zapmizer's text from `payload()['message']`. 403 has `status()` 403: without `error()` the token did not come from a connect, or the account's e-mail is not verified; `missing_ability` may come too. 404 is an `InstanceGoneException` with **two meanings**: the number does not exist, or it is not this connection's number. A 409 with another code (or none) is a `ZapmizerApiException` with that `error()`. 422 carries `errors()['redirect_uri']` when the redirect is not allowed for you. 429 is a `ZapmizerRateLimitedException` (10 a minute per number) with `retryAfter()`. A `needs_reconnect` without a safe `url` (below) is `unexpectedResponse`.
+
+### Revoking the token
+
+```php
+use NotificationChannels\Zapmizer\Connect\InstanceClient;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerException;
+
+// The customer removes the integration: the connection's own token is the one to revoke.
+try {
+    $connection->instanceClient()->revokeToken();
+} catch (ZapmizerException $e) {
+    report($e);
+}
+
+$connection->delete();
+
+// Replacing a token with the one from a new connect: revoke the PREVIOUS one, with a client built for it.
+// instanceClient() reads api_token when it is called, so after the new token is stored it would revoke the new one.
+$previousToken = $connection->api_token;
+// ... the new token is stored on $connection here ...
+
+try {
+    app(InstanceClient::class, [
+        'api_token' => $previousToken,
+        'api_version' => config('zapmizer.api_version'),
+    ])->revokeToken();
+} catch (ZapmizerException $e) {
+    report($e);
+}
+```
+
+- `revokeToken(): void` — `DELETE /api/connect/token` revokes the token the client authenticates with. Use it when the customer removes the integration, and to revoke the previous token after a new connect replaced it (the client must be built for the previous token, as above: `instanceClient()` uses whichever `api_token` is stored when it is called, so calling it after the swap revokes the new token and leaves the old one valid). In this release the package's own connect callback (`zapmizer.connect.callback`) overwrites `api_token` without revoking the previous one, so revoking it is up to your app. To revoke it with the package's callback, capture the previous token in an `updating` observer on `NotificationChannels\Zapmizer\Models\ZapmizerConnection` (`$connection->getOriginal('api_token')` when `$connection->isDirty('api_token')`) and revoke it after the save; a built-in option is planned for a later release. Zapmizer also points to it to recover a lost webhook secret.
+- It returns on 204 (revoked now) and on 401 (the token was already revoked, or is not valid). A 404 is a `ZapmizerApiException` with `status()` 404: the token did not come from a connect and **is still valid**. A 403 (e-mail not verified) also means nothing was revoked. 5xx or no answer is a `ZapmizerUnavailableException`, a 429 a `ZapmizerRateLimitedException`, and a redirect or another 2xx `unexpectedResponse`.
+- 401 and 404 also come from a wrong `base_uri` or environment (an unknown route answers 404). Never let a failed revocation block the removal: catch it, report it and go on.
+
+### Embedding a conversation or the inbox
+
+```php
+$client = $connection->instanceClient();
+
+$conversation = $client->conversationSession(
+    phone: '5521988887777',
+    parentOrigin: 'https://app.example.com',
+    appearance: ['theme' => 'dark', 'color_primary' => '#2E6BFF'],
+    userId: (string) $user->id,
+    userName: $user->name,
+);
+
+$inbox = $client->inboxSession(
+    parentOrigin: 'https://app.example.com',
+    appearance: ['theme' => 'dark', 'color_accent' => '#7FA6FF', 'dark_background' => '#141a24'],
+    userId: (string) $user->id,
+    userName: $user->name,
+);
+
+return response()->json([
+    'url' => $inbox->url,
+    'origin' => $inbox->origin,
+    'resume_url' => $inbox->resumeUrl,
+    'resume_until' => $inbox->resumeUntil?->toIso8601String(),
+]);
+```
+
+- `conversationSession(string $phone, string $parentOrigin, array $appearance = [], ?string $userId = null, ?string $userName = null): EmbedSession` and `inboxSession(string $parentOrigin, array $appearance = [], ?string $userId = null, ?string $userName = null): EmbedSession` — `POST /api/embed/sessions` with `component` `conversation` or `inbox`. `appearance` goes with both components, without its `null` values and only when something is left; the package does not validate it (Zapmizer answers 422). Its fields are `theme`, `color_primary`, `color_accent`, `radius` and `font_family`, plus `dark_background` for the inbox only (accepted and ignored on the conversation). Colors are `#RRGGBB`. A `dark_background` that is not dark enough is a 422 with the field in `errors()`. `user` carries the id and the name that are not `null` or blank, and is left out when neither is. `phone` and `parent_origin` go as given.
+- `EmbedSession` carries `url` (open it in the iframe within 60 seconds; it opens once, never cache it), `origin` (the iframe's origin as the browser serializes it: lowercase, without the default port; compare `event.origin` with it), `expiresAt`, and, for the inbox, `resumeUrl` and `resumeUntil` (keep the `resumeUrl` per person and load it until `resumeUntil`; `resumeUntil` is `null` whenever `resumeUrl` is, including when Zapmizer sent a `resume_until` but the `resume_url` was absent, unsafe or of another origin). Dates are `?CarbonImmutable`, read like the others.
+- The `url` must be safe for the iframe: `http` or `https`, no user or password, no whitespace, control character or backslash, a port from 1 to 65535, and an ASCII host (an IDN only in punycode) or a bracketed IPv6. Anything else is `unexpectedResponse`. A `resume_url` that is not safe, or of another origin than `url`, becomes `null` and logs a warning `zapmizer: unexpected resume url.` with `resume_origin` and `url_origin` only, never the URL.
+- Refusals are `ZapmizerApiException` with `status()`, `error()` and `errors()`: 402 `subscription_required` (checkout), 403 `not_a_partner_connection`, `origin_not_allowed` or `missing_ability` (the inbox needs a connect made after its ability existed: connect again), 422 `connection_without_number`, `number_unavailable`, `approver_without_access`, or the field errors. 401 is a `ZapmizerUnauthorizedException`, 429 a `ZapmizerRateLimitedException`, 5xx a `ZapmizerUnavailableException`, and any answer other than a 201 with a safe `url` is `unexpectedResponse`.
+
+### Catch order
+
+`ZapmizerUnauthorizedException`, `ZapmizerRateLimitedException` and `InstanceGoneException` extend `ZapmizerApiException`: catch them before it. `unexpectedResponse` and `ZapmizerUnavailableException` are `ZapmizerConnectException` but not `ZapmizerApiException`, so a `catch (ZapmizerApiException)` lets them through. None of them renders a response.
+
+`reconnect()` (like `createSession()` and `checkout()`) throws `InvalidArgumentException` before any request when the `state` is invalid; that is not a `ZapmizerException`, so no `catch` for the exceptions above covers it.
+
 ## Error handling
 
 ```php
@@ -403,7 +522,7 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;          // Z
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerRateLimitedException;  // 429 — ->retryAfter()
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException; // team token revoked or missing (401)
 use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;   // partner key refused (401/403)
-use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;         // instance deleted (404 on its connection endpoint)
+use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;         // instance deleted or not this connection's (404 on connection() and reconnect())
 use NotificationChannels\Zapmizer\Exceptions\MediaRejectedException;        // media request refused (422) — ->reason()
 use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;     // media endpoint rate limit (429) — ->retryAfter()
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;  // timeout / 5xx / no answer
@@ -412,7 +531,7 @@ use NotificationChannels\Zapmizer\Exceptions\NoConnectableException;        // r
 
 None of them renders a response: the routes above answer their JSON codes themselves, and anywhere else your exception handler decides. "Errors" in the README shows how to read a `ZapmizerApiException` and the `ErrorCode` constants.
 
-The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceClient`) are container-bound with the configured transport — see "HTTP transport" in the README. With the default `GuzzleTransport`, swap `GuzzleHttp\Client` in the container to fake them in tests, like `VerificationClient`; with `LaravelHttpTransport`, use `Http::fake()`. Every client sends `Accept: application/json` and does **not** follow redirects: a revoked token makes Zapmizer redirect to its login page, and a redirect or a non-JSON answer is an exception (`unexpectedResponse`) instead of a silent "success". `InstanceClient` always acts for one connection: its token is mandatory, there is no fallback to `zapmizer.api_token` — get it through `$connection->instanceClient()`. It only knows `connection($id)`, `createWebhook($url)`, `rotateWebhookSecret($id)`, `deleteWebhook($id)` and `media($botInstanceId, $messageId, $timestamp)` — instances are created and paired on Zapmizer's page, not from here. `media()` is the one endpoint whose 200 is not JSON (the bytes); its 202/404 answers are, and a redirect is still refused; its 422 (bad request, Meta Cloud instance) is a `MediaRejectedException` and its 429 (rate limit) a `MediaRateLimitedException`. On `InstanceClient`, any other 4xx is a `ZapmizerApiException` (401 `ZapmizerUnauthorizedException`, 429 `ZapmizerRateLimitedException`), except the 404 of `connection()` (`InstanceGoneException`), of `deleteWebhook()` (done) and of `media()` (`unavailable`). On `PartnerClient`, a refused partner credential (401/403) is a `PartnerCredentialsException`, `exchangeCode()` and `subscription()` return `null` on 404 (unknown, expired or already used code; no approved connect with that `external_id`), and any other 4xx is a `ZapmizerApiException` (429 `ZapmizerRateLimitedException`). A 4xx of a partner call is logged as `zapmizer: partner call failed.`, except 404 and 409: those are business answers (no connect yet, already subscribed, payment pending).
+The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceClient`) are container-bound with the configured transport — see "HTTP transport" in the README. With the default `GuzzleTransport`, swap `GuzzleHttp\Client` in the container to fake them in tests, like `VerificationClient`; with `LaravelHttpTransport`, use `Http::fake()`. Every client sends `Accept: application/json` and does **not** follow redirects: a revoked token makes Zapmizer redirect to its login page, and a redirect or a non-JSON answer is an exception (`unexpectedResponse`) instead of a silent "success". `InstanceClient` always acts for one connection: its token is mandatory, there is no fallback to `zapmizer.api_token` — get it through `$connection->instanceClient()`. It knows `connection($id)`, `createWebhook($url)`, `rotateWebhookSecret($id)`, `deleteWebhook($id)`, `media($botInstanceId, $messageId, $timestamp)`, `reconnect()`, `revokeToken()`, `conversationSession()` and `inboxSession()` (section 9) — instances are created and paired on Zapmizer's page, not from here. `media()` is the one endpoint whose 200 is not JSON (the bytes); its 202/404 answers are, and a redirect is still refused; its 422 (bad request, Meta Cloud instance) is a `MediaRejectedException` and its 429 (rate limit) a `MediaRateLimitedException`. On `InstanceClient`, any other 4xx is a `ZapmizerApiException` (401 `ZapmizerUnauthorizedException`, 429 `ZapmizerRateLimitedException`), except the 404 of `connection()` and `reconnect()` (`InstanceGoneException`), of `deleteWebhook()` (done) and of `media()` (`unavailable`), the 409 `needs_reconnect` of `reconnect()` (a result) and the 401 of `revokeToken()` (done). On `PartnerClient`, a refused partner credential (401/403) is a `PartnerCredentialsException`, `exchangeCode()` and `subscription()` return `null` on 404 (unknown, expired or already used code; no approved connect with that `external_id`), and any other 4xx is a `ZapmizerApiException` (429 `ZapmizerRateLimitedException`). A 4xx of a partner call is logged as `zapmizer: partner call failed.`, except 404 and 409: those are business answers (no connect yet, already subscribed, payment pending).
 
 `PartnerClient::createSession($redirectUri, $state = null, $webhookUrl = null, $expiresIn = null, $externalId = null)` keeps `expires_in` between Zapmizer's floor of **900 seconds** (`PartnerClient::MIN_EXPIRES_IN`) and its ceiling of **86400** (`PartnerClient::MAX_EXPIRES_IN`): the same signature covers the page, the authorization and the QR code, and a shorter one died mid-pairing. `ConnectToken` carries `userId` and `teamId` (both `int`) and `hasNumber()`: `false` when `phone_number` or `bot_instance_id` came `null` (the number ceased to exist between the approval and the exchange; Zapmizer says to start a new session).
 

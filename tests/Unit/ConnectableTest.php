@@ -9,7 +9,6 @@ use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Support\Facades\DB;
 use NotificationChannels\Zapmizer\Connect\MediaDownload;
-use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
 use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\MediaRejectedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
@@ -36,7 +35,6 @@ class ConnectableTest extends TestCase
         $app['config']->set('app.key', 'base64:' . base64_encode(random_bytes(32)));
         $app['config']->set('zapmizer.base_uri', 'http://localhost/api/');
         $app['config']->set('zapmizer.api_version', '2025-06-27');
-        $app['config']->set('zapmizer.http.transport', LaravelHttpTransport::class);
     }
 
     protected function fakeHttp(Response ...$responses): void

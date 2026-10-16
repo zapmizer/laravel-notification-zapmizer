@@ -12,8 +12,6 @@ use RuntimeException;
 
 class LaravelHttpTransport implements Transport
 {
-    use AppliesDefaultTimeouts;
-
     public function __construct(protected ?float $connectTimeout = null, protected ?float $timeout = null)
     {
     }
@@ -31,5 +29,17 @@ class LaravelHttpTransport implements Transport
         } catch (HttpClientException|GuzzleException $exception) {
             throw ZapmizerUnavailableException::dueTo($exception);
         }
+    }
+
+    protected function prepareOptions(array $options): array
+    {
+        return array_replace(
+            array_filter(
+                ['connect_timeout' => $this->connectTimeout, 'timeout' => $this->timeout],
+                fn ($value) => $value !== null,
+            ),
+            $options,
+            ['http_errors' => false, 'allow_redirects' => false],
+        );
     }
 }

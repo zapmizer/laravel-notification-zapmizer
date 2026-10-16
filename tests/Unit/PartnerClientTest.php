@@ -6,6 +6,7 @@ use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use NotificationChannels\Zapmizer\Connect\ConnectSession;
 use NotificationChannels\Zapmizer\Connect\ConnectToken;
@@ -219,5 +220,17 @@ class PartnerClientTest extends TestCase
         }
 
         $this->assertFalse($this->history[0]['options']['allow_redirects']);
+    }
+
+    public function testAnEmptyHttpFakeIsNotAnApiAnswer()
+    {
+        Http::fake();
+
+        try {
+            (new PartnerClient('id', 'secret', null, 'http://zap.test/api/'))->createSession('https://app.test/cb', 'state-1');
+            $this->fail('Expected ZapmizerConnectException.');
+        } catch (ZapmizerConnectException $exception) {
+            $this->assertStringContainsString('response body is not valid JSON', $exception->getMessage());
+        }
     }
 }

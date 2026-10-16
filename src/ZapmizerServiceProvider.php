@@ -13,7 +13,7 @@ use Illuminate\Support\Facades\Route;
 use Illuminate\Contracts\Foundation\Application;
 use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Connect\PartnerClient;
-use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
+use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
 use NotificationChannels\Zapmizer\Contracts\ResolvesConnectable;
 use NotificationChannels\Zapmizer\Contracts\Transport;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
@@ -170,7 +170,7 @@ class ZapmizerServiceProvider extends ServiceProvider
         $class = config('zapmizer.http.transport');
 
         if ($class === null || $class === '') {
-            $class = GuzzleTransport::class;
+            $class = LaravelHttpTransport::class;
         }
 
         if (!is_string($class) || $class === Transport::class || !is_a($class, Transport::class, true)) {

@@ -10,7 +10,6 @@ use GuzzleHttp\Psr7\Response;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
-use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
 use NotificationChannels\Zapmizer\Connect\ResolvesAuthenticatedUser;
 use NotificationChannels\Zapmizer\Http\Controllers\ConnectController;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
@@ -44,7 +43,6 @@ class ConnectRouteTest extends TestCase
         $app['config']->set('zapmizer.partner.secret', 'partner-secret');
         // The resolver connects the user's team, as a multi-tenant app would.
         $app['config']->set('zapmizer.connect.resolver', ResolvesFirstTeam::class);
-        $app['config']->set('zapmizer.http.transport', LaravelHttpTransport::class);
     }
 
     protected function fakeHttp(Response ...$responses): void

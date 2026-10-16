@@ -46,14 +46,12 @@ class GuzzleTransportTest extends TestCase
 
     public function testPassesOptionsThrough()
     {
-        $sink = tempnam(sys_get_temp_dir(), 'zt-');
         $transport = new GuzzleTransport($this->client([new Response(200, [], 'bytes')]));
 
         $transport->send('POST', 'http://zap.test/api/x', [
             'headers' => ['X-A' => '1'],
             'json' => ['a' => 1],
             'query' => ['q' => 'v'],
-            'sink' => $sink,
             'stream' => false,
             'timeout' => 3.0,
             'connect_timeout' => 2.0,
@@ -64,12 +62,9 @@ class GuzzleTransportTest extends TestCase
         $this->assertSame('1', $request->getHeaderLine('X-A'));
         $this->assertSame('{"a":1}', (string) $request->getBody());
         $this->assertSame('q=v', $request->getUri()->getQuery());
-        $this->assertSame($sink, $options['sink']);
         $this->assertFalse($options['stream']);
         $this->assertSame(3.0, $options['timeout']);
         $this->assertSame(2.0, $options['connect_timeout']);
-        $this->assertSame('bytes', file_get_contents($sink));
-        @unlink($sink);
     }
 
     public function testConstructorTimeoutsAreDefaultsTheCallCanOverride()

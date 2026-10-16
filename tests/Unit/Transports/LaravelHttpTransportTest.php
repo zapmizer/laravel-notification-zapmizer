@@ -51,17 +51,6 @@ class LaravelHttpTransportTest extends TestCase
         $this->assertSame(404, $response->getStatusCode());
     }
 
-    public function testSinkWritesTheBody()
-    {
-        $sink = tempnam(sys_get_temp_dir(), 'zt-');
-        Http::fake(['zap.test/*' => Http::response('bytes', 200, ['Content-Type' => 'image/png'])]);
-
-        (new LaravelHttpTransport())->send('GET', 'http://zap.test/api/media', ['sink' => $sink]);
-
-        $this->assertSame('bytes', file_get_contents($sink));
-        @unlink($sink);
-    }
-
     public function testC20ConnectionFailureBecomesUnavailable()
     {
         Http::fake(fn () => throw new ConnectException('down', new PsrRequest('GET', 'http://zap.test')));

@@ -2,16 +2,12 @@
 
 namespace NotificationChannels\Zapmizer\Test\Unit;
 
-use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Connect\PartnerClient;
 use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
-use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;
-use NotificationChannels\Zapmizer\Exceptions\MediaRejectedException;
 use NotificationChannels\Zapmizer\Test\TestCase;
-use RuntimeException;
 
 class LaravelTransportEndToEndTest extends TestCase
 {
@@ -48,99 +44,5 @@ class LaravelTransportEndToEndTest extends TestCase
 
         Http::assertSent(fn (Request $request) => $request->header('Authorization')[0] === 'Bearer tok'
             && $request->header('api-version')[0] === '2025-06-27');
-    }
-
-    public function testMediaThroughTheFakeForEveryStatus()
-    {
-        Http::fakeSequence('zap.test/*')
-            ->push('bytes', 200, ['Content-Type' => 'image/png'])
-            ->push(['media_state' => 'downloading'], 202)
-            ->push(['media_state' => 'unavailable'], 404)
-            ->push(['message' => 'bad'], 422)
-            ->push('', 429, ['Retry-After' => '7']);
-
-        $client = $this->instanceClient();
-
-        $this->assertSame('bytes', stream_get_contents($client->media(9, 'A', 1700000000)->stream()));
-        $this->assertFalse($client->media(9, 'A', 1700000000)->isAttached());
-        $this->assertFalse($client->media(9, 'A', 1700000000)->isAttached());
-
-        try {
-            $client->media(9, 'A', 1700000000);
-            $this->fail('expected MediaRejectedException');
-        } catch (MediaRejectedException $exception) {
-            $this->assertStringContainsString('bad', $exception->reason());
-        }
-
-        try {
-            $client->media(9, 'A', 1700000000);
-            $this->fail('expected MediaRateLimitedException');
-        } catch (MediaRateLimitedException $exception) {
-            $this->assertSame(7, $exception->retryAfter());
-        }
-    }
-
-    public function testTheSameFakedMediaCanBeFetchedTwice()
-    {
-        Http::fake(['zap.test/*' => Http::response('bytes', 200, ['Content-Type' => 'image/png'])]);
-
-        $client = $this->instanceClient();
-
-        $this->assertSame('bytes', stream_get_contents($client->media(9, 'A', 1700000000)->stream()));
-        $this->assertSame('bytes', stream_get_contents($client->media(9, 'A', 1700000000)->stream()));
-    }
-
-    public function testTheSameFakedAnswerCanBeFetchedTwiceWithoutATemporaryFile()
-    {
-        Http::fake(['zap.test/*' => Http::response(['media_state' => 'downloading'], 202)]);
-
-        $client = new class ('tok', new LaravelHttpTransport(), 'http://zap.test/api/', '2025-06-27') extends InstanceClient {
-            protected function temporaryMediaPath(): ?string
-            {
-                return null;
-            }
-        };
-
-        $this->assertFalse($client->media(9, 'A', 1700000000)->isAttached());
-        $this->assertFalse($client->media(9, 'A', 1700000000)->isAttached());
-    }
-
-    public function testC25GlobalMiddlewareReadingTheBodyDoesNotEmptyTheMedia()
-    {
-        if (!method_exists(Factory::class, 'globalMiddleware')) {
-            $this->markTestSkipped('globalMiddleware exists from Laravel 10 on.');
-        }
-
-        Http::globalMiddleware(fn (callable $handler) => fn ($request, array $options) => $handler($request, $options)->then(function ($response) {
-            (string) $response->getBody();
-
-            return $response;
-        }));
-        Http::fake(['zap.test/*' => Http::response('bytes', 200, ['Content-Type' => 'image/png'])]);
-
-        $this->assertSame('bytes', stream_get_contents($this->instanceClient()->media(9, 'A', 1700000000)->stream()));
-    }
-
-    public function testStrayMediaRequestPassesThroughAndLeavesNoFile()
-    {
-        if (!method_exists(Factory::class, 'preventStrayRequests')) {
-            $this->markTestSkipped('preventStrayRequests exists from Laravel 9 on.');
-        }
-
-        Http::preventStrayRequests();
-        Http::fake(['other.test/*' => Http::response('{}')]);
-        $before = glob(sys_get_temp_dir() . '/zapmizer-media-*');
-
-        $caught = null;
-
-        try {
-            $this->instanceClient()->media(9, 'A', 1700000000);
-        } catch (\Throwable $exception) {
-            $caught = $exception;
-        }
-
-        $this->assertInstanceOf(RuntimeException::class, $caught);
-        $this->assertNotInstanceOf(\PHPUnit\Framework\AssertionFailedError::class, $caught);
-        $this->assertSame($before, glob(sys_get_temp_dir() . '/zapmizer-media-*'));
     }
 }

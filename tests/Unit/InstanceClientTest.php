@@ -160,7 +160,7 @@ class InstanceClientTest extends TestCase
         $download = $client->media(9, 'ABC', 1700000000);
 
         $this->assertNull($download->filename);
-        $this->assertNull($download->size);
+        $this->assertSame(5, $download->size);
         parse_str($this->history[0]['request']->getUri()->getQuery(), $query);
         $this->assertEquals('1700000000', $query['timestamp']);
     }

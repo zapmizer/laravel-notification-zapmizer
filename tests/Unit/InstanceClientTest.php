@@ -2,35 +2,40 @@
 
 namespace NotificationChannels\Zapmizer\Test\Unit;
 
-use GuzzleHttp\Client as HttpClient;
 use GuzzleHttp\Handler\MockHandler;
-use GuzzleHttp\HandlerStack;
-use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Connect\InstanceConnection;
 use NotificationChannels\Zapmizer\Connect\MediaDownload;
-use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
+use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
 use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;
 use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\MediaRejectedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
+use NotificationChannels\Zapmizer\Test\Concerns\FakesZapmizerHttp;
+use NotificationChannels\Zapmizer\Test\Fixtures\RecordingTransport;
 use NotificationChannels\Zapmizer\Test\TestCase;
 
 class InstanceClientTest extends TestCase
 {
+    use FakesZapmizerHttp;
+
     /** @var array<int, array{request: Request}> */
     protected array $history = [];
 
     protected function makeClient(MockHandler $mock): InstanceClient
     {
-        $stack = HandlerStack::create($mock);
-        $stack->push(Middleware::history($this->history));
+        $this->fakeZapmizer($mock);
 
-        return new InstanceClient('team-token', new GuzzleTransport(new HttpClient(['handler' => $stack])), 'http://localhost/api', '2025-06-27');
+        return new InstanceClient('team-token', new LaravelHttpTransport(), 'http://localhost/api', '2025-06-27');
+    }
+
+    protected function connectionJson(): string
+    {
+        return json_encode(['data' => ['id' => 9, 'state' => 'connected', 'state_label' => 'Conectado', 'is_online' => true, 'is_up' => true, 'number' => '5581911110000']]);
     }
 
     public function testConnectionMapsStates()
@@ -316,5 +321,49 @@ class InstanceClientTest extends TestCase
         }
 
         $this->assertFalse($this->history[0]['options']['allow_redirects']);
+    }
+
+    public function testApiVersionNullEmptyOrZeroIsNotSent()
+    {
+        foreach ([null, '', '0'] as $version) {
+            $transport = new RecordingTransport(new Response(200, [], $this->connectionJson()));
+
+            (new InstanceClient('tok', $transport, 'http://zap.test/api', $version))->connection(9);
+
+            $this->assertArrayNotHasKey('api-version', $transport->calls[0]['options']['headers']);
+        }
+    }
+
+    public function testSubclassChangingBaseUriAndTokenAfterConstructionIsHonoured()
+    {
+        $transport = new RecordingTransport(new Response(200, [], $this->connectionJson()));
+        $client = new class ('old', $transport, 'http://old.test/api') extends InstanceClient {
+            public function retarget(): void
+            {
+                $this->apiBaseUri = 'http://new.test/api';
+                $this->token = 'new';
+            }
+        };
+        $client->retarget();
+
+        $client->connection(9);
+
+        $this->assertSame('http://new.test/api/bot-instances/9/connection', $transport->calls[0]['url']);
+        $this->assertSame('Bearer new', $transport->calls[0]['options']['headers']['Authorization']);
+    }
+
+    public function testC23CallHeaderCannotOverrideAuthentication()
+    {
+        $transport = new RecordingTransport(new Response(200, [], '{}'));
+        $client = new class ('tok', $transport, 'http://zap.test/api') extends InstanceClient {
+            public function raw(): void
+            {
+                $this->request('GET', '/x', ['headers' => ['authorization' => 'Bearer evil']]);
+            }
+        };
+
+        $client->raw();
+
+        $this->assertSame(['Accept' => 'application/json', 'Authorization' => 'Bearer tok'], $transport->calls[0]['options']['headers']);
     }
 }

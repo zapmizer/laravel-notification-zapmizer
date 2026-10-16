@@ -2,35 +2,34 @@
 
 namespace NotificationChannels\Zapmizer\Test\Unit;
 
-use GuzzleHttp\Client as HttpClient;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
-use GuzzleHttp\HandlerStack;
-use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Support\Facades\Log;
 use NotificationChannels\Zapmizer\Connect\ConnectSession;
 use NotificationChannels\Zapmizer\Connect\ConnectToken;
 use NotificationChannels\Zapmizer\Connect\PartnerClient;
-use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
+use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
 use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
+use NotificationChannels\Zapmizer\Test\Concerns\FakesZapmizerHttp;
 use NotificationChannels\Zapmizer\Test\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 class PartnerClientTest extends TestCase
 {
+    use FakesZapmizerHttp;
+
     /** @var array<int, array{request: Request}> */
     protected array $history = [];
 
     protected function makeClient(MockHandler $mock): PartnerClient
     {
-        $stack = HandlerStack::create($mock);
-        $stack->push(Middleware::history($this->history));
+        $this->fakeZapmizer($mock);
 
-        return new PartnerClient('partner-id', 'partner-secret', new GuzzleTransport(new HttpClient(['handler' => $stack])), 'http://localhost/api');
+        return new PartnerClient('partner-id', 'partner-secret', new LaravelHttpTransport(), 'http://localhost/api');
     }
 
     public function testCreateSessionSendsPartnerKeyAndReturnsPopupUrl()
@@ -51,6 +50,7 @@ class PartnerClientTest extends TestCase
         $this->assertEquals('http://localhost/api/connect/sessions', (string) $request->getUri());
         $this->assertEquals('partner-id|partner-secret', $request->getHeaderLine('X-Partner-Key'));
         $this->assertFalse($request->hasHeader('Authorization'));
+        $this->assertEquals('application/json', $request->getHeaderLine('Accept'));
         $this->assertEquals(
             ['redirect_uri' => 'http://app.test/zapmizer/connect/callback', 'state' => 'state-123', 'webhook_url' => 'http://app.test/zapmizer/webhook'],
             json_decode((string) $request->getBody(), true)

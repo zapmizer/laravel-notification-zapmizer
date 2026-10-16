@@ -10,6 +10,10 @@ use Psr\Http\Message\ResponseInterface;
 
 class ZapmizerApi
 {
+    public const TRANSFER_CONNECT_TIMEOUT = 60;
+
+    public const TRANSFER_TIMEOUT = 600;
+
     public function __construct(protected Transport $transport)
     {
     }

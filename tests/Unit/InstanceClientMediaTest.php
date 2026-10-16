@@ -13,6 +13,7 @@ use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Connect\MediaDownload;
+use NotificationChannels\Zapmizer\Connect\ZapmizerApi;
 use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
 use NotificationChannels\Zapmizer\Contracts\Transport;
 use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;
@@ -51,9 +52,11 @@ class InstanceClientMediaTest extends TestCase
 
         $this->assertTrue($download->isAttached());
         $this->assertSame('bytes', stream_get_contents($download->stream()));
-        $this->assertSame(InstanceClient::MEDIA_CONNECT_TIMEOUT, $this->history[0]['options']['connect_timeout']);
-        $this->assertSame(InstanceClient::MEDIA_TIMEOUT, $this->history[0]['options']['timeout']);
+        $this->assertSame(ZapmizerApi::TRANSFER_CONNECT_TIMEOUT, $this->history[0]['options']['connect_timeout']);
+        $this->assertSame(ZapmizerApi::TRANSFER_TIMEOUT, $this->history[0]['options']['timeout']);
         $this->assertArrayNotHasKey('stream', $this->history[0]['options']);
+        $this->assertSame(60, ZapmizerApi::TRANSFER_CONNECT_TIMEOUT);
+        $this->assertSame(600, ZapmizerApi::TRANSFER_TIMEOUT);
     }
 
     public function testC28AndC29NoStatusLeavesATemporaryFile()

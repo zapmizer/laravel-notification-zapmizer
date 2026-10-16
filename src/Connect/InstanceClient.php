@@ -23,10 +23,6 @@ use Psr\Http\Message\ResponseInterface;
  */
 class InstanceClient
 {
-    public const MEDIA_CONNECT_TIMEOUT = 60;
-
-    public const MEDIA_TIMEOUT = 600;
-
     protected Transport $transport;
 
     protected string $apiBaseUri;
@@ -159,8 +155,8 @@ class InstanceClient
                     'message_id' => $messageId,
                     'timestamp' => $timestamp,
                 ],
-                'connect_timeout' => self::MEDIA_CONNECT_TIMEOUT,
-                'timeout' => self::MEDIA_TIMEOUT,
+                'connect_timeout' => ZapmizerApi::TRANSFER_CONNECT_TIMEOUT,
+                'timeout' => ZapmizerApi::TRANSFER_TIMEOUT,
             ], $path === null ? ['stream' => true] : ['sink' => $path]), expectsJson: false);
 
             return $download = $this->mediaFrom($response, $path);

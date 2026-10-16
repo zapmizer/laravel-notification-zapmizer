@@ -124,7 +124,7 @@ Both default to `null`: no limit with Guzzle, the `Http` client default with Lar
 
 ### Media downloads
 
-Media downloads ignore those timeouts: they use fixed limits of 60 s to connect and 600 s in total (`InstanceClient::MEDIA_CONNECT_TIMEOUT` / `MEDIA_TIMEOUT`). Without the `curl` extension, Guzzle falls back to its stream handler and the `timeout` applies per read instead. The body is written straight to a file (`sink`), so Telescope and any `ResponseReceived` listener that calls `body()` will load the whole media into memory. To change these limits, extend the transport and adjust the options it receives; the media call is the one that carries `sink`, or the URL `/whatsapp-messages/media`.
+Media downloads ignore those timeouts: they use fixed limits of 60 s to connect and 600 s in total (`ZapmizerApi::TRANSFER_CONNECT_TIMEOUT` / `TRANSFER_TIMEOUT`). Without the `curl` extension, Guzzle falls back to its stream handler and the `timeout` applies per read instead. The body is written straight to a file (`sink`), so Telescope and any `ResponseReceived` listener that calls `body()` will load the whole media into memory. To change these limits, extend the transport and adjust the options it receives; the media call is the one that carries `sink`, or the URL `/whatsapp-messages/media`.
 
 If the temporary directory is not writable and `LaravelHttpTransport` has a global middleware that reads the body, the media `202`/`404` answers become `unexpectedResponse` and the `422` comes out with an empty reason. This is rare.
 

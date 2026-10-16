@@ -2,9 +2,11 @@
 
 namespace NotificationChannels\Zapmizer\Test\Unit;
 
-use GuzzleHttp\Client as HttpClient;
+use Illuminate\Container\Container;
+use Illuminate\Contracts\Container\BindingResolutionException;
 use InvalidArgumentException;
-use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
+use NotificationChannels\Zapmizer\Connect\InstanceClient;
+use NotificationChannels\Zapmizer\Connect\PartnerClient;
 use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
 use NotificationChannels\Zapmizer\Contracts\Transport;
 use NotificationChannels\Zapmizer\Test\Fixtures\AutowiredPartnerClient;
@@ -16,23 +18,8 @@ use NotificationChannels\Zapmizer\ZapmizerServiceProvider;
 
 class TransportResolutionTest extends TestCase
 {
-    public function testC1DefaultIsGuzzle()
+    public function testC1DefaultIsTheLaravelTransport()
     {
-        $this->assertInstanceOf(GuzzleTransport::class, $this->app->make(Transport::class));
-    }
-
-    public function testC2RegisteredGuzzleIsUsed()
-    {
-        $guzzle = new HttpClient();
-        $this->app->instance(HttpClient::class, $guzzle);
-
-        $this->assertSame($guzzle, $this->app->make(Transport::class)->client());
-    }
-
-    public function testConfigPicksTheLaravelTransport()
-    {
-        config()->set('zapmizer.http.transport', LaravelHttpTransport::class);
-
         $this->assertInstanceOf(LaravelHttpTransport::class, $this->app->make(Transport::class));
     }
 
@@ -94,12 +81,12 @@ class TransportResolutionTest extends TestCase
         }
     }
 
-    public function testC7EmptyTransportConfigFallsBackToGuzzle()
+    public function testC7EmptyTransportConfigFallsBackToTheLaravelTransport()
     {
         foreach ([null, ''] as $value) {
             config()->set('zapmizer.http.transport', $value);
 
-            $this->assertInstanceOf(GuzzleTransport::class, $this->app->make(Transport::class));
+            $this->assertInstanceOf(LaravelHttpTransport::class, $this->app->make(Transport::class));
         }
     }
 
@@ -128,5 +115,62 @@ class TransportResolutionTest extends TestCase
         $client = $this->app->make(AutowiredPartnerClient::class, ['partnerId' => 'id', 'partnerSecret' => 'secret']);
 
         $this->assertInstanceOf(LaravelHttpTransport::class, $client->transport());
+    }
+
+    public function testClientsBuiltWithoutATransportUseTheContainerOne()
+    {
+        config()->set('zapmizer.http.transport', TimeoutCapturingTransport::class);
+        config()->set('zapmizer.http.timeout', 99);
+
+        $partner = (new AutowiredPartnerClient('id', 'secret'))->transport();
+        $instance = (new class ('tok') extends InstanceClient {
+            public function transport(): Transport
+            {
+                return $this->transport;
+            }
+        })->transport();
+
+        foreach ([$partner, $instance] as $transport) {
+            $this->assertInstanceOf(TimeoutCapturingTransport::class, $transport);
+            $this->assertSame(99.0, $transport->timeout);
+        }
+    }
+
+    public function testAnInvalidTransportConfigFailsInTheClientConstructor()
+    {
+        config()->set('zapmizer.http.transport', 'guzzle');
+
+        foreach ([fn () => new PartnerClient(), fn () => new InstanceClient('tok')] as $build) {
+            try {
+                $build();
+                $this->fail('expected InvalidArgumentException');
+            } catch (InvalidArgumentException $exception) {
+                $this->assertStringContainsString('zapmizer.http.transport', $exception->getMessage());
+            }
+        }
+    }
+
+    public function testWithoutTheProviderTheClientsFailToResolveTheTransport()
+    {
+        $app = Container::getInstance();
+        Container::setInstance(new Container());
+
+        try {
+            try {
+                new PartnerClient();
+                $this->fail('expected BindingResolutionException from PartnerClient');
+            } catch (BindingResolutionException) {
+                $this->addToAssertionCount(1);
+            }
+
+            try {
+                new InstanceClient('tok');
+                $this->fail('expected BindingResolutionException from InstanceClient');
+            } catch (BindingResolutionException) {
+                $this->addToAssertionCount(1);
+            }
+        } finally {
+            Container::setInstance($app);
+        }
     }
 }

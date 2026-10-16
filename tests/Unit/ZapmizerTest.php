@@ -2,22 +2,21 @@
 
 namespace NotificationChannels\Zapmizer\Test\Unit;
 
-use GuzzleHttp\Client as HttpClient;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
-use GuzzleHttp\HandlerStack;
-use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Exception\MalformedUriException;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Support\Facades\Route;
-use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
+use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
+use NotificationChannels\Zapmizer\Connect\ZapmizerApi;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
 use NotificationChannels\Zapmizer\Test\Concerns\AssertsContract;
+use NotificationChannels\Zapmizer\Test\Concerns\FakesZapmizerHttp;
 use NotificationChannels\Zapmizer\Test\Fixtures\RecordingTransport;
 use NotificationChannels\Zapmizer\Test\TestCase;
 use NotificationChannels\Zapmizer\Zapmizer;
@@ -26,21 +25,16 @@ use PHPUnit\Framework\Attributes\DataProvider;
 class ZapmizerTest extends TestCase
 {
     use AssertsContract;
+    use FakesZapmizerHttp;
 
     /** @var array<int, array{request: Request, options: array}> */
     protected array $history = [];
 
-    protected function guzzle(array $queue): HttpClient
-    {
-        $stack = HandlerStack::create(new MockHandler($queue));
-        $stack->push(Middleware::history($this->history));
-
-        return new HttpClient(['handler' => $stack]);
-    }
-
     protected function makeClient(Response ...$responses): Zapmizer
     {
-        return new Zapmizer('bot-token', new GuzzleTransport($this->guzzle($responses)), 'http://localhost/api', '2025-06-27');
+        $this->fakeZapmizer(new MockHandler($responses));
+
+        return new Zapmizer('bot-token', new LaravelHttpTransport(), 'http://localhost/api', '2025-06-27');
     }
 
     protected function params(): array
@@ -204,8 +198,8 @@ class ZapmizerTest extends TestCase
     public function testM23ServerErrorAndNetworkFailureAreUnavailable()
     {
         $network = new ConnectException('timed out', new Request('POST', 'http://localhost/api/messages'));
-        $client = $this->makeClient(new Response(503, [], ''));
-        $offline = new Zapmizer('bot-token', new GuzzleTransport($this->guzzle([$network])), 'http://localhost/api');
+        $this->fakeZapmizer(new MockHandler([new Response(503, [], ''), $network]));
+        $client = new Zapmizer('bot-token', new LaravelHttpTransport(), 'http://localhost/api');
 
         try {
             $client->sendMessage($this->params());
@@ -215,10 +209,10 @@ class ZapmizerTest extends TestCase
         }
 
         try {
-            $offline->sendMessage($this->params());
+            $client->sendMessage($this->params());
             $this->fail('Expected ZapmizerUnavailableException.');
         } catch (ZapmizerUnavailableException $exception) {
-            $this->assertSame($network, $exception->getPrevious());
+            $this->assertSame($network, $exception->getPrevious()->getPrevious());
         }
     }
 
@@ -264,7 +258,7 @@ class ZapmizerTest extends TestCase
         config()->set('zapmizer.http.timeout', 5);
         $this->assertMatchesContract('POST', '/messages', 200, '{"id": 1}');
         $this->assertMatchesContract('POST', '/messages', 200, '{"id": 2}');
-        $this->app->instance(HttpClient::class, $this->guzzle([
+        $this->fakeZapmizer(new MockHandler([
             new Response(200, ['Content-Type' => 'application/json'], '{"id": 1}'),
             new Response(200, ['Content-Type' => 'application/json'], '{"id": 2}'),
         ]));
@@ -275,15 +269,16 @@ class ZapmizerTest extends TestCase
         $this->assertCount(2, $this->history);
         $this->assertSame(2.0, $this->history[0]['options']['connect_timeout']);
         $this->assertSame(5.0, $this->history[0]['options']['timeout']);
-        $this->assertSame(Zapmizer::UPLOAD_CONNECT_TIMEOUT, $this->history[1]['options']['connect_timeout']);
-        $this->assertSame(Zapmizer::UPLOAD_TIMEOUT, $this->history[1]['options']['timeout']);
-        $this->assertSame(60, Zapmizer::UPLOAD_CONNECT_TIMEOUT);
-        $this->assertSame(600, Zapmizer::UPLOAD_TIMEOUT);
+        $this->assertSame(ZapmizerApi::TRANSFER_CONNECT_TIMEOUT, $this->history[1]['options']['connect_timeout']);
+        $this->assertSame(ZapmizerApi::TRANSFER_TIMEOUT, $this->history[1]['options']['timeout']);
+        $this->assertSame(60, ZapmizerApi::TRANSFER_CONNECT_TIMEOUT);
+        $this->assertSame(600, ZapmizerApi::TRANSFER_TIMEOUT);
     }
 
     public function testM46AMalformedBaseUriEscapesUnwrapped()
     {
-        $client = new Zapmizer('bot-token', new GuzzleTransport($this->guzzle([new Response(200)])), 'http://:80/api');
+        $this->fakeZapmizer(new MockHandler([new Response(200)]));
+        $client = new Zapmizer('bot-token', new LaravelHttpTransport(), 'http://:80/api');
 
         $this->expectException(MalformedUriException::class);
 
@@ -296,7 +291,7 @@ class ZapmizerTest extends TestCase
     {
         config()->set('zapmizer.api_token', 'bot-token');
         config()->set('zapmizer.base_uri', 'http://localhost/api/');
-        $this->app->instance(HttpClient::class, $this->guzzle([new Response(503, [], '')]));
+        $this->fakeZapmizer(new MockHandler([new Response(503, [], '')]));
         $this->app->make(ExceptionHandler::class)->renderable(fn (ZapmizerUnavailableException $exception) => response('the app decides', 502));
         Route::get('app-sends', function () {
             app(Zapmizer::class)->sendMessage(['type' => 'chat', 'from' => '5581999990000', 'to' => '5511999999999']);

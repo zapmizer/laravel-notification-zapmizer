@@ -2,7 +2,7 @@
 
 namespace NotificationChannels\Zapmizer;
 
-use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
+use Illuminate\Container\Container;
 use NotificationChannels\Zapmizer\Connect\ZapmizerApi;
 use NotificationChannels\Zapmizer\Contracts\Transport;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
@@ -15,10 +15,6 @@ use Psr\Http\Message\ResponseInterface;
  */
 class Zapmizer
 {
-    public const UPLOAD_CONNECT_TIMEOUT = 60;
-
-    public const UPLOAD_TIMEOUT = 600;
-
     protected Transport $transport;
 
     /** @var null|string Zapmizer Bot API Token. */
@@ -30,7 +26,7 @@ class Zapmizer
     public function __construct(?string $token = null, ?Transport $transport = null, ?string $apiBaseUri = null, protected ?string $apiVersion = null)
     {
         $this->token = $token;
-        $this->transport = $transport ?? new GuzzleTransport();
+        $this->transport = $transport ?? Container::getInstance()->make(Transport::class);
         $this->setApiBaseUri($apiBaseUri ?? 'https://app.zapmizer.com/api/');
     }
 
@@ -129,8 +125,8 @@ class Zapmizer
 
         return $this->post([
             'multipart' => $multipart,
-            'connect_timeout' => self::UPLOAD_CONNECT_TIMEOUT,
-            'timeout' => self::UPLOAD_TIMEOUT,
+            'connect_timeout' => ZapmizerApi::TRANSFER_CONNECT_TIMEOUT,
+            'timeout' => ZapmizerApi::TRANSFER_TIMEOUT,
         ]);
     }
 

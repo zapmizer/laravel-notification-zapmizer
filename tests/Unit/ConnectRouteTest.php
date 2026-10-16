@@ -2,10 +2,7 @@
 
 namespace NotificationChannels\Zapmizer\Test\Unit;
 
-use GuzzleHttp\Client as HttpClient;
 use GuzzleHttp\Handler\MockHandler;
-use GuzzleHttp\HandlerStack;
-use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Http\Request;
@@ -26,6 +23,7 @@ use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesNothing;
 use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesPlainModel;
 use NotificationChannels\Zapmizer\Test\Fixtures\Team;
 use NotificationChannels\Zapmizer\Test\Fixtures\User;
+use NotificationChannels\Zapmizer\Test\Concerns\FakesZapmizerHttp;
 use NotificationChannels\Zapmizer\Test\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 
@@ -33,6 +31,7 @@ class ConnectRouteTest extends TestCase
 {
     use AssertsContract;
     use CreatesConnectionTables;
+    use FakesZapmizerHttp;
 
     /** @var array<int, array{request: \GuzzleHttp\Psr7\Request}> */
     protected array $history = [];
@@ -52,10 +51,7 @@ class ConnectRouteTest extends TestCase
 
     protected function fakeHttp(Response ...$responses): void
     {
-        $stack = HandlerStack::create(new MockHandler($responses));
-        $stack->push(Middleware::history($this->history));
-
-        $this->instance(HttpClient::class, new HttpClient(['handler' => $stack]));
+        $this->fakeZapmizer(new MockHandler($responses));
     }
 
     protected function actingAsUser(): User

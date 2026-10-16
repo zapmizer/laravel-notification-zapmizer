@@ -2,9 +2,9 @@
 
 namespace NotificationChannels\Zapmizer\Connect;
 
+use Illuminate\Container\Container;
 use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
-use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
 use NotificationChannels\Zapmizer\Contracts\Transport;
 use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
@@ -40,7 +40,7 @@ class PartnerClient
         ?Transport $transport = null,
         ?string $apiBaseUri = null,
     ) {
-        $this->transport = $transport ?? new GuzzleTransport();
+        $this->transport = $transport ?? Container::getInstance()->make(Transport::class);
         $this->apiBaseUri = rtrim($apiBaseUri ?? 'https://app.zapmizer.com/api/', '/');
     }
 

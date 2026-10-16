@@ -3,6 +3,7 @@
 namespace NotificationChannels\Zapmizer\Connect\Transports;
 
 use GuzzleHttp\Exception\GuzzleException;
+use GuzzleHttp\Exception\InvalidArgumentException;
 use Illuminate\Http\Client\HttpClientException;
 use Illuminate\Support\Facades\Http;
 use NotificationChannels\Zapmizer\Contracts\Transport;
@@ -12,8 +13,6 @@ use RuntimeException;
 
 class LaravelHttpTransport implements Transport
 {
-    use AppliesDefaultTimeouts;
-
     public function __construct(protected ?float $connectTimeout = null, protected ?float $timeout = null)
     {
     }
@@ -28,8 +27,22 @@ class LaravelHttpTransport implements Transport
 
         try {
             return $factory->send($method, $url, $this->prepareOptions($options))->toPsrResponse();
+        } catch (InvalidArgumentException $exception) {
+            throw $exception;
         } catch (HttpClientException|GuzzleException $exception) {
             throw ZapmizerUnavailableException::dueTo($exception);
         }
+    }
+
+    protected function prepareOptions(array $options): array
+    {
+        return array_replace(
+            array_filter(
+                ['connect_timeout' => $this->connectTimeout, 'timeout' => $this->timeout],
+                fn ($value) => $value !== null,
+            ),
+            $options,
+            ['http_errors' => false, 'allow_redirects' => false],
+        );
     }
 }

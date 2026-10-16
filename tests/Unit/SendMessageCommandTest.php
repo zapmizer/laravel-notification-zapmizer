@@ -4,7 +4,6 @@ namespace NotificationChannels\Zapmizer\Test\Unit;
 
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
-use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
 use NotificationChannels\Zapmizer\Test\TestCase;
 
 class SendMessageCommandTest extends TestCase
@@ -13,7 +12,6 @@ class SendMessageCommandTest extends TestCase
     {
         $app['config']->set('zapmizer.base_uri', 'http://zap.test/api/');
         $app['config']->set('zapmizer.api_token', 'bot-token');
-        $app['config']->set('zapmizer.http.transport', LaravelHttpTransport::class);
     }
 
     public function testCommandSendsTheMessage()

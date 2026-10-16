@@ -15,7 +15,7 @@ class ZapmizerChannel
      * Send the given notification.
      *
      *
-     * @throws \Notification\Zapmizer\Exceptions\CouldNotSendNotification
+     * @throws \NotificationChannels\Zapmizer\Exceptions\ZapmizerException
      */
     public function send(mixed $notifiable, Notification $notification): ?array
     {

@@ -10,7 +10,7 @@ composer require zapmizer/laravel-notification-zapmizer
 
 Now publish config file
 ```bash
-php artisan vendor:publish --provider="Notification\Zapmizer\ZapmizerServiceProvider" --tag=config --force
+php artisan vendor:publish --provider="NotificationChannels\Zapmizer\ZapmizerServiceProvider" --tag=config --force
 ```
 
 
@@ -32,3 +32,4 @@ The guides live in [docs/](docs/README.md):
 - [Number verification](docs/verify-number.md)
 - [Connecting a number per team (multi-tenant)](docs/connect.md): requires Zapmizer 1.149.0 or later; receiving media requires 1.150.0 or later
 - [HTTP transport, timeouts and tests](docs/transporte.md)
+- [Errors](docs/erros.md)

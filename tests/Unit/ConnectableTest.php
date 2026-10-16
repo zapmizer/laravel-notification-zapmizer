@@ -2,10 +2,7 @@
 
 namespace NotificationChannels\Zapmizer\Test\Unit;
 
-use GuzzleHttp\Client as HttpClient;
 use GuzzleHttp\Handler\MockHandler;
-use GuzzleHttp\HandlerStack;
-use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Support\Facades\DB;
 use NotificationChannels\Zapmizer\Connect\MediaDownload;
@@ -39,12 +36,7 @@ class ConnectableTest extends TestCase
 
     protected function fakeHttp(Response ...$responses): void
     {
-        $mock = new MockHandler($responses);
-        $stack = HandlerStack::create($mock);
-        $stack->push(Middleware::history($this->history));
-
-        $this->instance(HttpClient::class, new HttpClient(['handler' => $stack]));
-        $this->fakeZapmizer($mock);
+        $this->fakeZapmizer(new MockHandler($responses));
     }
 
     public function testMigrationCreatesTableWithUniqueConnectable()
@@ -257,8 +249,14 @@ class ConnectableTest extends TestCase
         $connection = $this->connectedTeam(overrides: ['api_token' => null])->zapmizerConnection;
 
         // Never the single-tenant token in a connection's name.
-        $this->expectException(ZapmizerUnauthorizedException::class);
-        $connection->instanceClient();
+        try {
+            $connection->instanceClient();
+            $this->fail('expected a ZapmizerUnauthorizedException');
+        } catch (ZapmizerUnauthorizedException $exception) {
+            $this->assertSame(401, $exception->status());
+            $this->assertSame('There is no Zapmizer token for this connection.', $exception->getMessage());
+            $this->assertSame('There is no Zapmizer token for this connection.', $exception->reason());
+        }
     }
 
     public function testDeleteRemoteWebhook()
@@ -338,8 +336,13 @@ class ConnectableTest extends TestCase
     {
         $connection = $this->connectedTeam(overrides: ['bot_instance_id' => null])->zapmizerConnection;
 
-        $this->expectException(ZapmizerUnauthorizedException::class);
-        $connection->media($this->inboundMessage());
+        try {
+            $connection->media($this->inboundMessage());
+            $this->fail('expected a ZapmizerConnectException');
+        } catch (ZapmizerConnectException $exception) {
+            $this->assertNotInstanceOf(ZapmizerUnauthorizedException::class, $exception);
+            $this->assertSame('There is no paired Zapmizer instance for this connection.', $exception->getMessage());
+        }
     }
 
     public function testAwaitMediaRetriesWhileDownloading()

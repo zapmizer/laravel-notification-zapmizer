@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\Facade;
 use Illuminate\Support\Facades\Http;
 use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
 use NotificationChannels\Zapmizer\Test\Concerns\FakesZapmizerHttp;
 use NotificationChannels\Zapmizer\Test\TestCase;
@@ -145,6 +146,7 @@ class LaravelHttpTransportTest extends TestCase
             $this->assertInstanceOf(\GuzzleHttp\Exception\InvalidArgumentException::class, $e);
             $this->assertInstanceOf(\InvalidArgumentException::class, $e);
             $this->assertNotInstanceOf(ZapmizerConnectException::class, $e);
+            $this->assertNotInstanceOf(ZapmizerException::class, $e);
         }
     }
 

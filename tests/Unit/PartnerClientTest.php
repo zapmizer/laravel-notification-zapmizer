@@ -17,6 +17,7 @@ use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
 use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
 use NotificationChannels\Zapmizer\Test\Concerns\AssertsContract;
@@ -50,6 +51,7 @@ class PartnerClientTest extends TestCase
         } catch (\GuzzleHttp\Exception\InvalidArgumentException $e) {
             $this->assertInstanceOf(\GuzzleHttp\Exception\InvalidArgumentException::class, $e);
             $this->assertNotInstanceOf(ZapmizerConnectException::class, $e);
+            $this->assertNotInstanceOf(ZapmizerException::class, $e);
         }
 
         $this->assertCount(0, $this->history);

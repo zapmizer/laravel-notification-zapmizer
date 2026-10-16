@@ -8,9 +8,12 @@ use GuzzleHttp\Psr7\Exception\MalformedUriException;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Contracts\Debug\ExceptionHandler;
+use Illuminate\Http\Client\Request as HttpRequest;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Route;
 use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
 use NotificationChannels\Zapmizer\Connect\ZapmizerApi;
+use NotificationChannels\Zapmizer\Exceptions\ErrorCode;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
@@ -20,6 +23,7 @@ use NotificationChannels\Zapmizer\Test\Concerns\FakesZapmizerHttp;
 use NotificationChannels\Zapmizer\Test\Fixtures\RecordingTransport;
 use NotificationChannels\Zapmizer\Test\TestCase;
 use NotificationChannels\Zapmizer\Zapmizer;
+use NotificationChannels\Zapmizer\ZapmizerMessage;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 class ZapmizerTest extends TestCase
@@ -86,6 +90,7 @@ class ZapmizerTest extends TestCase
         $this->assertSame('hi', $fields['metadata']['text']);
 
         $multipart = $this->history[1]['request'];
+        $this->assertEquals('http://localhost/api/messages', (string) $multipart->getUri());
         $this->assertStringStartsWith('multipart/form-data', $multipart->getHeaderLine('Content-Type'));
         $body = (string) $multipart->getBody();
         $this->assertStringContainsString('name="uploaded_media"; filename="ZapmizerTest.php"', $body);
@@ -100,9 +105,48 @@ class ZapmizerTest extends TestCase
 
         $client->sendMessageWithFile(['type' => 'image', 'text' => 'caption', 'metadata' => ['text' => 'hi']], __FILE__);
 
+        $this->assertStringStartsWith('multipart/form-data', $this->history[0]['request']->getHeaderLine('Content-Type'));
         $body = (string) $this->history[0]['request']->getBody();
         $this->assertStringContainsString('name="metadata[text]"', $body);
         $this->assertStringContainsString('name="text"', $body);
+    }
+
+    public function testAnEmptyFakeIsNotAnApiAnswer()
+    {
+        Http::fake();
+
+        $this->expectException(ZapmizerConnectException::class);
+        $this->expectExceptionMessage('response body is not valid JSON');
+
+        app(Zapmizer::class, ['api_token' => 'bot-token'])->sendMessage(['type' => 'chat', 'to' => '5511999999999']);
+    }
+
+    public function testAZapmizerMessageSendsThroughTheHttpFake()
+    {
+        config()->set('zapmizer.api_token', 'team-token');
+        config()->set('zapmizer.base_uri', 'https://zapmizer.test/api/');
+        Http::fake(['zapmizer.test/*' => Http::response(['id' => 1], 200)]);
+
+        ZapmizerMessage::create(from: '5581911110000', to: '5511999999999')->text('Hello')->send();
+
+        Http::assertSent(fn (HttpRequest $request) => $request->url() === 'https://zapmizer.test/api/messages'
+            && $request['to'] === '5511999999999'
+            && $request['metadata']['text'] === 'Hello');
+    }
+
+    public function testARefusedZapmizerMessageThrowsTheApiException()
+    {
+        config()->set('zapmizer.api_token', 'team-token');
+        config()->set('zapmizer.base_uri', 'https://zapmizer.test/api/');
+        Http::fake(['zapmizer.test/*' => Http::response(['error' => 'window_closed', 'message' => 'The 24 h window is closed.'], 409)]);
+
+        try {
+            ZapmizerMessage::create(from: '5581911110000', to: '5511999999999')->text('Hello')->send();
+            $this->fail('Expected ZapmizerApiException.');
+        } catch (ZapmizerApiException $exception) {
+            $this->assertSame(409, $exception->status());
+            $this->assertSame(ErrorCode::WINDOW_CLOSED, $exception->error());
+        }
     }
 
     /**

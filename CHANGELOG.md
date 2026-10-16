@@ -22,7 +22,7 @@
 
 **Com o `Http` do Laravel como padrão:**
 
-- `Http::fake()`, `Http::preventStrayRequests()`, os listeners de `RequestSending`/`ResponseReceived` e o Telescope passam a ver as chamadas de parceiro, instância e envio. Um `Http::fake()` sem resposta para a URL da Zapmizer responde 200 vazio: as chamadas que esperam JSON (`createSession`, `exchangeCode`, `connection`, `createWebhook`, `rotateWebhookSecret`) falham com `unexpectedResponse`, mas `deleteWebhook()` passa em silêncio e `media()` devolve um download anexado vazio (`size === 0`).
+- `Http::fake()`, `Http::preventStrayRequests()`, os listeners de `RequestSending`/`ResponseReceived` e o Telescope passam a ver as chamadas de parceiro, instância e envio. Um `Http::fake()` sem resposta para a URL da Zapmizer responde 200 vazio: as chamadas que esperam JSON (`createSession`, `exchangeCode`, `subscription`, `checkout`, `connection`, `createWebhook`, `rotateWebhookSecret`) falham com `unexpectedResponse`, mas `deleteWebhook()` passa em silêncio e `media()` devolve um download anexado vazio (`size === 0`).
 - Fake com `MockHandler` num `GuzzleHttp\Client` registrado no container deixa de pegar parceiro, instância e envio: use `Http::fake()`. Esse `GuzzleHttp\Client` passa a valer só para o `VerificationClient`.
 - Proxy sem `Http::globalOptions` (Laravel 8, 9 e 10 antes do 10.48) pede um transporte próprio (exemplo em `docs/transporte.md`).
 - O `GuzzleTransport` que existiu nas versões de desenvolvimento deste ciclo saiu.

@@ -58,7 +58,8 @@ Falha que não é resposta da Zapmizer mantém a própria classe e **não é uma
 - campo multipart inválido;
 - `Http::preventStrayRequests()` num teste;
 - exceção lançada pelo seu transporte próprio;
-- JSON com UTF-8 malformado no corpo (o `InvalidArgumentException` do Guzzle): é erro de quem chamou, não queda.
+- JSON com UTF-8 malformado no corpo (o `InvalidArgumentException` do Guzzle): é erro de quem chamou, não queda;
+- `external_id` ou `state` inválido em `createSession()`, `subscription()` ou `checkout()` (`InvalidArgumentException`, antes de chamar a API; as regras estão em [connect.md](connect.md)).
 
 ## Resposta HTTP
 

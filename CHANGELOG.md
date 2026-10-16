@@ -13,7 +13,6 @@
 - Um download de mídia cortado (erro de transporte, ou corpo menor que o `Content-Length` sem `Transfer-Encoding`) lança `ZapmizerUnavailableException` e não deixa arquivo. Antes lançava um `RuntimeException` cru, ou devolvia um `attached` truncado quando a conexão fechava limpa.
 - Com o diretório temporário sem escrita, uma resposta `200` de mídia lança `unexpectedResponse` (antes estourava `ErrorException`); os outros status seguem como antes.
 - Um header passado na chamada com o mesmo nome de `Accept`, `X-Partner-Key`, `Authorization` ou `api-version`, em qualquer caixa, é descartado; vale o valor fixo, em vez de concatenar.
-- Pasta `examples/` com código de app: teste com `Http::fake` via `LaravelHttpTransport`, um transporte próprio e um listener que guarda a mídia recebida num disk. Rodam na suíte do pacote.
 
 **Upgrade da 0.3:**
 

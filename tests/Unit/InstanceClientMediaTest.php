@@ -11,6 +11,7 @@ use Illuminate\Http\Client\Factory;
 use Illuminate\Support\Facades\Http;
 use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
+use NotificationChannels\Zapmizer\Contracts\Transport;
 use NotificationChannels\Zapmizer\Connect\ZapmizerApi;
 use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\MediaRejectedException;
@@ -20,6 +21,7 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
 use NotificationChannels\Zapmizer\Test\Concerns\FakesZapmizerHttp;
 use NotificationChannels\Zapmizer\Test\Fixtures\FailingWriteStream;
 use NotificationChannels\Zapmizer\Test\Fixtures\RecordingTransport;
+use NotificationChannels\Zapmizer\Test\Fixtures\SpyingInstanceClient;
 use NotificationChannels\Zapmizer\Test\TestCase;
 use PHPUnit\Framework\AssertionFailedError;
 use Psr\Http\Message\StreamInterface;
@@ -32,9 +34,16 @@ class InstanceClientMediaTest extends TestCase
 
     protected array $history = [];
 
+    protected array $spies = [];
+
+    protected function spyClient(Transport $transport): SpyingInstanceClient
+    {
+        return $this->spies[] = new SpyingInstanceClient('tok', $transport, 'http://zap.test/api');
+    }
+
     protected function instanceClient(?float $connectTimeout = null, ?float $timeout = null): InstanceClient
     {
-        return new InstanceClient('tok', new LaravelHttpTransport($connectTimeout, $timeout), 'http://zap.test/api');
+        return $this->spyClient(new LaravelHttpTransport($connectTimeout, $timeout));
     }
 
     protected function client(array $queue, ?float $connectTimeout = null, ?float $timeout = null): InstanceClient
@@ -44,9 +53,18 @@ class InstanceClientMediaTest extends TestCase
         return $this->instanceClient($connectTimeout, $timeout);
     }
 
-    protected function mediaFiles(): array
+    protected function createdPaths(): array
     {
-        return glob(sys_get_temp_dir() . '/zapmizer-media-*') ?: [];
+        return array_merge(...array_map(fn ($spy) => $spy->createdPaths, $this->spies)) ?: [];
+    }
+
+    protected function assertNoCreatedFileRemains(array $keep = []): void
+    {
+        foreach ($this->createdPaths() as $path) {
+            if (!in_array($path, $keep, true)) {
+                $this->assertFileDoesNotExist($path);
+            }
+        }
     }
 
     protected function caught(callable $call): ?Throwable
@@ -78,7 +96,6 @@ class InstanceClientMediaTest extends TestCase
 
     public function testC28AndC29EveryAnswerButTheAttachedLeavesNoFile()
     {
-        $before = $this->mediaFiles();
         $client = $this->client([
             new Response(200, ['Content-Type' => 'image/png'], 'bytes'),
             new Response(202, ['Content-Type' => 'application/json'], '{"media_state":"downloading"}'),
@@ -109,21 +126,20 @@ class InstanceClientMediaTest extends TestCase
         $this->assertInstanceOf(ZapmizerConnectException::class, $this->caught(fn () => $client->media(9, 'ABC', 1700000000)));
         $this->assertInstanceOf(ZapmizerUnavailableException::class, $this->caught(fn () => $client->media(9, 'ABC', 1700000000)));
 
-        $this->assertSame($before, $this->mediaFiles());
+        $this->assertNotEmpty($this->createdPaths());
+        $this->assertNoCreatedFileRemains();
     }
 
     public function testC30TransportFailureMidDownloadIsUnavailableWithoutFile()
     {
-        $before = $this->mediaFiles();
         $client = $this->client([new RequestException('cut', new Request('GET', 'http://zap.test'), new Response(200))]);
 
         $this->assertInstanceOf(ZapmizerUnavailableException::class, $this->caught(fn () => $client->media(9, 'ABC', 1700000000)));
-        $this->assertSame($before, $this->mediaFiles());
+        $this->assertNoCreatedFileRemains();
     }
 
     public function testAReadFailureMidCopyIsUnavailableWithoutFile()
     {
-        $before = $this->mediaFiles();
         $reads = 0;
         $body = new PumpStream(function () use (&$reads) {
             if ($reads++ === 0) {
@@ -134,11 +150,12 @@ class InstanceClientMediaTest extends TestCase
         });
         $transport = new RecordingTransport(new Response(200, [], $body));
 
-        $exception = $this->caught(fn () => (new InstanceClient('tok', $transport, 'http://zap.test/api'))->media(9, 'ABC', 1700000000));
+        $exception = $this->caught(fn () => $this->spyClient($transport)->media(9, 'ABC', 1700000000));
 
         $this->assertInstanceOf(ZapmizerUnavailableException::class, $exception);
         $this->assertSame('cut', $exception->getPrevious()->getMessage());
-        $this->assertSame($before, $this->mediaFiles());
+        $this->assertNotEmpty($this->createdPaths());
+        $this->assertNoCreatedFileRemains();
     }
 
     public function testAWriteFailureMidCopyIsUnavailableWithoutFile()
@@ -155,7 +172,10 @@ class InstanceClientMediaTest extends TestCase
             };
             $this->fakeZapmizer(new MockHandler([new Response(200, [], 'bytes')]));
 
-            $this->assertInstanceOf(ZapmizerUnavailableException::class, $this->caught(fn () => $client->media(9, 'ABC', 1700000000)));
+            $exception = $this->caught(fn () => $client->media(9, 'ABC', 1700000000));
+
+            $this->assertInstanceOf(ZapmizerUnavailableException::class, $exception);
+            $this->assertInstanceOf(RuntimeException::class, $exception->getPrevious());
             $this->assertSame(['zapmizerfull://media'], FailingWriteStream::$unlinked);
         } finally {
             stream_wrapper_unregister('zapmizerfull');
@@ -188,7 +208,6 @@ class InstanceClientMediaTest extends TestCase
 
     public function testC30BodyShorterThanContentLengthIsUnavailable()
     {
-        $before = $this->mediaFiles();
         $client = $this->client([
             new Response(200, ['Content-Length' => '100'], '0123456789'),
             new Response(200, ['Content-Length' => '100'], ''),
@@ -196,7 +215,8 @@ class InstanceClientMediaTest extends TestCase
 
         $this->assertInstanceOf(ZapmizerUnavailableException::class, $this->caught(fn () => $client->media(9, 'ABC', 1700000000)));
         $this->assertInstanceOf(ZapmizerUnavailableException::class, $this->caught(fn () => $client->media(9, 'ABC', 1700000000)));
-        $this->assertSame($before, $this->mediaFiles());
+        $this->assertNotEmpty($this->createdPaths());
+        $this->assertNoCreatedFileRemains();
     }
 
     public function testChunkedResponseIgnoresContentLength()
@@ -246,42 +266,39 @@ class InstanceClientMediaTest extends TestCase
         });
         $transport = new RecordingTransport(new Response(200, [], $body));
 
-        $download = (new InstanceClient('tok', $transport, 'http://zap.test/api'))->media(9, 'ABC', 1700000000);
+        $download = $this->spyClient($transport)->media(9, 'ABC', 1700000000);
 
         $this->assertSame('abc', stream_get_contents($download->stream()));
     }
 
     public function testC27BytesLostByTheTransportAreUnexpected()
     {
-        $before = $this->mediaFiles();
         $transport = new RecordingTransport(new Response(200, ['Content-Length' => '5'], new PumpStream(fn () => false)));
 
-        $exception = $this->caught(fn () => (new InstanceClient('tok', $transport, 'http://zap.test/api'))->media(9, 'ABC', 1700000000));
+        $exception = $this->caught(fn () => $this->spyClient($transport)->media(9, 'ABC', 1700000000));
 
         $this->assertInstanceOf(ZapmizerConnectException::class, $exception);
         $this->assertNotInstanceOf(ZapmizerUnavailableException::class, $exception, 'lost bytes are not a cut body');
         $this->assertStringContainsString('lost', $exception->getMessage());
-        $this->assertSame($before, $this->mediaFiles());
+        $this->assertNoCreatedFileRemains();
     }
 
     public function testDetachedBodyIsLostNotARawStreamError()
     {
-        $before = $this->mediaFiles();
         $response = new Response(200, ['Content-Length' => '5'], 'bytes');
         $response->getBody()->close();
         $transport = new RecordingTransport($response);
 
-        $exception = $this->caught(fn () => (new InstanceClient('tok', $transport, 'http://zap.test/api'))->media(9, 'ABC', 1700000000));
+        $exception = $this->caught(fn () => $this->spyClient($transport)->media(9, 'ABC', 1700000000));
 
         $this->assertInstanceOf(ZapmizerConnectException::class, $exception);
         $this->assertNotInstanceOf(ZapmizerUnavailableException::class, $exception, 'a detached body is not a cut body');
         $this->assertStringContainsString('lost', $exception->getMessage());
-        $this->assertSame($before, $this->mediaFiles());
+        $this->assertNoCreatedFileRemains();
     }
 
     public function testC31RepeatedDownloadingLeavesOnlyTheFinalFile()
     {
-        $before = $this->mediaFiles();
         $client = $this->client([
             new Response(202, ['Content-Type' => 'application/json'], '{"media_state":"downloading"}'),
             new Response(202, ['Content-Type' => 'application/json'], '{"media_state":"downloading"}'),
@@ -292,7 +309,10 @@ class InstanceClientMediaTest extends TestCase
         $client->media(9, 'ABC', 1700000000);
         $download = $client->media(9, 'ABC', 1700000000);
 
-        $this->assertSame([$download->path()], array_values(array_diff($this->mediaFiles(), $before)));
+        $this->assertCount(1, $this->createdPaths());
+        $this->assertFileExists($download->path());
+        $this->assertContains($download->path(), $this->createdPaths());
+        $this->assertNoCreatedFileRemains([$download->path()]);
         $this->assertSame('bytes', stream_get_contents($download->stream()));
     }
 
@@ -361,13 +381,12 @@ class InstanceClientMediaTest extends TestCase
 
         Http::preventStrayRequests();
         Http::fake(['other.test/*' => Http::response('{}')]);
-        $before = $this->mediaFiles();
 
         $caught = $this->caught(fn () => $this->instanceClient()->media(9, 'A', 1700000000));
 
         $this->assertInstanceOf(RuntimeException::class, $caught);
         $this->assertNotInstanceOf(AssertionFailedError::class, $caught);
-        $this->assertSame($before, $this->mediaFiles());
+        $this->assertNoCreatedFileRemains();
     }
 
     public function testABodyOverTwoMegabytesIsCopiedWhole()

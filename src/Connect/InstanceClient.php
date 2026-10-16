@@ -237,6 +237,9 @@ class InstanceClient
         throw ZapmizerConnectException::unexpectedResponse("HTTP {$status} on the media endpoint");
     }
 
+    /**
+     * @throws ZapmizerConnectException
+     */
     protected function spool(StreamInterface $body): string
     {
         if (!$body->isReadable()) {
@@ -285,7 +288,7 @@ class InstanceClient
     protected function storedSize(ResponseInterface $response, string $path): int
     {
         clearstatcache(true, $path);
-        $size = (int) filesize($path);
+        $size = (int) @filesize($path);
         $expected = $response->hasHeader('Content-Length') && !$response->hasHeader('Transfer-Encoding')
             ? (int) $response->getHeaderLine('Content-Length')
             : null;

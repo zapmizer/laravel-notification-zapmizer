@@ -14,6 +14,7 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Facade;
 use Illuminate\Support\Facades\Http;
 use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
 use NotificationChannels\Zapmizer\Test\Concerns\FakesZapmizerHttp;
 use NotificationChannels\Zapmizer\Test\TestCase;
@@ -133,13 +134,18 @@ class LaravelHttpTransportTest extends TestCase
         (new LaravelHttpTransport())->send('GET', 'http://zap.test/api/x');
     }
 
-    public function testC22UnencodableJsonBecomesUnavailable()
+    public function testC22UnencodableJsonIsTheCallersError()
     {
         Http::fake(['zap.test/*' => Http::response('{}', 200)]);
 
-        $this->expectException(ZapmizerUnavailableException::class);
-
-        (new LaravelHttpTransport())->send('POST', 'http://zap.test/api/x', ['json' => ['a' => "\xB1"]]);
+        try {
+            (new LaravelHttpTransport())->send('POST', 'http://zap.test/api/x', ['json' => ['a' => "\xB1"]]);
+            $this->fail('Expected an InvalidArgumentException.');
+        } catch (Throwable $e) {
+            $this->assertInstanceOf(\GuzzleHttp\Exception\InvalidArgumentException::class, $e);
+            $this->assertInstanceOf(\InvalidArgumentException::class, $e);
+            $this->assertNotInstanceOf(ZapmizerConnectException::class, $e);
+        }
     }
 
     public function testF3FakeAppliedAfterConstructionStillApplies()

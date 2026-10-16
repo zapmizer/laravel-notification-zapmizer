@@ -33,6 +33,21 @@ class PartnerClientTest extends TestCase
         return new PartnerClient('partner-id', 'partner-secret', new LaravelHttpTransport(), 'http://localhost/api');
     }
 
+    public function testMalformedUtf8InTheBodyIsTheCallersError()
+    {
+        $client = $this->makeClient(new MockHandler([new Response(201, [], '{"url":"http://localhost/connect/1"}')]));
+
+        try {
+            $client->createSession('https://app.test/cb', 'state-1', "https://app.test/hook-\xB1");
+            $this->fail('Expected an InvalidArgumentException.');
+        } catch (\Throwable $e) {
+            $this->assertInstanceOf(\GuzzleHttp\Exception\InvalidArgumentException::class, $e);
+            $this->assertNotInstanceOf(ZapmizerConnectException::class, $e);
+        }
+
+        $this->assertCount(0, $this->history);
+    }
+
     public function testCreateSessionSendsPartnerKeyAndReturnsPopupUrl()
     {
         $client = $this->makeClient(new MockHandler([

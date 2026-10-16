@@ -3,6 +3,7 @@
 namespace NotificationChannels\Zapmizer\Connect\Transports;
 
 use GuzzleHttp\Exception\GuzzleException;
+use GuzzleHttp\Exception\InvalidArgumentException;
 use Illuminate\Http\Client\HttpClientException;
 use Illuminate\Support\Facades\Http;
 use NotificationChannels\Zapmizer\Contracts\Transport;
@@ -26,6 +27,8 @@ class LaravelHttpTransport implements Transport
 
         try {
             return $factory->send($method, $url, $this->prepareOptions($options))->toPsrResponse();
+        } catch (InvalidArgumentException $exception) {
+            throw $exception;
         } catch (HttpClientException|GuzzleException $exception) {
             throw ZapmizerUnavailableException::dueTo($exception);
         }

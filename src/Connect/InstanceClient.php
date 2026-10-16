@@ -2,8 +2,8 @@
 
 namespace NotificationChannels\Zapmizer\Connect;
 
-use GuzzleHttp\Client as HttpClient;
-use GuzzleHttp\Exception\GuzzleException;
+use Illuminate\Container\Container;
+use NotificationChannels\Zapmizer\Contracts\Transport;
 use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
@@ -11,6 +11,8 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
 use NotificationChannels\Zapmizer\Support\JsonResponse;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamInterface;
+use RuntimeException;
+use Throwable;
 
 /**
  * Class InstanceClient.
@@ -24,17 +26,17 @@ use Psr\Http\Message\StreamInterface;
  */
 class InstanceClient
 {
-    protected HttpClient $http;
+    protected Transport $transport;
 
     protected string $apiBaseUri;
 
     public function __construct(
         protected string $token,
-        ?HttpClient $httpClient = null,
+        ?Transport $transport = null,
         ?string $apiBaseUri = null,
         protected ?string $apiVersion = null,
     ) {
-        $this->http = $httpClient ?? new HttpClient();
+        $this->transport = $transport ?? Container::getInstance()->make(Transport::class);
         $this->apiBaseUri = rtrim($apiBaseUri ?? 'https://app.zapmizer.com/api/', '/');
     }
 
@@ -126,8 +128,9 @@ class InstanceClient
      * `downloading` (ask again later — see `ZapmizerConnection::awaitMedia()`)
      * or `unavailable` (it will never come: outside the 600 s window from
      * `$timestamp`, a type Zapmizer does not download, a view-once message).
-     * On `attached` the bytes are streamed into a temporary file owned by the
-     * returned object — never held in memory as a string.
+     * On `attached` the bytes are copied into a temporary file owned by the
+     * returned object; on the way the transport keeps them in `php://temp`
+     * (memory up to 2 MB, disk beyond).
      *
      * A 200 here is binary by design, so the JSON guard the other endpoints
      * run through is skipped for it; 202 and 404 are JSON with `media_state`.
@@ -151,50 +154,11 @@ class InstanceClient
                 'message_id' => $messageId,
                 'timestamp' => $timestamp,
             ],
-            'stream' => true,
+            'connect_timeout' => ZapmizerApi::TRANSFER_CONNECT_TIMEOUT,
+            'timeout' => ZapmizerApi::TRANSFER_TIMEOUT,
         ], expectsJson: false);
 
-        $this->guardUnauthorized($response);
-
-        $status = $response->getStatusCode();
-
-        if ($status === 422) {
-            throw ZapmizerConnectException::mediaRejected($this->reasonFrom($response));
-        }
-
-        if ($status === 429) {
-            throw ZapmizerConnectException::mediaRateLimited(
-                $response->hasHeader('Retry-After') ? (int) $response->getHeaderLine('Retry-After') : null,
-            );
-        }
-
-        if ($status === 200) {
-            return MediaDownload::attached(
-                path: $this->spool($response->getBody()),
-                mimeType: $response->hasHeader('Content-Type') ? $response->getHeaderLine('Content-Type') : null,
-                filename: $this->filenameFrom($response->getHeaderLine('Content-Disposition')),
-                size: $response->hasHeader('Content-Length') ? (int) $response->getHeaderLine('Content-Length') : null,
-            );
-        }
-
-        if ($status === 202 || $status === 404) {
-            if (($problem = JsonResponse::problem($response)) !== null) {
-                throw ZapmizerConnectException::unexpectedResponse($problem);
-            }
-
-            return match ($this->decode($response)['media_state'] ?? null) {
-                MediaDownload::DOWNLOADING => MediaDownload::downloading(),
-                MediaDownload::UNAVAILABLE => MediaDownload::unavailable(),
-                // A 404 without `media_state`: the instance is not this team's.
-                default => $status === 404
-                    ? MediaDownload::unavailable()
-                    : throw ZapmizerConnectException::unexpectedResponse('media response carries no known `media_state`'),
-            };
-        }
-
-        $this->guardFailure($response);
-
-        throw ZapmizerConnectException::unexpectedResponse("HTTP {$status} on the media endpoint");
+        return $this->mediaFrom($response);
     }
 
     /**
@@ -219,30 +183,127 @@ class InstanceClient
             ?: trim($body);
     }
 
+    protected function temporaryMediaPath(): ?string
+    {
+        $path = @tempnam(sys_get_temp_dir(), 'zapmizer-media-');
+
+        return $path === false ? null : $path;
+    }
+
+    protected function mediaFrom(ResponseInterface $response): MediaDownload
+    {
+        $this->guardUnauthorized($response);
+
+        $status = $response->getStatusCode();
+
+        if ($status === 422) {
+            throw ZapmizerConnectException::mediaRejected($this->reasonFrom($response));
+        }
+
+        if ($status === 429) {
+            throw ZapmizerConnectException::mediaRateLimited(
+                $response->hasHeader('Retry-After') ? (int) $response->getHeaderLine('Retry-After') : null,
+            );
+        }
+
+        if ($status === 200) {
+            $path = $this->spool($response->getBody());
+            $size = $this->storedSize($response, $path);
+
+            return MediaDownload::attached(
+                path: $path,
+                mimeType: $response->hasHeader('Content-Type') ? $response->getHeaderLine('Content-Type') : null,
+                filename: $this->filenameFrom($response->getHeaderLine('Content-Disposition')),
+                size: $size,
+            );
+        }
+
+        if ($status === 202 || $status === 404) {
+            if (($problem = JsonResponse::problem($response)) !== null) {
+                throw ZapmizerConnectException::unexpectedResponse($problem);
+            }
+
+            return match ($this->decode($response)['media_state'] ?? null) {
+                MediaDownload::DOWNLOADING => MediaDownload::downloading(),
+                MediaDownload::UNAVAILABLE => MediaDownload::unavailable(),
+                default => $status === 404
+                    ? MediaDownload::unavailable()
+                    : throw ZapmizerConnectException::unexpectedResponse('media response carries no known `media_state`'),
+            };
+        }
+
+        $this->guardFailure($response);
+
+        throw ZapmizerConnectException::unexpectedResponse("HTTP {$status} on the media endpoint");
+    }
+
     /**
-     * Copy the response body into a temporary file, chunk by chunk.
-     *
      * @throws ZapmizerConnectException
      */
     protected function spool(StreamInterface $body): string
     {
-        $path = tempnam(sys_get_temp_dir(), 'zapmizer-media-');
-        $file = $path !== false ? fopen($path, 'wb') : false;
+        if (!$body->isReadable()) {
+            throw ZapmizerConnectException::unexpectedResponse('the media body was lost before it could be stored');
+        }
 
-        if ($path === false || $file === false) {
-            throw ZapmizerConnectException::unexpectedResponse('could not create a temporary file for the media');
+        $path = $this->temporaryMediaPath();
+        $target = $path === null ? false : @fopen($path, 'wb');
+
+        if ($target === false) {
+            if ($path !== null) {
+                @unlink($path);
+            }
+
+            throw ZapmizerUnavailableException::dueTo();
         }
 
         try {
-            while (!$body->eof()) {
-                fwrite($file, $body->read(65536));
+            if ($body->isSeekable()) {
+                $body->rewind();
             }
-        } finally {
-            fclose($file);
-            $body->close();
+
+            while (!$body->eof()) {
+                $chunk = $body->read(65536);
+
+                if ($chunk === '') {
+                    break;
+                }
+
+                if (@fwrite($target, $chunk) !== strlen($chunk)) {
+                    throw new RuntimeException('Could not write the media to the temporary file.');
+                }
+            }
+        } catch (Throwable $exception) {
+            fclose($target);
+            @unlink($path);
+
+            throw $exception instanceof RuntimeException ? ZapmizerUnavailableException::dueTo($exception) : $exception;
         }
 
+        fclose($target);
+
         return $path;
+    }
+
+    protected function storedSize(ResponseInterface $response, string $path): int
+    {
+        clearstatcache(true, $path);
+        $size = (int) @filesize($path);
+        $expected = $response->hasHeader('Content-Length') && !$response->hasHeader('Transfer-Encoding')
+            ? (int) $response->getHeaderLine('Content-Length')
+            : null;
+
+        if ($expected !== null && $size < $expected) {
+            @unlink($path);
+
+            if ($size === 0 && !$response->getBody()->isSeekable()) {
+                throw ZapmizerConnectException::unexpectedResponse('the media body was lost before it could be stored');
+            }
+
+            throw ZapmizerUnavailableException::dueTo();
+        }
+
+        return $size;
     }
 
     /**
@@ -266,46 +327,12 @@ class InstanceClient
         return null;
     }
 
-    /**
-     * @param bool $expectsJson Off for the one endpoint whose 200 is binary
-     *                          (media). A redirect is still refused there —
-     *                          it means the token was rejected.
-     *
-     * @throws ZapmizerConnectException
-     */
     protected function request(string $method, string $path, array $options = [], bool $expectsJson = true): ResponseInterface
     {
-        $options['http_errors'] = false;
-        // Redirects are not followed: a refused credential redirects to the
-        // login page, and following it would pass an HTML 200 off as an answer.
-        $options['allow_redirects'] = false;
-        $options['headers'] = array_merge($options['headers'] ?? [], array_filter([
+        return (new ZapmizerApi($this->transport))->send($method, $this->apiBaseUri . $path, $options, array_filter([
             'Authorization' => 'Bearer ' . $this->token,
-            'Accept' => 'application/json',
             'api-version' => $this->apiVersion,
-        ]));
-
-        try {
-            $response = $this->http->request($method, $this->apiBaseUri . $path, $options);
-        } catch (GuzzleException $exception) {
-            throw ZapmizerUnavailableException::dueTo($exception);
-        }
-
-        if ($response->getStatusCode() >= 500) {
-            throw ZapmizerUnavailableException::dueTo();
-        }
-
-        if ($response->getStatusCode() < 400) {
-            $problem = $expectsJson
-                ? JsonResponse::problem($response, sniffBody: false)
-                : JsonResponse::redirected($response);
-
-            if ($problem !== null) {
-                throw ZapmizerConnectException::unexpectedResponse($problem);
-            }
-        }
-
-        return $response;
+        ]), $expectsJson);
     }
 
     /**

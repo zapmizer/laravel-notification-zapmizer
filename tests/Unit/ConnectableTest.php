@@ -17,6 +17,7 @@ use NotificationChannels\Zapmizer\InboundMessage;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
 use NotificationChannels\Zapmizer\Test\Fixtures\CreatesConnectionTables;
 use NotificationChannels\Zapmizer\Test\Fixtures\Team;
+use NotificationChannels\Zapmizer\Test\Concerns\FakesZapmizerHttp;
 use NotificationChannels\Zapmizer\Test\TestCase;
 use NotificationChannels\Zapmizer\Zapmizer;
 use NotificationChannels\Zapmizer\ZapmizerMessage;
@@ -24,6 +25,7 @@ use NotificationChannels\Zapmizer\ZapmizerMessage;
 class ConnectableTest extends TestCase
 {
     use CreatesConnectionTables;
+    use FakesZapmizerHttp;
 
     /** @var array<int, array{request: \GuzzleHttp\Psr7\Request}> */
     protected array $history = [];
@@ -37,10 +39,12 @@ class ConnectableTest extends TestCase
 
     protected function fakeHttp(Response ...$responses): void
     {
-        $stack = HandlerStack::create(new MockHandler($responses));
+        $mock = new MockHandler($responses);
+        $stack = HandlerStack::create($mock);
         $stack->push(Middleware::history($this->history));
 
         $this->instance(HttpClient::class, new HttpClient(['handler' => $stack]));
+        $this->fakeZapmizer($mock);
     }
 
     public function testMigrationCreatesTableWithUniqueConnectable()

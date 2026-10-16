@@ -263,14 +263,14 @@ $download->state;         // 'attached' | 'downloading' | 'unavailable'
 $download->isAttached();  // ->isDownloading() / ->isUnavailable()
 $download->mimeType;      // Content-Type          (attached only)
 $download->filename;      // from Content-Disposition — Zapmizer's `<id>.<ext>`, not the sender's name: use $m->mediaFilename() for that
-$download->size;          // Content-Length
+$download->size;          // bytes written to the file
 
 $download->path();        // temporary file with the bytes — deleted when $download is destroyed
 $download->stream();      // fresh read handle: Storage::disk('s3')->put($key, $download->stream())
 $download->contents();    // the whole file as a string — only if you need it in memory
 ```
 
-`media()` streams the bytes into a temporary file; nothing is held in memory unless you call `contents()`. Move or copy the file (`Storage::put`, `putFileAs(new File($download->path()))`) before the object goes away. It needs the connection's `bot_instance_id` (a connection that lost its pairing throws `ZapmizerUnauthorizedException`, like `instanceClient()` without a token) and passes `$m->id` and `$m->sentAt` along — the timestamp is required over there: the 600 s window is counted from it, and it is what lets Zapmizer answer `unavailable` instead of `downloading` forever.
+`media()` copies the bytes into a temporary file (on the way they sit in `php://temp`: memory up to 2 MB, then disk); nothing is held in memory as a string unless you call `contents()`. Move or copy the file (`Storage::put`, `putFileAs(new File($download->path()))`) before the object goes away. It needs the connection's `bot_instance_id` (a connection that lost its pairing throws `ZapmizerUnauthorizedException`, like `instanceClient()` without a token) and passes `$m->id` and `$m->sentAt` along — the timestamp is required over there: the 600 s window is counted from it, and it is what lets Zapmizer answer `unavailable` instead of `downloading` forever.
 
 Two answers are exceptions rather than states, because asking again would not help — each has its own class under the `ZapmizerConnectException` base, so a `catch` can tell them apart:
 
@@ -317,6 +317,8 @@ class StoreInboundMedia implements ShouldQueue
 }
 ```
 
+A fuller job, with the rate limit and `retryUntil()`, is in [transporte.md](transporte.md).
+
 For a command or a simple listener there is `awaitMedia()`, which blocks and retries for you:
 
 ```php
@@ -351,7 +353,7 @@ use NotificationChannels\Zapmizer\Exceptions\MediaRejectedException;        // m
 use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;     // media endpoint rate limit (429) — ->retryAfter()
 ```
 
-The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceClient`) are container-bound with the configured transport — see "HTTP transport" in the README. With the default `GuzzleTransport`, swap `GuzzleHttp\Client` in the container to fake them in tests, like `VerificationClient`; with `LaravelHttpTransport`, use `Http::fake()`. Every client sends `Accept: application/json` and does **not** follow redirects: a revoked token makes Zapmizer redirect to its login page, and a redirect or a non-JSON answer is an exception (`unexpectedResponse`) instead of a silent "success". `InstanceClient` always acts for one connection: its token is mandatory, there is no fallback to `zapmizer.api_token` — get it through `$connection->instanceClient()`. It only knows `connection($id)`, `createWebhook($url)`, `rotateWebhookSecret($id)`, `deleteWebhook($id)` and `media($botInstanceId, $messageId, $timestamp)` — instances are created and paired on Zapmizer's page, not from here. `media()` is the one endpoint whose 200 is not JSON (the bytes); its 202/404 answers are, and a redirect is still refused; its 422 (bad request, Meta Cloud instance) is a `MediaRejectedException` and its 429 (rate limit) a `MediaRateLimitedException` — both `ZapmizerConnectException`s.
+The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceClient`) are container-bound with the configured transport, `LaravelHttpTransport` by default — see [transporte.md](transporte.md). Fake them in tests with `Http::fake()`. Every client sends `Accept: application/json` and does **not** follow redirects: a revoked token makes Zapmizer redirect to its login page, and a redirect or a non-JSON answer is an exception (`unexpectedResponse`) instead of a silent "success". `InstanceClient` always acts for one connection: its token is mandatory, there is no fallback to `zapmizer.api_token` — get it through `$connection->instanceClient()`. It only knows `connection($id)`, `createWebhook($url)`, `rotateWebhookSecret($id)`, `deleteWebhook($id)` and `media($botInstanceId, $messageId, $timestamp)` — instances are created and paired on Zapmizer's page, not from here. `media()` is the one endpoint whose 200 is not JSON (the bytes); its 202/404 answers are, and a redirect is still refused; its 422 (bad request, Meta Cloud instance) is a `MediaRejectedException` and its 429 (rate limit) a `MediaRateLimitedException` — both `ZapmizerConnectException`s.
 
 `PartnerClient::createSession($redirectUri, $state, $webhookUrl = null, $expiresIn = null)` never asks for an `expires_in` below Zapmizer's floor of **900 seconds** (`PartnerClient::MIN_EXPIRES_IN`): the same signature covers the page, the authorization and the QR code, and a shorter one died mid-pairing.
 

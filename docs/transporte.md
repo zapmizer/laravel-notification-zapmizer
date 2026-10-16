@@ -37,10 +37,24 @@ O download de mídia ignora esses timeouts e usa limites fixos de 60 s para cone
 
 ## Testes
 
-Use `Http::fake()`:
+Use `Http::fake()`. Os fakes se acumulam: um segundo `Http::fake()` não substitui o primeiro, e o primeiro stub que casa com a URL vence. Por isso o exemplo usa um só, com um padrão para cada endpoint (ou escreva um teste por fake).
 
 ```php
-Http::fake(['zapmizer.test/*' => Http::response(['url' => 'https://zapmizer.test/connect/1', 'expires_at' => null], 201)]);
+use Illuminate\Http\Client\Request;
+use Illuminate\Support\Facades\Http;
+use NotificationChannels\Zapmizer\Connect\InstanceClient;
+use NotificationChannels\Zapmizer\Connect\PartnerClient;
+
+config([
+    'zapmizer.base_uri' => 'https://zapmizer.test/api/',
+    'zapmizer.partner.id' => 'partner-id',
+    'zapmizer.partner.secret' => 'partner-secret',
+]);
+
+Http::fake([
+    'zapmizer.test/api/connect/*' => Http::response(['url' => 'https://zapmizer.test/connect/1', 'expires_at' => null], 201),
+    'zapmizer.test/api/whatsapp-messages/*' => Http::response('png-bytes', 200, ['Content-Type' => 'image/png']),
+]);
 
 $session = app(PartnerClient::class)->createSession('https://app.test/zapmizer/callback', 'state-123');
 
@@ -48,13 +62,11 @@ Http::assertSent(fn (Request $request) => $request->method() === 'POST'
     && $request->url() === 'https://zapmizer.test/api/connect/sessions'
     && $request['state'] === 'state-123');
 
-Http::fake(['zapmizer.test/*' => Http::response('png-bytes', 200, ['Content-Type' => 'image/png'])]);
-
 $download = app(InstanceClient::class, ['api_token' => 'team-token'])->media(77, 'true_5581999998888@c.us_3EB0ABC123', 1700000000);
 $download->contents(); // 'png-bytes'
 ```
 
-Um `Http::fake()` sem resposta para a URL da Zapmizer responde `200` vazio, e a chamada falha com `unexpectedResponse` (o "fake vazio"): não vira uma sessão vazia. Um `MockHandler` num `GuzzleHttp\Client` do container não pega mais parceiro nem instância.
+Um `Http::fake()` sem resposta para a URL da Zapmizer responde `200` vazio (o "fake vazio"). As chamadas que esperam JSON (`createSession`, `exchangeCode`, `connection`, `createWebhook` e `rotateWebhookSecret`) falham com `unexpectedResponse`: não viram uma sessão vazia. Duas passam sem aviso: `deleteWebhook()` retorna normalmente e `media()` devolve um download anexado vazio (`size === 0`). Um `MockHandler` num `GuzzleHttp\Client` do container não pega mais parceiro nem instância.
 
 ## Transporte próprio
 
@@ -121,6 +133,22 @@ O webhook responde na hora e o bot pode ainda estar baixando a mídia. Por isso 
 O caminho é fixo por mensagem e conhecido antes de baixar, então o retry vira um `exists()`.
 
 ```php
+namespace App\Jobs;
+
+use DateTime;
+use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
+use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;
+use NotificationChannels\Zapmizer\Exceptions\MediaRejectedException;
+use NotificationChannels\Zapmizer\InboundMessage;
+use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
+use Symfony\Component\Mime\MimeTypes;
+
 class StoreInboundMedia implements ShouldQueue
 {
     use Dispatchable;

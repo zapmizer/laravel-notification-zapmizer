@@ -40,7 +40,7 @@ class PartnerClientTest extends TestCase
         try {
             $client->createSession('https://app.test/cb', 'state-1', "https://app.test/hook-\xB1");
             $this->fail('Expected an InvalidArgumentException.');
-        } catch (\Throwable $e) {
+        } catch (\GuzzleHttp\Exception\InvalidArgumentException $e) {
             $this->assertInstanceOf(\GuzzleHttp\Exception\InvalidArgumentException::class, $e);
             $this->assertNotInstanceOf(ZapmizerConnectException::class, $e);
         }

@@ -135,6 +135,7 @@ class InstanceClientMediaTest extends TestCase
         $client = $this->client([new RequestException('cut', new Request('GET', 'http://zap.test'), new Response(200))]);
 
         $this->assertInstanceOf(ZapmizerUnavailableException::class, $this->caught(fn () => $client->media(9, 'ABC', 1700000000)));
+        $this->assertSame([], $this->createdPaths());
         $this->assertNoCreatedFileRemains();
     }
 
@@ -386,6 +387,7 @@ class InstanceClientMediaTest extends TestCase
 
         $this->assertInstanceOf(RuntimeException::class, $caught);
         $this->assertNotInstanceOf(AssertionFailedError::class, $caught);
+        $this->assertSame([], $this->createdPaths());
         $this->assertNoCreatedFileRemains();
     }
 

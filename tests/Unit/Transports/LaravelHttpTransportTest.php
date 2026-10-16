@@ -141,7 +141,7 @@ class LaravelHttpTransportTest extends TestCase
         try {
             (new LaravelHttpTransport())->send('POST', 'http://zap.test/api/x', ['json' => ['a' => "\xB1"]]);
             $this->fail('Expected an InvalidArgumentException.');
-        } catch (Throwable $e) {
+        } catch (\GuzzleHttp\Exception\InvalidArgumentException $e) {
             $this->assertInstanceOf(\GuzzleHttp\Exception\InvalidArgumentException::class, $e);
             $this->assertInstanceOf(\InvalidArgumentException::class, $e);
             $this->assertNotInstanceOf(ZapmizerConnectException::class, $e);

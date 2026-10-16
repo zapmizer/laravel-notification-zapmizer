@@ -1,5 +1,7 @@
 # Zapmizer WhatsApp notification channel for Laravel 8 to 13
 
+> Full guides live in [`docs/`](docs/README.md). The [wiki](https://github.com/zapmizer/laravel-notification-zapmizer/wiki) is a mirror of `docs/` on `main`; edit `docs/`, not the wiki.
+
 ## Installation
 
 You can install the package via composer:

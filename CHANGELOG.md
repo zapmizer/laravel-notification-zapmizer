@@ -12,7 +12,7 @@
 - O `getPrevious()` da `ZapmizerUnavailableException` pode mudar de classe conforme a versão do Laravel: uma exceção do `Http` do Laravel (`ConnectionException` etc.) ou, do Laravel 8 ao 11 em alguns casos (corpo cortado), a do Guzzle.
 - `zapmizer.http.connect_timeout` e `zapmizer.http.timeout` (`ZAPMIZER_HTTP_CONNECT_TIMEOUT`, `ZAPMIZER_HTTP_TIMEOUT`), `null` por padrão. Sem valor, vale o padrão do `Http` da versão: nenhum no Laravel 8; 30 s de total e 10 s de conexão no 9.52 e do 10 em diante.
 - `illuminate/http` declarado como dependência; `ext-curl` sugerida.
-- Um app que já tinha `zapmizer.http.connect_timeout`/`timeout` na config agora aplica esses timeouts nas chamadas JSON de parceiro e instância.
+- Um app que já tinha `zapmizer.http.connect_timeout`/`timeout` na config agora aplica esses timeouts nas chamadas JSON de parceiro e instância e no envio de texto.
 - Download de mídia: 60 s para conectar e 600 s no total (`ZapmizerApi::TRANSFER_CONNECT_TIMEOUT`/`TRANSFER_TIMEOUT`), no lugar do limite de 60 s por leitura e de qualquer timeout de um `GuzzleHttp\Client` registrado. O teto total pede a extensão `curl`. O corpo passa por `php://temp` (memória até 2 MB, disco depois) e é copiado para o arquivo temporário.
 - Um download de mídia cortado (erro de transporte, falha de leitura ou de escrita no meio da cópia, ou corpo menor que o `Content-Length` sem `Transfer-Encoding`) lança `ZapmizerUnavailableException` e não deixa arquivo. Antes lançava um `RuntimeException` cru, ou devolvia um `attached` truncado quando a conexão fechava limpa.
 - Sem conseguir criar ou abrir o arquivo temporário, uma resposta `200` de mídia lança `ZapmizerUnavailableException` (antes estourava `ErrorException`); os outros status não criam arquivo.
@@ -22,7 +22,7 @@
 
 **Com o `Http` do Laravel como padrão:**
 
-- `Http::fake()`, `Http::preventStrayRequests()`, os listeners de `RequestSending`/`ResponseReceived` e o Telescope passam a ver as chamadas de parceiro, instância e envio. Um `Http::fake()` sem resposta para a URL da Zapmizer responde 200 vazio: as chamadas que esperam JSON (`createSession`, `exchangeCode`, `subscription`, `checkout`, `connection`, `createWebhook`, `rotateWebhookSecret`) falham com `unexpectedResponse`, mas `deleteWebhook()` passa em silêncio e `media()` devolve um download anexado vazio (`size === 0`).
+- `Http::fake()`, `Http::preventStrayRequests()`, os listeners de `RequestSending`/`ResponseReceived` e o Telescope passam a ver as chamadas de parceiro, instância e envio. Um `Http::fake()` sem resposta para a URL da Zapmizer responde 200 vazio: as chamadas que esperam JSON (`createSession`, `exchangeCode`, `subscription`, `checkout`, `connection`, `createWebhook`, `rotateWebhookSecret`, `reconnect`, `conversationSession`, `inboxSession`) e o `revokeToken()` (só 204 e 401 contam como revogado) falham com `unexpectedResponse`, mas `deleteWebhook()` passa em silêncio e `media()` devolve um download anexado vazio (`size === 0`).
 - Fake com `MockHandler` num `GuzzleHttp\Client` registrado no container deixa de pegar parceiro, instância e envio: use `Http::fake()`. Esse `GuzzleHttp\Client` passa a valer só para o `VerificationClient`.
 - Proxy sem `Http::globalOptions` (Laravel 8, 9 e 10 antes do 10.48) pede um transporte próprio (exemplo em `docs/transporte.md`).
 - O `GuzzleTransport` que existiu nas versões de desenvolvimento deste ciclo saiu.

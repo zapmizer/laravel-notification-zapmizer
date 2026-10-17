@@ -178,6 +178,8 @@ class PartnerClient
      * any other 4xx comes out of ZapmizerApi::failure(). The body is read
      * once and goes to the log too, except on 404 and 409: those are
      * business answers (no connect yet, already subscribed, payment pending).
+     * A 429 is expected and handled by the caller: it is a warning with the
+     * Retry-After, without the body.
      *
      * @throws ZapmizerConnectException
      */
@@ -189,7 +191,12 @@ class PartnerClient
 
         $error = ApiError::from($response);
 
-        if (!in_array($error->status, [404, 409], true)) {
+        if ($error->status === 429) {
+            Log::warning('zapmizer: partner call rate-limited.', [
+                'endpoint' => $endpoint,
+                'retry_after' => $error->retryAfter,
+            ]);
+        } elseif (!in_array($error->status, [404, 409], true)) {
             Log::error('zapmizer: partner call failed.', [
                 'endpoint' => $endpoint,
                 'status' => $error->status,

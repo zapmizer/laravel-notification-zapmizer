@@ -29,6 +29,7 @@ use NotificationChannels\Zapmizer\Models\WhatsappVerified;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
 use NotificationChannels\Zapmizer\Support\PhoneNumber;
 use NotificationChannels\Zapmizer\Support\TableExists;
+use NotificationChannels\Zapmizer\Webhook\Envelope;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -156,7 +157,7 @@ class WebhookController extends Controller
             return $this->missingMethod($payload);
         }
 
-        MessageReceived::dispatch($message, $this->connection(), $payload);
+        MessageReceived::dispatch($message, $this->connection(), $payload, Envelope::fromPayload($payload));
 
         return $this->successMethod();
     }

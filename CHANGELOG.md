@@ -19,17 +19,6 @@
 11. **Código que usa `PartnerClient`, `ConnectToken`, `ConnectSession` ou `InstanceClient` direto, ou estende classes da lib:** confira as seções "Parceiro", "Instância", "Connect" e "Embed", e as notas de subclasses em cada uma.
 12. **Quem usa o retorno do envio** (`sendMessage()`, `sendMessageWithFile()`, `ZapmizerMessage::send()` ou um listener de `NotificationSent`): ele passa a ser um `Messages\SentMessage`. Troque `getBody()` por `$sent->raw()` ou pelos campos. Num listener, `$event->response['message'] instanceof ZapmizerMessage` falha em silêncio: troque por `instanceof SentMessage`. Uma subclasse de `ZapmizerMessage` que sobrescreve `send()` precisa declarar `: SentMessage`. Configure `ZAPMIZER_API_VERSION=2025-06-27` para acompanhar o envio. Veja "Envio tipado, acompanhamento e template" em "Envio".
 
-## Webhook
-
-Só acréscimos: a rota, os middlewares, `MessageReceived`, `WebhookReceived`, `WebhookHandled` e as chaves que já existiam em `zapmizer.webhook.*` não mudam. Veja `docs/webhook.md`.
-
-- Eventos tipados para os 13 eventos do catálogo além de `message`, disparados logo depois do `WebhookReceived`: `MessageStatusUpdated`, `ConnectionStateChanged`, `MessageReacted`, `MessageEdited`, `MessageRevoked`, `MessageTranscribed`, `CallReceived`, `PollVoted`, `ContactNumberChanged`, `GroupMembershipChanged`, `GroupAdminsChanged`, `GroupJoinRequested` e `GroupUpdated`. Todos estendem `Events\WebhookEvent` (`envelope`, `connection`, `payload`) e trazem um DTO só leitura de `Webhook\*`. Esses eventos continuam respondendo `Webhook Received`, sem `WebhookHandled`, e passando pelo `missingMethod`.
-- `MessageStatusUpdated`: `ack` na escala -1 a 4 (`MessageStatus::ACK_*`, `isFailed()`, `reached()`), `status` derivado do `ack`; `unknown` ou `ack` fora da escala não disparam o evento.
-- `ConnectionStateChanged`: `state`, `reason`, `kind`, e `isAttributable()` falso quando o `wid` vem nulo. A lib não guarda o estado; a doc traz as regras do `wid` nulo e do `created_at` mais recente.
-- Um `handle*` que o app já tinha numa subclasse para um desses eventos continua rodando, e o evento tipado sai também. `WebhookController::catalogEvents()` troca ou desliga os eventos.
-- `Webhook\Envelope` (`id`, `name`, `createdAt`, `wid`) nos eventos novos e, como argumento opcional no fim, no `MessageReceived` (`$event->envelope`).
-- Deduplicação opcional pelo `id` do envelope, desligada por padrão: `zapmizer.webhook.deduplicate`, `deduplicate_ttl` (21600 s) e `deduplicate_store` (`ZAPMIZER_WEBHOOK_DEDUPLICATE*`). Uma repetição responde 200 sem disparar nada; uma falha (exceção ou 5xx) libera o `id` para a retentativa; com o cache fora do ar a entrega é processada e logada. `verify_number.*` nunca é deduplicado. Uma `config/zapmizer.php` publicada precisa das chaves acrescentadas à mão.
-
 ## Transporte
 
 **Breaking** para quem constrói `PartnerClient`, `InstanceClient` ou `Zapmizer` à mão: o argumento do `GuzzleHttp\Client` virou o do transporte. Quem resolve os clientes pelo container (`app(PartnerClient::class)`, `$connection->instanceClient()`, `app(Zapmizer::class)`) não muda a construção.
@@ -259,6 +248,17 @@ Webhook com endereço por conexão, opt-in. Desligado, nada muda: as conexões e
 - `ZapmizerConnection::$hidden` inclui `webhook_key`.
 
 Veja "Per-connection webhook URL (opt-in)" em `docs/connect.md`.
+
+### Eventos do catálogo e deduplicação
+
+Só acréscimos: a rota, os middlewares, `MessageReceived`, `WebhookReceived`, `WebhookHandled` e as chaves que já existiam em `zapmizer.webhook.*` não mudam. Veja `docs/webhook.md`.
+
+- Eventos tipados para os 13 eventos do catálogo além de `message`, disparados logo depois do `WebhookReceived`: `MessageStatusUpdated`, `ConnectionStateChanged`, `MessageReacted`, `MessageEdited`, `MessageRevoked`, `MessageTranscribed`, `CallReceived`, `PollVoted`, `ContactNumberChanged`, `GroupMembershipChanged`, `GroupAdminsChanged`, `GroupJoinRequested` e `GroupUpdated`. Todos estendem `Events\WebhookEvent` (`envelope`, `connection`, `payload`) e trazem um DTO só leitura de `Webhook\*`. Esses eventos continuam respondendo `Webhook Received`, sem `WebhookHandled`, e passando pelo `missingMethod`.
+- `MessageStatusUpdated`: `ack` na escala -1 a 4 (`MessageStatus::ACK_*`, `isFailed()`, `reached()`), `status` derivado do `ack`; `unknown` ou `ack` fora da escala não disparam o evento.
+- `ConnectionStateChanged`: `state`, `reason`, `kind`, e `isAttributable()` falso quando o `wid` vem nulo. A lib não guarda o estado; a doc traz as regras do `wid` nulo e do `created_at` mais recente.
+- Um `handle*` que o app já tinha numa subclasse para um desses eventos continua rodando, e o evento tipado sai também. `WebhookController::catalogEvents()` troca ou desliga os eventos.
+- `Webhook\Envelope` (`id`, `name`, `createdAt`, `wid`) nos eventos novos e, como argumento opcional no fim, no `MessageReceived` (`$event->envelope`).
+- Deduplicação opcional pelo `id` do envelope, desligada por padrão: `zapmizer.webhook.deduplicate`, `deduplicate_ttl` (21600 s) e `deduplicate_store` (`ZAPMIZER_WEBHOOK_DEDUPLICATE*`). Uma repetição responde 200 sem disparar nada; uma falha (exceção ou 5xx) libera o `id` para a retentativa; com o cache fora do ar a entrega é processada e logada. `verify_number.*` nunca é deduplicado. Uma `config/zapmizer.php` publicada precisa das chaves acrescentadas à mão.
 
 ## Base da API
 

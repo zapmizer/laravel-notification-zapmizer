@@ -3,7 +3,7 @@
 namespace NotificationChannels\Zapmizer\Webhook;
 
 use Illuminate\Support\Carbon;
-use Throwable;
+use NotificationChannels\Zapmizer\Support\Payload;
 
 /**
  * The envelope every catalog webhook comes in: `{id, created_at, wid, name,
@@ -38,16 +38,15 @@ final class Envelope
         );
     }
 
+    /**
+     * Strict ISO 8601 with a zone, as Zapmizer sends it — the same reading
+     * as the rest of the package (`Support\Payload::date`, which logs an
+     * unreadable value). Anything else is null.
+     */
     private static function parseTime(?string $value): ?Carbon
     {
-        if ($value === null) {
-            return null;
-        }
+        $date = Payload::date($value, 'created_at');
 
-        try {
-            return Carbon::parse($value);
-        } catch (Throwable) {
-            return null;
-        }
+        return $date === null ? null : Carbon::instance($date);
     }
 }

@@ -315,4 +315,32 @@ class WebhookStatusAndConnectionTest extends TestCase
 
         Event::assertDispatched(MessageStatusUpdated::class, fn (MessageStatusUpdated $event) => $event->status->occurredAt?->getTimestamp() === 2 ** 37 - 1);
     }
+
+    /**
+     * @return array<string, array{0: string, 1: string|null}>
+     */
+    public static function createdAtValues(): array
+    {
+        return [
+            'microseconds, Z' => ['2025-10-17T12:00:00.000000Z', '2025-10-17T12:00:00+00:00'],
+            'no fraction, offset' => ['2025-10-17T09:00:00-03:00', '2025-10-17T12:00:00+00:00'],
+            'no zone' => ['2025-10-17T12:00:00', null],
+            'a space for the T' => ['2025-10-17 12:00:00Z', null],
+            'an overflowing date' => ['2025-02-30T12:00:00Z', null],
+            'relative words' => ['tomorrow', null],
+            'a timestamp' => ['1760659200', null],
+        ];
+    }
+
+    /** @dataProvider createdAtValues */
+    #[DataProvider('createdAtValues')]
+    public function testCreatedAtIsStrictIso8601(string $value, ?string $expected)
+    {
+        Event::fake([ConnectionStateChanged::class]);
+        $this->connectedTeam('secret-a');
+
+        $this->deliverSigned($this->catalogEnvelope('connection', null, ['created_at' => $value]), 'secret-a')->assertOk();
+
+        Event::assertDispatched(ConnectionStateChanged::class, fn (ConnectionStateChanged $event) => $event->envelope->createdAt?->utc()->toIso8601String() === $expected);
+    }
 }

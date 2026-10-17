@@ -29,6 +29,7 @@ namespace App\Http\Controllers;
 use App\Models\Customer;
 use Illuminate\Contracts\Support\Responsable;
 use Illuminate\Http\Request;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Http\Responses\EmbedSessionResponse;
 
 class ConversationEmbedController
@@ -44,6 +45,12 @@ class ConversationEmbedController
             return EmbedSessionResponse::code('customer_without_phone');
         }
 
+        // Opcional: registra a recusa da Zapmizer (veja a seção 6).
+        $logRefusal = fn (ZapmizerApiException $refusal) => logger()->warning('zapmizer_embed_refused', [
+            'status' => $refusal->status(),
+            'code' => $refusal->error(),
+        ]);
+
         return EmbedSessionResponse::open(
             fn () => $connection->instanceClient()->conversationSession(
                 phone: $customer->whatsapp_number,
@@ -53,6 +60,7 @@ class ConversationEmbedController
                 userName: $user->name,
                 userEmail: $user->email,
             ),
+            onRefusal: $logRefusal,
         );
     }
 }
@@ -69,7 +77,7 @@ Route::post('customers/{customer}/zapmizer/conversation', ConversationEmbedContr
 A regra: **o que é do app se decide antes do `open()`**, e dentro da closure vai só a chamada à Zapmizer.
 
 - Integração, conexão e telefone são do app: `abort_if(..., 404)` e `EmbedSessionResponse::code('customer_without_phone')` ficam fora da closure.
-- Dentro da closure vai inclusive a resolução do cliente (`$connection->instanceClient()`). Assim, uma conexão sem token vira `reauth_required` (o `instanceClient()` lança a `ZapmizerUnauthorizedException` de dentro da closure e o `open()` a trata), e um `notConnected()` vira 503 `unavailable` com `report()`, em vez de estourar como 500. Por isso o exemplo só dá 404 quando não existe conexão nenhuma, e não confere o token fora da closure.
+- Dentro da closure vai inclusive a resolução do cliente (`$connection->instanceClient()`). Assim, o token ausente vira `reauth_required` (o `instanceClient()` lança a `ZapmizerUnauthorizedException` de dentro da closure e o `open()` a trata), e qualquer `ZapmizerConnectException` lançada dentro da closure vira 503 `unavailable` com `report()`, em vez de estourar como 500. Por isso o exemplo só dá 404 quando não existe conexão nenhuma, e não confere o token fora da closure.
 
 A rota fica atrás do `auth` e de um `throttle`. O CSRF e o keepalive da sessão do app são do front: veja a doc do `@zapmizer/embed` (`docs/backend.md`) para o que o navegador envia.
 
@@ -92,13 +100,13 @@ Mande um `user.id` estável: a chave do usuário no seu app, a mesma entre recon
 | 401 ou 419 da Zapmizer | 422 | `{"code": "reauth_required"}` | |
 | 429 | 429 | `{"code": "rate_limited"}` | `Retry-After`, só quando a Zapmizer mandou um inteiro |
 | outra recusa 4xx | o mesmo status da Zapmizer | `{"code": <error>}` | |
-| 5xx, rede, resposta inesperada, configuração ausente ou inválida | 503 | `{"code": "unavailable"}` | |
+| 5xx, rede, resposta inesperada, configuração inválida | 503 | `{"code": "unavailable"}` | |
 
 - A resposta **nunca** é 401 nem 419: o front trata esses status como sessão do app expirada. A reautorização sai como 422.
 - O `Retry-After` só sai quando é um inteiro, e `Retry-After: 0` sai. Uma data HTTP ou outro formato não vai.
 - `{"code": null}` sai com a chave quando a Zapmizer recusa sem `error`.
 - `resume_until` sai com o fuso que a Zapmizer mandou (`+00:00`), sem converter para o fuso do app. `expires_at` não vai.
-- A queda da Zapmizer (5xx, rede) não é reportada: é passageira e o front tenta de novo. A resposta inesperada e a configuração inválida (`base_uri`, credenciais, conexão ausente) passam pelo `report()` do Laravel, que registra a causa.
+- A queda da Zapmizer (5xx, rede) não é reportada: é passageira e o front tenta de novo. A resposta inesperada e a configuração inválida (`base_uri` ou outra `ZapmizerConnectException`) passam pelo `report()` do Laravel, que registra a causa.
 - `403 missing_ability` e `403 not_a_partner_connection` chegam ao front como vieram, e ele não tem ação nem texto padrão para eles. O app que quer o botão de reconectar nesses dois casos troca o código na seção 7.
 
 ## 5. Código próprio do app

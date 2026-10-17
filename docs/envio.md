@@ -113,6 +113,8 @@ if ($status === null) {
 
 `MessageStatus::isFailure()`, `isFinal()` e `reached($status, MessageStatus::DELIVERED)` funcionam com qualquer número, inclusive o `ack` do webhook. Um valor novo da API chega como `int`, sem quebrar nada.
 
+No webhook, o `MessageStatusUpdated` traz um `Webhook\StatusUpdate` com o `ack` nessa mesma escala e os mesmos atalhos do `SentMessage` (`isFailed()`, `isDelivered()`, `isRead()`, `isFinal()`). Ali só chegam de `-1` a `4`, e o `0` vem com o nome `pending`. Veja [webhook.md](webhook.md#message_status).
+
 Erros: lançam as mesmas exceções do envio (veja [erros.md](erros.md)).
 - **401**: token inválido ou revogado.
 - **403** `missing_ability`: o token não tem `messages:read`; use o token do connect.

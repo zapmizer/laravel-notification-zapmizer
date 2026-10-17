@@ -351,9 +351,11 @@ Event::listen(function (MessageReceived $event) {
 });
 ```
 
-**Deliveries are retried.** Zapmizer retries a webhook up to 3 times when your endpoint fails or is slow, and a retry within the tolerance window is a valid, signed delivery — the package does not deduplicate. A listener with side effects (storing, replying, charging) must be idempotent on `$message->id`.
+**Deliveries are retried.** Zapmizer retries a webhook up to 3 times when your endpoint fails or is slow, and a retry within the tolerance window is a valid, signed delivery, always with the same envelope `id` (`$event->envelope->id`). The package drops the repeats only with `zapmizer.webhook.deduplicate` on (off by default, see [webhook.md](webhook.md#deduplicação)); otherwise a listener with side effects (storing, replying, charging) must be idempotent on `$message->id`.
 
 `WebhookReceived` and `WebhookHandled` also carry the connection. Other events (`qr`, `disconnected`, ...) fall through to `handle{StudlyName}` methods — extend `WebhookController` to add yours; `$this->connection()` gives them the connection.
+
+The other events of Zapmizer's catalog (`message_status`, `connection`, reactions, edits, calls, polls, groups, ...) are also dispatched as typed events — `MessageStatusUpdated`, `ConnectionStateChanged`, `MessageReacted`, ... — right after `WebhookReceived`, independent of those handlers. The full list, the rules for statuses and connection state, and the opt-in deduplication are in [webhook.md](webhook.md) (Portuguese).
 
 Use `NotificationChannels\Zapmizer\Support\PhoneNumber` to match `fromPhone` against what your users typed: `normalize()` (E.164 without `+`, completes `zapmizer.default_country_code` — `55` by default — on 10/11-digit national numbers, drops the carrier zero), `variants()` (with/without the Brazilian ninth digit, mobiles only, `55` numbers only), `digits()`, `fromWid()`.
 

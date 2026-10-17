@@ -5,7 +5,21 @@ namespace NotificationChannels\Zapmizer\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use Illuminate\Support\Str;
+use NotificationChannels\Zapmizer\Events\CallReceived;
+use NotificationChannels\Zapmizer\Events\ConnectionStateChanged;
+use NotificationChannels\Zapmizer\Events\ContactNumberChanged;
+use NotificationChannels\Zapmizer\Events\GroupAdminsChanged;
+use NotificationChannels\Zapmizer\Events\GroupJoinRequested;
+use NotificationChannels\Zapmizer\Events\GroupMembershipChanged;
+use NotificationChannels\Zapmizer\Events\GroupUpdated;
+use NotificationChannels\Zapmizer\Events\MessageEdited;
+use NotificationChannels\Zapmizer\Events\MessageReacted;
 use NotificationChannels\Zapmizer\Events\MessageReceived;
+use NotificationChannels\Zapmizer\Events\MessageRevoked;
+use NotificationChannels\Zapmizer\Events\MessageStatusUpdated;
+use NotificationChannels\Zapmizer\Events\MessageTranscribed;
+use NotificationChannels\Zapmizer\Events\PollVoted;
+use NotificationChannels\Zapmizer\Events\WebhookEvent;
 use NotificationChannels\Zapmizer\Events\WebhookHandled;
 use NotificationChannels\Zapmizer\Events\WebhookReceived;
 use NotificationChannels\Zapmizer\Events\WhatsappVerified as WhatsappVerifiedEvent;
@@ -15,7 +29,10 @@ use NotificationChannels\Zapmizer\Models\WhatsappVerified;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
 use NotificationChannels\Zapmizer\Support\PhoneNumber;
 use NotificationChannels\Zapmizer\Support\TableExists;
+use NotificationChannels\Zapmizer\Webhook\Deduplicator;
+use NotificationChannels\Zapmizer\Webhook\Envelope;
 use Symfony\Component\HttpFoundation\Response;
+use Throwable;
 
 /**
  * Class WebhookController.
@@ -59,7 +76,37 @@ class WebhookController extends Controller
 
         $this->request = $request;
 
+        $deduplicator = $this->deduplicator();
+
+        if (!$deduplicator->claim($payload)) {
+            return $this->duplicateMethod($payload);
+        }
+
+        try {
+            $response = $this->processWebhook($payload);
+        } catch (Throwable $exception) {
+            $deduplicator->release($payload);
+
+            throw $exception;
+        }
+
+        if ($response->isServerError()) {
+            $deduplicator->release($payload);
+        } else {
+            $deduplicator->confirm($payload);
+        }
+
+        return $response;
+    }
+
+    /**
+     * Fire the events and route the delivery to its handler.
+     */
+    protected function processWebhook(array $payload): Response
+    {
         WebhookReceived::dispatch($payload, $this->connection());
+
+        $this->dispatchCatalogEvent($payload);
 
         $method = 'handle' . Str::studly(str_replace('.', '_', (string) ($payload['name'] ?? '')));
 
@@ -72,6 +119,54 @@ class WebhookController extends Controller
         }
 
         return $this->missingMethod($payload);
+    }
+
+    /**
+     * The typed events of the webhook catalog, by event name. Each class
+     * extends WebhookEvent and builds itself from the delivery. Override to
+     * add, swap or drop one — returning [] turns them all off.
+     *
+     * @return array<string, class-string<WebhookEvent>>
+     */
+    protected function catalogEvents(): array
+    {
+        return [
+            'message_status' => MessageStatusUpdated::class,
+            'connection' => ConnectionStateChanged::class,
+            'message_reacted' => MessageReacted::class,
+            'message_edited' => MessageEdited::class,
+            'message_revoked' => MessageRevoked::class,
+            'message_transcribed' => MessageTranscribed::class,
+            'incoming_call' => CallReceived::class,
+            'poll_vote' => PollVoted::class,
+            'contact_number_changed' => ContactNumberChanged::class,
+            'group_membership' => GroupMembershipChanged::class,
+            'group_admins_changed' => GroupAdminsChanged::class,
+            'group_join_request' => GroupJoinRequested::class,
+            'group_updated' => GroupUpdated::class,
+        ];
+    }
+
+    /**
+     * Fire the typed event of the delivery, if the catalog has one and its
+     * `data` can be read. Independent of the `handle{StudlyName}` methods: an
+     * application handler of the same event keeps running, and the event
+     * still goes out.
+     */
+    protected function dispatchCatalogEvent(array $payload): void
+    {
+        $name = $payload['name'] ?? null;
+        $class = is_string($name) ? $this->catalogEvents()[$name] ?? null : null;
+
+        if ($class === null) {
+            return;
+        }
+
+        $event = $class::fromWebhook($payload, $this->connection());
+
+        if ($event !== null) {
+            event($event);
+        }
     }
 
     /**
@@ -92,7 +187,7 @@ class WebhookController extends Controller
             return $this->missingMethod($payload);
         }
 
-        MessageReceived::dispatch($message, $this->connection(), $payload);
+        MessageReceived::dispatch($message, $this->connection(), $payload, Envelope::fromPayload($payload));
 
         return $this->successMethod();
     }
@@ -202,6 +297,22 @@ class WebhookController extends Controller
     protected function successMethod($parameters = []): Response
     {
         return new Response('Webhook Handled', 200);
+    }
+
+    /**
+     * Answer a repeated delivery (`zapmizer.webhook.deduplicate` on): 2xx,
+     * nothing fired.
+     *
+     * @param array $parameters
+     */
+    protected function duplicateMethod($parameters = []): Response
+    {
+        return new Response('Webhook Received', 200);
+    }
+
+    protected function deduplicator(): Deduplicator
+    {
+        return app(Deduplicator::class);
     }
 
     /**

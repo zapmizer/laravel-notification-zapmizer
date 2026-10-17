@@ -2,10 +2,9 @@
 
 namespace NotificationChannels\Zapmizer\Test\Unit;
 
-use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\Psr7\Response;
-use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use NotificationChannels\Zapmizer\Connect\ResolvesAuthenticatedUser;
@@ -16,6 +15,7 @@ use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Test\Concerns\AssertsContract;
+use NotificationChannels\Zapmizer\Test\Concerns\DrivesTheConnectRoutes;
 use NotificationChannels\Zapmizer\Test\Fixtures\CreatesConnectionTables;
 use NotificationChannels\Zapmizer\Test\Fixtures\PlainModel;
 use NotificationChannels\Zapmizer\Test\Fixtures\PlainUser;
@@ -33,6 +33,7 @@ class ConnectRouteTest extends TestCase
 {
     use AssertsContract;
     use CreatesConnectionTables;
+    use DrivesTheConnectRoutes;
     use FakesZapmizerHttp;
     use InvalidBaseUris;
 
@@ -52,24 +53,6 @@ class ConnectRouteTest extends TestCase
         $app['config']->set('zapmizer.connect.resolver', ResolvesFirstTeam::class);
     }
 
-    protected function fakeHttp(Response ...$responses): void
-    {
-        $this->fakeZapmizer(new MockHandler($responses));
-    }
-
-    protected function actingAsUser(): User
-    {
-        $user = User::create(['name' => 'Test']);
-        $this->actingAs($user);
-
-        return $user;
-    }
-
-    protected function team(): Team
-    {
-        return Team::firstOrCreate(['name' => 'Acme']);
-    }
-
     /**
      * A team that authorized (has a token) but has not paired a number yet.
      */
@@ -84,20 +67,6 @@ class ConnectRouteTest extends TestCase
         ], $overrides));
 
         return $team->fresh();
-    }
-
-    /**
-     * What POST /api/connect/token answers once the hosted page paired the
-     * number: token, team, number, instance and the webhook registered for
-     * the session's webhook_url — secret only when it was created now.
-     */
-    protected function tokenPayload(array $overrides = []): string
-    {
-        return json_encode(array_merge([
-            'token' => '1|sanctum', 'user_id' => 3, 'team_id' => 7, 'team_name' => 'Acme',
-            'phone_number' => '5581911110000', 'bot_instance_id' => 9,
-            'webhook_id' => 42, 'webhook_secret' => 'whsec_new',
-        ], $overrides));
     }
 
     protected function instanceState(string $state, bool $online = false, ?string $number = '5581911110000'): string
@@ -266,10 +235,88 @@ class ConnectRouteTest extends TestCase
         // Zapmizer registers the receiver during the pairing: the route goes
         // along with the session.
         $this->assertEquals('http://localhost/zapmizer/webhook', $body['webhook_url']);
-        // The TTL is left to Zapmizer (never below its 900s floor).
-        $this->assertArrayNotHasKey('expires_in', $body);
         $this->assertArrayNotHasKey('external_id', $body);
         $this->assertEquals('partner-id|partner-secret', $this->history[0]['request']->getHeaderLine('X-Partner-Key'));
+    }
+
+    /** @dataProvider ttlFallbacks */
+    #[DataProvider('ttlFallbacks')]
+    public function testC1TheTtlFallsBackTo30(bool $present, mixed $value, int $minutes)
+    {
+        Carbon::setTestNow('2026-10-16 12:00:00');
+
+        if ($present) {
+            config()->set('zapmizer.connect.state_ttl_minutes', $value);
+        } else {
+            config()->set('zapmizer.connect', ['resolver' => ResolvesFirstTeam::class]);
+        }
+
+        $this->fakeHttp($this->sessionCreated());
+        $this->actingAsUser();
+
+        $this->startConnect()->assertOk();
+
+        $this->assertSame(max(900, $minutes * 60), $this->sentBody(0)['expires_in']);
+        $this->assertSame(now()->addMinutes($minutes)->toIso8601String(), session(ConnectController::SESSION_KEY)['expires_at']);
+    }
+
+    public static function ttlFallbacks(): array
+    {
+        return [
+            'absent' => [false, null, 30],
+            'null' => [true, null, 30],
+            'zero' => [true, 0, 30],
+            'negative' => [true, -5, 30],
+            'text' => [true, 'abc', 30],
+            'string 45' => [true, '45', 45],
+            '0.5' => [true, 0.5, 30],
+            '1.9' => [true, '1.9', 1],
+        ];
+    }
+
+    public function testC2AShortTtlExpiresTheStateAndSendsTheFloor()
+    {
+        Carbon::setTestNow('2026-10-16 12:00:00');
+        config()->set('zapmizer.connect.state_ttl_minutes', 5);
+        $this->fakeHttp($this->sessionCreated());
+        $this->actingAsUser();
+
+        $this->startConnect()->assertOk();
+        $this->assertSame(900, $this->sentBody(0)['expires_in']);
+
+        $this->travel(5)->minutes();
+        $this->travel(1)->seconds();
+
+        $this->get(route('zapmizer.connect.callback', ['code' => 'c', 'state' => session(ConnectController::SESSION_KEY)['state']]))
+            ->assertOk()
+            ->assertSee('status: "invalid_state"', false);
+        $this->assertCount(1, $this->history);
+    }
+
+    public function testC5APublishedConfigKeepsItsTen()
+    {
+        Carbon::setTestNow('2026-10-16 12:00:00');
+        config()->set('zapmizer.connect.state_ttl_minutes', 10);
+        $this->fakeHttp($this->sessionCreated());
+        $this->actingAsUser();
+
+        $this->startConnect()->assertOk();
+
+        $this->assertSame(900, $this->sentBody(0)['expires_in']);
+        $this->assertSame(now()->addMinutes(10)->toIso8601String(), session(ConnectController::SESSION_KEY)['expires_at']);
+    }
+
+    public function testATtlAboveADayIsCappedByTheClient()
+    {
+        Carbon::setTestNow('2026-10-16 12:00:00');
+        config()->set('zapmizer.connect.state_ttl_minutes', 2000);
+        $this->fakeHttp($this->sessionCreated());
+        $this->actingAsUser();
+
+        $this->startConnect()->assertOk();
+
+        $this->assertSame(86400, $this->sentBody(0)['expires_in']);
+        $this->assertSame(now()->addMinutes(2000)->toIso8601String(), session(ConnectController::SESSION_KEY)['expires_at']);
     }
 
     /** @dataProvider credentialFailures */
@@ -311,13 +358,6 @@ class ConnectRouteTest extends TestCase
             ->assertExactJson(['code' => 'zapmizer_unavailable']);
 
         $this->assertStringNotContainsString('redirect uri', $response->getContent());
-    }
-
-    protected function recordReports(): void
-    {
-        $this->app->make(ExceptionHandler::class)->reportable(function (\Throwable $exception) {
-            $this->reported[] = $exception;
-        });
     }
 
     /** @dataProvider invalidBaseUris */

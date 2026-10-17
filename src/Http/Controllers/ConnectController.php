@@ -9,9 +9,7 @@ use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Str;
 use NotificationChannels\Zapmizer\Connect\ConnectToken;
 use NotificationChannels\Zapmizer\Connect\PartnerClient;
 use NotificationChannels\Zapmizer\Contracts\Connectable;
@@ -23,6 +21,7 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
+use NotificationChannels\Zapmizer\Http\Controllers\Concerns\HandlesPopupState;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
 use Throwable;
 
@@ -45,6 +44,8 @@ use Throwable;
  */
 class ConnectController extends Controller
 {
+    use HandlesPopupState;
+
     public const SESSION_KEY = 'zapmizer_connect';
 
     /**
@@ -94,18 +95,13 @@ class ConnectController extends Controller
     {
         try {
             $connectable = $this->connectable($request);
-            $state = Str::random(40);
-
-            $request->session()->put(self::SESSION_KEY, [
-                'state' => $state,
-                'connectable' => $this->connectableKey($connectable),
-                'expires_at' => now()->addMinutes((int) config('zapmizer.connect.state_ttl_minutes', 10))->toIso8601String(),
-            ]);
+            $pending = $this->issueState($request, self::SESSION_KEY, $connectable);
 
             $session = $this->partnerClient->createSession(
                 redirectUri: route('zapmizer.connect.callback'),
-                state: $state,
+                state: $pending['state'],
                 webhookUrl: route('zapmizer.webhook'),
+                expiresIn: $this->stateTtlMinutes() * 60,
             );
         } catch (PartnerCredentialsException $exception) {
             report($exception);
@@ -355,45 +351,6 @@ class ConnectController extends Controller
         return $exception instanceof UniqueConstraintViolationException
             || $exception->getCode() === '23505'
             || preg_match('#Integrity constraint violation: 1062|UNIQUE constraint failed: |column(s)? .* (is|are) not unique|Cannot insert duplicate key(?: row)? in object#i', $message) === 1;
-    }
-
-    protected function validState(mixed $pending, string $state, Model $connectable): bool
-    {
-        if (!is_array($pending) || !is_string($pending['state'] ?? null) || $state === '') {
-            return false;
-        }
-
-        try {
-            $expiresAt = Carbon::parse($pending['expires_at'] ?? now()->subMinute()->toIso8601String());
-        } catch (Throwable) {
-            return false;
-        }
-
-        return hash_equals($pending['state'], $state)
-            && ($pending['connectable'] ?? null) === $this->connectableKey($connectable)
-            && $expiresAt->isFuture();
-    }
-
-    /**
-     * The model being connected on this request. The resolver's return type
-     * (`Model&Connectable`) is the contract: a resolver handing back a model
-     * without it fails right there, with a TypeError naming the class. A
-     * resolver with nothing to connect throws NoConnectableException, which
-     * the JSON endpoints answer with 403 `no_connectable`.
-     */
-    protected function connectable(Request $request): Model&Connectable
-    {
-        return $this->resolver->resolve($request);
-    }
-
-    protected function code(string $code, int $status): JsonResponse
-    {
-        return new JsonResponse(['code' => $code], $status);
-    }
-
-    protected function connectableKey(Model $connectable): string
-    {
-        return $connectable->getMorphClass() . ':' . $connectable->getKey();
     }
 
     protected function result(string $status): View

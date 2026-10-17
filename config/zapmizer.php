@@ -37,8 +37,10 @@ return [
         // default returns the authenticated user; point it at the current
         // team (or anything else using the Connectable trait) as needed.
         'resolver' => \NotificationChannels\Zapmizer\Connect\ResolvesAuthenticatedUser::class,
-        // How long the authorization popup has to come back with a code.
-        'state_ttl_minutes' => (int) env('ZAPMIZER_CONNECT_STATE_TTL', 10),
+        // How long the popup has to come back, in minutes. The hosted page may take
+        // the customer through checkout, so keep it generous. Also sent as the
+        // session's expires_in (Zapmizer's floor is 15 minutes).
+        'state_ttl_minutes' => (int) env('ZAPMIZER_CONNECT_STATE_TTL', 30),
     ],
 
     'webhook' => [

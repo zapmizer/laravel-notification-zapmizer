@@ -63,7 +63,7 @@ const RELINK_FAILED = 'Não foi possível religar o número. Tente de novo.';
 const RELINK_MESSAGES: Record<string, string> = {
   denied: 'Religação cancelada.',
   plan_limit: 'O plano do Zapmizer não tem vaga para mais um número. Libere um número lá (ou mude de plano) e tente de novo.',
-  subscription_required: 'A conta do Zapmizer foi vinculada, mas não tem assinatura ativa. Conecte de novo para assinar.',
+  subscription_required: 'A conta do Zapmizer não tem assinatura ativa. Assine no Zapmizer e tente de novo.',
 };
 
 async function relink() {

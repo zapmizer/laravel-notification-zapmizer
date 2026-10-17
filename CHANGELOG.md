@@ -145,7 +145,7 @@ Quebras: nenhuma de comportamento. Só métodos e classes novos, e o `PartnerCli
 | 429 na troca → `exchange_failed` | o popup espera e repete; `rate_limited` se não der |
 | 429 de chamada de parceiro: `Log::error` com o corpo | `Log::warning` sem corpo |
 | `webhook_failed` = inativa | `webhook_failed` = ativa, envia, sem secret para receber; mensagem nova ("Connected and sending, but incoming messages can't be verified…"); o stub `ConnectButton` emite `connected` e mostra o aviso |
-| `destroy` não revogava | `destroy` revoga o token |
+| `destroy` não revogava | `destroy` revoga o token. Um app que usa o mesmo token fora da lib perde o acesso ao desconectar |
 | `APP_KEY` trocado: callback `exchange_failed`, `destroy` e `show?live=1` 500 | o valor ilegível vale como ausente, com warning; é sobrescrito no connect seguinte (inclusive na troca de time); `show?live=1` responde `state: reauth_required` |
 | view `connect-result` usada também por quem montava reconnect | view nova `reconnect-result` |
 
@@ -158,7 +158,7 @@ Correções (já não funcionavam com token de connect, 403 `missing_ability`):
 Novo:
 
 - rotas de reconnect;
-- `revoke_previous_token` (desligada por padrão; recomendado ligar);
+- `revoke_previous_token` (desligada por padrão; recomendado ligar). Uma config publicada não tem a chave dentro de `connect` (o merge é raso): acrescente `'revoke_previous_token' => env('ZAPMIZER_CONNECT_REVOKE_PREVIOUS_TOKEN', false),` ou republique a config, senão a variável de ambiente não faz efeito;
 - eventos `NumberConnected` e `ReconnectRefused`;
 - `has_webhook_secret` na serialização da conexão (aditivo);
 - `ZapmizerApiException::context()`;

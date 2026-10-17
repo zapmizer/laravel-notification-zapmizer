@@ -606,6 +606,8 @@ ZAPMIZER_CONNECT_REVOKE_PREVIOUS_TOKEN=true
 
 `true`, `1`, `on` and `yes` turn it on; anything else, absent included, leaves it off.
 
+The config merge is shallow: a `config/zapmizer.php` published before this version has no `revoke_previous_token` inside `connect`, and the env var does nothing. Add `'revoke_previous_token' => env('ZAPMIZER_CONNECT_REVOKE_PREVIOUS_TOKEN', false),` inside `connect` in the published config, or re-publish it.
+
 **When you turn it on, remove the `updating` observer** the previous version of this guide taught for revoking the previous token: otherwise the token is revoked twice, and the second `DELETE` logs.
 
 ### Catch order
@@ -687,7 +689,7 @@ The partner client changed, and so did the connect flow ("Connect flow" below).
 
 The callback and `destroy` no longer call `/webhooks` (rotation, remote deletion): with a connect token they always failed with 403 `missing_ability`, left the connection inactive, and the next connect repeated the failure.
 
-- **Turn `revoke_previous_token` on** (`ZAPMIZER_CONNECT_REVOKE_PREVIOUS_TOKEN=true`), and remove the `updating` observer the previous version of this guide taught.
+- **Turn `revoke_previous_token` on** (`ZAPMIZER_CONNECT_REVOKE_PREVIOUS_TOKEN=true`), and remove the `updating` observer the previous version of this guide taught. A published `config/zapmizer.php` has no such key inside `connect` (the merge is shallow), so the env var alone does nothing: add `'revoke_previous_token' => env('ZAPMIZER_CONNECT_REVOKE_PREVIOUS_TOKEN', false),` inside `connect`, or re-publish the config.
 - A `config/zapmizer.php` you published keeps `'state_ttl_minutes' => (int) env('ZAPMIZER_CONNECT_STATE_TTL', 10)`: raise it to 30, or delete the key to take the package's default.
 - Re-publish the stubs with `php artisan vendor:publish --tag=zapmizer-wizard --force`. `--force` overwrites your local edits of the published files: save them first and apply them again.
 - A subclass of `ConnectController`: `obtainWebhookSecret()` and `forgetRemoteWebhook()` are gone, and the state methods moved to the `HandlesPopupState` trait with the same signatures. `popupStatus()` reads `static::POPUP_ERRORS`. An own `result()` with a map of messages now receives `subscription_required` and `rate_limited` (and no longer `qr_unavailable`): add both keys.

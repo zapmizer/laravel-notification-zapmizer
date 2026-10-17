@@ -18,9 +18,12 @@ const props = withDefaults(
 /**
  * `reconnect` ("Trocar número") é um connect novo, com outro número ou outra
  * conta. "Religar número" é outra coisa: traz de volta o MESMO número, com o
- * token que a conexão já tem, e é resolvido aqui dentro.
+ * token que a conexão já tem, e é resolvido aqui dentro. Quando ele dá certo
+ * (`online`, `starting` ou o popup com `reconnected`), o painel emite
+ * `relinked`: ligue em `beginTurnOn()` do `useZapmizerIntegration`, que
+ * acelera o polling e segura o `off` enquanto o número sobe.
  */
-const emit = defineEmits<{ refresh: []; reconnect: []; disconnect: [] }>();
+const emit = defineEmits<{ refresh: []; relinked: []; reconnect: []; disconnect: [] }>();
 
 const number = computed(() => props.integration.phone_number || '');
 const teamName = computed(() => props.integration.zapmizer_team_name ?? null);
@@ -46,6 +49,7 @@ const health = computed(() => {
   if (state === 'zapmizer_unavailable') return { tone: 'gp-tag-amber', label: 'Zapmizer instável' };
   if (props.integration.is_online) return { tone: 'gp-tag-mint', label: 'Online' };
   if (state === 'connected') return { tone: 'gp-tag-mint', label: 'Conectado' };
+  if (state === 'connecting') return { tone: 'gp-tag-muted', label: 'Conectando...' };
   if (state === 'disconnected' || state === 'off' || state === 'qrcode') return { tone: 'gp-tag-amber', label: 'Desconectado no celular' };
   if (state === undefined) return { tone: 'gp-tag-mint', label: 'Conectado' };
 
@@ -75,7 +79,7 @@ async function relink() {
     const result = await relinkZapmizer();
 
     // `needs_client`: o popup abriu; o resultado chega por postMessage.
-    if (result.status === 'online' || result.status === 'starting') emit('refresh');
+    if (result.status === 'online' || result.status === 'starting') emit('relinked');
     if (result.status === 'refused') relinkMessage.value = result.message;
   } catch (e) {
     const status = (e as { response?: { status?: number } }).response?.status ?? 0;
@@ -94,7 +98,7 @@ function onMessage(event: MessageEvent<Partial<ZapmizerReconnectMessage>>) {
 
   if (event.data.status === 'reconnected') {
     relinkMessage.value = '';
-    emit('refresh');
+    emit('relinked');
 
     return;
   }

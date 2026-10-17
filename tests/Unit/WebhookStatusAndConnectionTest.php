@@ -283,4 +283,36 @@ class WebhookStatusAndConnectionTest extends TestCase
 
         Event::assertDispatched(ConnectionStateChanged::class, fn (ConnectionStateChanged $event) => $event->state->kind === 'restricted');
     }
+
+    /**
+     * @return array<string, array{0: int}>
+     */
+    public static function timestampsOutOfRange(): array
+    {
+        return ['PHP_INT_MAX' => [PHP_INT_MAX], 'PHP_INT_MIN' => [PHP_INT_MIN], 'zero' => [0], 'negative' => [-1], '2^37' => [2 ** 37]];
+    }
+
+    /** @dataProvider timestampsOutOfRange */
+    #[DataProvider('timestampsOutOfRange')]
+    public function testATimestampOutOfRangeReadsAsNullEndToEnd(int $timestamp)
+    {
+        Event::fake([MessageStatusUpdated::class]);
+        $this->connectedTeam('secret-a');
+
+        $this->deliverSigned($this->catalogEnvelope('message_status', ['timestamp' => $timestamp] + self::catalogData()['message_status']), 'secret-a')
+            ->assertOk()
+            ->assertSeeText('Webhook Received');
+
+        Event::assertDispatched(MessageStatusUpdated::class, fn (MessageStatusUpdated $event) => $event->status->occurredAt === null);
+    }
+
+    public function testTheLargestTimestampInRangeIsRead()
+    {
+        Event::fake([MessageStatusUpdated::class]);
+        $this->connectedTeam('secret-a');
+
+        $this->deliverSigned($this->catalogEnvelope('message_status', ['timestamp' => 2 ** 37 - 1] + self::catalogData()['message_status']), 'secret-a')->assertOk();
+
+        Event::assertDispatched(MessageStatusUpdated::class, fn (MessageStatusUpdated $event) => $event->status->occurredAt?->getTimestamp() === 2 ** 37 - 1);
+    }
 }

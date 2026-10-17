@@ -5,6 +5,7 @@ namespace NotificationChannels\Zapmizer;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
 use NotificationChannels\Zapmizer\Support\PhoneNumber;
+use NotificationChannels\Zapmizer\Webhook\Fields;
 
 /**
  * Class InboundMessage.
@@ -100,7 +101,7 @@ final class InboundMessage
             isGroup: $isGroup,
             fromMe: (bool) ($message['fromMe'] ?? false),
             hasUnresolvedSender: PhoneNumber::isLidWid($from) || PhoneNumber::isLidWid($author),
-            sentAt: is_numeric($timestamp) ? Carbon::createFromTimestamp((int) $timestamp) : Carbon::now(),
+            sentAt: (is_numeric($timestamp) ? Fields::fromTimestamp((int) $timestamp) : null) ?? Carbon::now(),
             raw: $message,
             author: $author,
             authorPhone: $author === null || PhoneNumber::isLidWid($author) ? '' : PhoneNumber::fromWid($author),

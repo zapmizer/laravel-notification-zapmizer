@@ -58,4 +58,31 @@ class MessageReceivedEnvelopeTest extends TestCase
         $this->assertNull($event->envelope);
         $this->assertSame($message, $event->message);
     }
+
+    public function testATimestampOutOfRangeFallsBackToNowEndToEnd()
+    {
+        // Same fallback as a timestamp that is not a number.
+        Event::fake([MessageReceived::class]);
+        $this->connectedTeam('secret-a');
+        $this->travelTo(now()->startOfSecond());
+
+        $this->deliverSigned($this->messageEnvelope(overrides: ['timestamp' => PHP_INT_MAX]), 'secret-a')
+            ->assertOk()
+            ->assertSeeText('Webhook Handled');
+
+        Event::assertDispatched(MessageReceived::class, fn (MessageReceived $event) => $event->message->sentAt->equalTo(now()));
+    }
+
+    public function testATimestampOutOfRangeDoesNotThrowWhenBuildingByHand()
+    {
+        $this->travelTo(now()->startOfSecond());
+
+        foreach ([PHP_INT_MAX, '99999999999999999999', -5] as $timestamp) {
+            $message = InboundMessage::fromMessage(['timestamp' => $timestamp] + $this->messageEnvelope()['data'][0]);
+
+            $this->assertTrue($message->sentAt->equalTo(now()), (string) $timestamp);
+        }
+
+        $this->assertSame(1760659200, InboundMessage::fromMessage(['timestamp' => 1760659200] + $this->messageEnvelope()['data'][0])->sentAt->getTimestamp());
+    }
 }

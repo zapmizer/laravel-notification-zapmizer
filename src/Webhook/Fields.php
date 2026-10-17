@@ -81,9 +81,20 @@ final class Fields
      */
     public static function time(array $data, string $key): ?Carbon
     {
-        $value = self::int($data, $key);
+        return self::fromTimestamp(self::int($data, $key));
+    }
 
-        return $value === null ? null : Carbon::createFromTimestamp($value);
+    /**
+     * Seconds since 1970 to a Carbon, only in a sane range (after 1970, before
+     * 2^37 — year 6325). Anything else is null: Carbon throws on the extremes.
+     */
+    public static function fromTimestamp(?int $seconds): ?Carbon
+    {
+        if ($seconds === null || $seconds <= 0 || $seconds >= 2 ** 37) {
+            return null;
+        }
+
+        return Carbon::createFromTimestamp($seconds);
     }
 
     /**

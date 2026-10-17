@@ -131,7 +131,8 @@ class ZapmizerServiceProvider extends ServiceProvider
             ], 'config');
 
             // One tag per flow, so an app publishes only the table it uses;
-            // `migrations` still publishes both (compat).
+            // `migrations` still publishes both (compat). The per-connection
+            // webhook key is optional and has only its own tag.
             $this->publishes([
                 __DIR__ . '/../database/migrations/create_whatsapp_verifieds_table.php.stub' => database_path('migrations/' . date('Y_m_d_His') . '_create_whatsapp_verifieds_table.php'),
             ], ['migrations', 'zapmizer-migrations-verify']);
@@ -139,6 +140,10 @@ class ZapmizerServiceProvider extends ServiceProvider
             $this->publishes([
                 __DIR__ . '/../database/migrations/create_zapmizer_connections_table.php.stub' => database_path('migrations/' . date('Y_m_d_His', time() + 1) . '_create_zapmizer_connections_table.php'),
             ], ['migrations', 'zapmizer-migrations-connect']);
+
+            $this->publishes([
+                __DIR__ . '/../database/migrations/add_webhook_key_to_zapmizer_connections_table.php.stub' => database_path('migrations/' . date('Y_m_d_His', time() + 2) . '_add_webhook_key_to_zapmizer_connections_table.php'),
+            ], 'zapmizer-migrations-webhook-key');
 
             $this->publishes([
                 __DIR__ . '/../resources/views' => resource_path('views/vendor/zapmizer'),

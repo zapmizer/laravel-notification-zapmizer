@@ -33,4 +33,18 @@ class PublishesMigrationsTest extends TestCase
             $this->stubsFor('migrations')
         );
     }
+
+    public function testTheWebhookKeyMigrationHasItsOwnTag()
+    {
+        $this->assertEquals(['add_webhook_key_to_zapmizer_connections_table.php.stub'], $this->stubsFor('zapmizer-migrations-webhook-key'));
+    }
+
+    public function testTheWebhookKeyMigrationRunsAfterTheCreate()
+    {
+        $create = basename(array_values(ServiceProvider::pathsToPublish(ZapmizerServiceProvider::class, 'zapmizer-migrations-connect'))[0]);
+        $key = basename(array_values(ServiceProvider::pathsToPublish(ZapmizerServiceProvider::class, 'zapmizer-migrations-webhook-key'))[0]);
+
+        $this->assertMatchesRegularExpression('/^\d{4}_\d{2}_\d{2}_\d{6}_add_webhook_key_to_zapmizer_connections_table\.php$/', $key);
+        $this->assertGreaterThan(0, strcmp(substr($key, 0, 17), substr($create, 0, 17)));
+    }
 }

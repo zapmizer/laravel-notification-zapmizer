@@ -31,7 +31,8 @@ use Throwable;
  * serialization — deliberately with no accessor on top of them: an
  * `Attribute` accessor for `api_token` would win over the cast and return
  * the ciphertext. For screens there is `api_token_masked`, a separate
- * attribute.
+ * attribute. The per-connection `webhook_key` is `hidden` too: not a
+ * credential, but nothing outside the server needs it.
  *
  * `$casts` is a property, not the `casts()` method: the method only exists
  * on Laravel 11+, and on 10 the credentials would be written in the clear.
@@ -46,6 +47,7 @@ class ZapmizerConnection extends Model
         'api_token',
         'webhook_secret',
         'webhook_previous_secret',
+        'webhook_key',
     ];
 
     protected $appends = [

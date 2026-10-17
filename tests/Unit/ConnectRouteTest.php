@@ -16,6 +16,7 @@ use Illuminate\Testing\TestResponse;
 use InvalidArgumentException;
 use LogicException;
 use NotificationChannels\Zapmizer\Connect\ResolvesAuthenticatedUser;
+use NotificationChannels\Zapmizer\Events\MessageReceived;
 use NotificationChannels\Zapmizer\Events\NumberConnected;
 use NotificationChannels\Zapmizer\Http\Controllers\ConnectController;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
@@ -35,6 +36,7 @@ use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesExternalIdTeam;
 use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesNothing;
 use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesPlainModel;
 use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesTeamWithoutTheKeyColumn;
+use NotificationChannels\Zapmizer\Test\Fixtures\SignsWebhookDeliveries;
 use NotificationChannels\Zapmizer\Test\Fixtures\Team;
 use NotificationChannels\Zapmizer\Test\Fixtures\User;
 use NotificationChannels\Zapmizer\Test\Concerns\FakesZapmizerHttp;
@@ -50,6 +52,7 @@ class ConnectRouteTest extends TestCase
     use DrivesTheConnectRoutes;
     use FakesZapmizerHttp;
     use InvalidBaseUris;
+    use SignsWebhookDeliveries;
     use TogglesConnectionWebhook;
 
     /** @var array<int, array{request: \GuzzleHttp\Psr7\Request}> */
@@ -2720,6 +2723,197 @@ class ConnectRouteTest extends TestCase
             $this->assertNull($this->pendingKey());
             $this->assertSame('http://localhost/zapmizer/webhook', $this->sentBody(2)['webhook_url']);
         }
+    }
+
+    public function testC41TheShowNeverCarriesTheKey()
+    {
+        $this->enableKeyedWebhooks();
+        $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer());
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+        $this->assertNotNull($this->storedKey());
+
+        $response = $this->getJson(route('zapmizer.connect.show'))->assertOk();
+
+        $this->assertArrayNotHasKey('webhook_key', $response->json('connection'));
+        $this->assertArrayHasKey('has_webhook_secret', $response->json('connection'));
+        $this->assertArrayNotHasKey('webhook_key', $this->team()->zapmizerConnection->toArray());
+    }
+
+    /**
+     * A message from `$wid` delivered to the keyed URL of `$key`, signed
+     * with `$secret`.
+     */
+    protected function deliverToKey(string $key, string $secret, string $wid): TestResponse
+    {
+        return $this->deliverSigned($this->messageEnvelope(wid: $wid), $secret, wid: $wid, path: '/zapmizer/webhook/' . $key);
+    }
+
+    protected function assertRevokedAt(int $index, string $token): void
+    {
+        $request = $this->history[$index]['request'];
+
+        $this->assertSame('DELETE', $request->getMethod());
+        $this->assertSame(self::DELETE_PATH, (string) $request->getUri());
+        $this->assertSame('Bearer ' . $token, $request->getHeaderLine('Authorization'));
+    }
+
+    public function testC30AnotherNumberOnTheSameTeamSharesTheUrl()
+    {
+        $this->enableKeyedWebhooks();
+        Event::fake([MessageReceived::class]);
+        $this->fakeHttp(
+            $this->sessionCreated(),
+            $this->tokenAnswer(['webhook_secret' => 'whsec_1']),
+            $this->sessionCreated(),
+            $this->tokenAnswer(['token' => '2|sanctum', 'phone_number' => '5581922220000', 'bot_instance_id' => 10, 'webhook_secret' => null]),
+        );
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+        $k1 = $this->storedKey();
+
+        $this->startConnect()->assertOk();
+        $this->assertSame($this->keyedUrl($k1), $this->sentBody(2)['webhook_url']);
+
+        // Paired, code not exchanged yet: the row still holds the old number.
+        $this->deliverToKey($k1, 'whsec_1', '5581922220000@c.us')->assertOk()->assertSeeText('Webhook Received');
+
+        $this->finishConnect()->assertSee('status: "ok"', false);
+
+        $this->assertSame($k1, $this->storedKey());
+        $this->assertSame('5581922220000', $this->team()->zapmizerConnection->phone_number);
+
+        $this->deliverToKey($k1, 'whsec_1', '5581911110000@c.us')->assertOk()->assertSeeText('Webhook Received');
+        $this->deliverToKey($k1, 'whsec_1', '5581922220000@c.us')->assertOk()->assertSeeText('Webhook Handled');
+
+        Event::assertDispatchedTimes(MessageReceived::class, 1);
+        $this->assertCount(4, $this->history);
+        $this->assertSame(0, $this->revocationCalls());
+        $this->assertNoWebhookCalls();
+    }
+
+    public function testC31AnotherNumberWithRevocationRevokesThePrevious()
+    {
+        $this->enableKeyedWebhooks();
+        config()->set('zapmizer.connect.revoke_previous_token', true);
+        $this->fakeHttp(
+            $this->sessionCreated(),
+            $this->tokenAnswer(['webhook_secret' => 'whsec_1']),
+            $this->sessionCreated(),
+            $this->tokenAnswer(['token' => '2|sanctum', 'phone_number' => '5581922220000', 'bot_instance_id' => 10, 'webhook_secret' => null]),
+            new Response(204),
+        );
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+        $k1 = $this->storedKey();
+        $this->connect()->assertSee('status: "ok"', false);
+
+        $this->assertSame($this->keyedUrl($k1), $this->sentBody(2)['webhook_url']);
+        $this->assertSame($k1, $this->storedKey());
+        $this->assertCount(5, $this->history);
+        $this->assertRevoked('1|sanctum');
+        $this->assertNoWebhookCalls();
+    }
+
+    public function testC32AnotherTeamKeepsTheKeyAndTheOldSecretGets401()
+    {
+        $this->enableKeyedWebhooks();
+        $this->fakeHttp(
+            $this->sessionCreated(),
+            $this->tokenAnswer(['webhook_secret' => 'whsec_1']),
+            $this->sessionCreated(),
+            $this->tokenAnswer(['token' => '2|sanctum', 'team_id' => 8, 'webhook_id' => 77, 'webhook_secret' => 'whsec_77']),
+        );
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+        $k1 = $this->storedKey();
+        $this->connect()->assertSee('status: "ok"', false);
+
+        $connection = $this->team()->zapmizerConnection;
+        $this->assertSame($this->keyedUrl($k1), $this->sentBody(2)['webhook_url']);
+        $this->assertSame($k1, $this->storedKey());
+        $this->assertSame(8, $connection->zapmizer_team_id);
+        $this->assertSame('whsec_77', $connection->webhook_secret);
+
+        $this->watchQueries();
+        $this->deliverToKey($k1, 'whsec_1', '5581911110000@c.us')->assertUnauthorized();
+        $this->assertCount(1, $this->connectionQueries());
+
+        $this->deliverToKey($k1, 'whsec_77', '5581911110000@c.us')->assertOk()->assertSeeText('Webhook Handled');
+        $this->assertCount(4, $this->history);
+        $this->assertNoWebhookCalls();
+    }
+
+    public function testC33ABackAndForthWithoutRevocationRecoversOnTheNextConnect()
+    {
+        $this->enableKeyedWebhooks();
+        $this->fakeHttp(
+            $this->sessionCreated(),
+            $this->tokenAnswer(['webhook_secret' => 'whsec_1']),
+            $this->sessionCreated(),
+            $this->tokenAnswer(['token' => '2|sanctum', 'team_id' => 8, 'webhook_id' => 77, 'webhook_secret' => 'whsec_77']),
+            $this->sessionCreated(),
+            $this->tokenAnswer(['token' => '3|sanctum', 'team_id' => 7, 'webhook_id' => 42, 'webhook_secret' => null]),
+            $this->sessionCreated(),
+            $this->tokenAnswer(['token' => '4|sanctum', 'team_id' => 7, 'webhook_id' => 45, 'webhook_secret' => 'whsec_45']),
+        );
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+        $k1 = $this->storedKey();
+        $this->connect()->assertSee('status: "ok"', false);
+
+        // Back to team 7: the same URL finds team 7's webhook, no secret.
+        $this->connect()->assertSee('status: "webhook_failed"', false);
+
+        $connection = $this->team()->zapmizerConnection;
+        $this->assertTrue($connection->is_active);
+        $this->assertNull($connection->webhook_secret);
+        $this->assertSame($k1, $this->storedKey());
+        $this->assertSame($this->keyedUrl($k1), $this->sentBody(4)['webhook_url']);
+
+        $this->connect()->assertSee('status: "ok"', false);
+
+        $this->assertMatchesRegularExpression(self::KEY_FORMAT, (string) $this->storedKey());
+        $this->assertNotSame($k1, $this->storedKey());
+        $this->assertSame($this->keyedUrl($this->storedKey()), $this->sentBody(6)['webhook_url']);
+        $this->assertSame('whsec_45', $this->team()->zapmizerConnection->webhook_secret);
+        $this->assertCount(8, $this->history);
+        $this->assertNoWebhookCalls();
+    }
+
+    public function testC34ABackAndForthWithRevocationGetsANewWebhook()
+    {
+        $this->enableKeyedWebhooks();
+        config()->set('zapmizer.connect.revoke_previous_token', true);
+        $this->fakeHttp(
+            $this->sessionCreated(),
+            $this->tokenAnswer(['webhook_secret' => 'whsec_1']),
+            $this->sessionCreated(),
+            $this->tokenAnswer(['token' => '2|sanctum', 'team_id' => 8, 'webhook_id' => 77, 'webhook_secret' => 'whsec_77']),
+            new Response(204),
+            $this->sessionCreated(),
+            $this->tokenAnswer(['token' => '3|sanctum', 'team_id' => 7, 'webhook_id' => 44, 'webhook_secret' => 'whsec_44']),
+            new Response(204),
+        );
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+        $k1 = $this->storedKey();
+        $this->connect()->assertSee('status: "ok"', false);
+        $this->connect()->assertSee('status: "ok"', false);
+
+        $this->assertSame($k1, $this->storedKey());
+        $this->assertSame($this->keyedUrl($k1), $this->sentBody(5)['webhook_url']);
+        $this->assertCount(8, $this->history);
+        $this->assertRevokedAt(4, '1|sanctum');
+        $this->assertRevokedAt(7, '2|sanctum');
+        $this->assertSame('whsec_44', $this->team()->zapmizerConnection->webhook_secret);
+        $this->assertNoWebhookCalls();
     }
 
     public function testC47TheKeySurvivesTheWaitOfA429()

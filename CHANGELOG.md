@@ -1,5 +1,9 @@
 # Changelog
 
+# 0.4.1
+
+Só documentação. `syncMessages()` devolve as mensagens **gravadas** depois do cursor: as que chegam no sync de uma reconexão entram, mas a edição de uma mensagem que já existia não volta (o Zapmizer pagina pela chave primária). O texto da 0.4.0 dizia "editadas, apagadas".
+
 # 0.4.0
 
 Sem breaking. **Recuperar mensagens exige o Zapmizer com `GET /api/whatsapp-messages`.**

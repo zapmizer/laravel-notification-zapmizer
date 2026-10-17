@@ -198,7 +198,7 @@ class InstanceClient
     }
 
     /**
-     * Every message of the number that changed after `$cursor` (the `cursor`
+     * Every message of the number stored after `$cursor` (the `cursor`
      * of the previous page). On the very first call, without a cursor, pass
      * `$since` (seconds) so the whole history is not walked. Only for numbers
      * by QR (a 422 otherwise); 429 is over the limit of 30 requests a minute.

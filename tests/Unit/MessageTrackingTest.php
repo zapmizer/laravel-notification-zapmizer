@@ -220,6 +220,41 @@ class MessageTrackingTest extends TestCase
         $this->assertSame('http://localhost/api/sent-messages/a%2Fb', $transport->calls[0]['url']);
     }
 
+    public function testALegacySendHasNothingToTrack()
+    {
+        $transport = new RecordingTransport();
+        $sent = SentMessage::fromArray(json_decode(SentMessageTest::LEGACY, true));
+
+        $this->assertNull($this->client($transport)->track($sent));
+        $this->assertSame([], $transport->calls);
+    }
+
+    public function testAStoredNullSelfLinkHasNothingToTrack()
+    {
+        $transport = new RecordingTransport();
+        $sent = SentMessage::fromArray(json_decode(SentMessageTest::OFFICIAL_QUEUED, true));
+
+        $this->assertNull($this->client($transport)->track($sent->selfUrl));
+        $this->assertSame([], $transport->calls);
+    }
+
+    public function testDotIdsAreRefusedBeforeAnyRequest()
+    {
+        $transport = new RecordingTransport();
+        $client = $this->client($transport);
+
+        foreach (['.', '..'] as $id) {
+            try {
+                $client->sentMessage($id);
+                $this->fail("Expected InvalidArgumentException for {$id}.");
+            } catch (InvalidArgumentException $exception) {
+                $this->assertStringContainsString('id', $exception->getMessage());
+            }
+        }
+
+        $this->assertSame([], $transport->calls);
+    }
+
     public function testAQueuedOfficialSendHasNothingToTrack()
     {
         $transport = new RecordingTransport();
@@ -249,13 +284,16 @@ class MessageTrackingTest extends TestCase
     public static function linksThatAreNotTracking(): array
     {
         return [
-            'legacy send' => [SentMessage::fromArray(json_decode(SentMessageTest::LEGACY, true))],
             'legacy link' => ['https://app.zapmizer.com/api/messages/7'],
             'not a url' => ['sent-messages/1'],
             'empty' => [''],
             'no id' => ['https://app.zapmizer.com/api/sent-messages/'],
             'nested' => ['https://app.zapmizer.com/api/sent-messages/1/extra'],
             'meta id not numeric' => ['https://app.zapmizer.com/api/meta-messages/abc'],
+            'dot' => ['https://app.zapmizer.com/api/sent-messages/.'],
+            'dot dot' => ['https://app.zapmizer.com/api/sent-messages/..'],
+            'encoded dot dot' => ['https://app.zapmizer.com/api/sent-messages/%2E%2E'],
+            'encoded dot' => ['https://app.zapmizer.com/api/sent-messages/%2e'],
         ];
     }
 

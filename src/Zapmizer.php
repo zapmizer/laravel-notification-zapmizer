@@ -12,6 +12,7 @@ use NotificationChannels\Zapmizer\Messages\MetaMessageStatus;
 use NotificationChannels\Zapmizer\Messages\QrMessageStatus;
 use NotificationChannels\Zapmizer\Messages\SentMessage;
 use NotificationChannels\Zapmizer\Messages\SentTemplate;
+use NotificationChannels\Zapmizer\Messages\TrackingPayload;
 use NotificationChannels\Zapmizer\Support\JsonResponse;
 use NotificationChannels\Zapmizer\Support\Payload;
 use Psr\Http\Message\ResponseInterface;
@@ -176,13 +177,13 @@ class Zapmizer
      * Where a send from a QR number is now (`GET /sent-messages/{id}`).
      * Prefer `track()`, which reads the kind of number from the send.
      *
-     * @throws InvalidArgumentException when `$id` is empty
+     * @throws InvalidArgumentException when `$id` is empty, `.` or `..`
      * @throws Exceptions\ZapmizerException
      */
     public function sentMessage(string $id): QrMessageStatus
     {
-        if ($id === '') {
-            throw new InvalidArgumentException('The sent message id must not be empty.');
+        if (!TrackingPayload::isId($id)) {
+            throw new InvalidArgumentException('The sent message id must not be empty, `.` nor `..`.');
         }
 
         $this->guardToken();
@@ -215,23 +216,29 @@ class Zapmizer
      * link stored from it. The link says whether the number is QR
      * (`sent-messages`) or official (`meta-messages`); the call goes to
      * this client's API base with this client's token, never to the host
-     * written in the link. Null when the send has nothing to follow (an
-     * official send that went through a queue, or no `links.self`): that is
-     * not an error.
+     * written in the link.
      *
-     * @throws InvalidArgumentException when the link is not a tracking link
-     *                                  (e.g. `/messages/{id}` of the legacy
-     *                                  shape, sent without `api-version`)
+     * Null when there is nothing to follow, which is not an error: an
+     * official send that went through a queue (no `links.self`, so a stored
+     * link may be null too), or a `SentMessage` of the legacy shape (sent
+     * without `api-version`, its link is `/messages/{id}`).
+     *
+     * @throws InvalidArgumentException when a link given as a string is not
+     *                                  a tracking link
      * @throws Exceptions\ZapmizerException
      */
-    public function track(SentMessage|string $sent): QrMessageStatus|MetaMessageStatus|null
+    public function track(SentMessage|string|null $sent): QrMessageStatus|MetaMessageStatus|null
     {
+        if ($sent === null) {
+            return null;
+        }
+
         if ($sent instanceof SentMessage) {
             if (!$sent->isTrackable()) {
                 return null;
             }
 
-            $sent = $sent->selfUrl;
+            $sent = (string) $sent->selfUrl;
         }
 
         [$kind, $id] = $this->trackingLink($sent);
@@ -249,15 +256,8 @@ class Zapmizer
      */
     protected function trackingLink(string $link): array
     {
-        $path = Payload::url($link, underscoreInHost: true) === null ? null : parse_url($link, PHP_URL_PATH);
-
-        if (!is_string($path)
-            || preg_match('#/(sent-messages|meta-messages)/([^/]+)\z#', $path, $match) !== 1
-            || ($match[1] === 'meta-messages' && !ctype_digit($match[2]))) {
-            throw new InvalidArgumentException('Not a tracking link (`sent-messages/{id}` or `meta-messages/{id}`): send with `api-version: 2025-06-27` to get one.');
-        }
-
-        return [$match[1], rawurldecode($match[2])];
+        return TrackingPayload::link($link)
+            ?? throw new InvalidArgumentException('Not a tracking link (`sent-messages/{id}` or `meta-messages/{id}`): send with `api-version: 2025-06-27` to get one.');
     }
 
     /**

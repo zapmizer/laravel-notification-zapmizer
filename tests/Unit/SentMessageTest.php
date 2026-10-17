@@ -6,6 +6,7 @@ use NotificationChannels\Zapmizer\Messages\MessageStatus;
 use NotificationChannels\Zapmizer\Messages\SentMessage;
 use NotificationChannels\Zapmizer\Test\Concerns\AssertsContract;
 use NotificationChannels\Zapmizer\Test\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class SentMessageTest extends TestCase
 {
@@ -75,6 +76,30 @@ class SentMessageTest extends TestCase
         $this->assertSame('551199999999@c.us', $sent->widTo);
         $this->assertSame(MessageStatus::QUEUED, $sent->status);
         $this->assertSame(json_decode(self::LEGACY, true), $sent->raw());
+    }
+
+    public function testTheLegacyLinkIsNotTrackable()
+    {
+        $this->assertFalse($this->sent(self::LEGACY)->isTrackable());
+    }
+
+    /** @dataProvider selfLinksThatAreNotTracking */
+    #[DataProvider('selfLinksThatAreNotTracking')]
+    public function testOnlyATrackingLinkIsTrackable(string $self)
+    {
+        $this->assertFalse(SentMessage::fromArray(['id' => 1, 'links' => ['self' => $self]])->isTrackable());
+    }
+
+    public static function selfLinksThatAreNotTracking(): array
+    {
+        return [
+            'legacy' => ['https://app.zapmizer.com/api/messages/7'],
+            'dot' => ['https://app.zapmizer.com/api/sent-messages/.'],
+            'dot dot' => ['https://app.zapmizer.com/api/sent-messages/..'],
+            'encoded dot dot' => ['https://app.zapmizer.com/api/sent-messages/%2E%2E'],
+            'trailing slash' => ['https://app.zapmizer.com/api/sent-messages/abc/'],
+            'meta not numeric' => ['https://app.zapmizer.com/api/meta-messages/abc'],
+        ];
     }
 
     public function testAnAnswerWithoutFieldsIsAnEmptySend()

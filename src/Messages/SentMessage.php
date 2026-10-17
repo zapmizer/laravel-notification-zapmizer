@@ -65,11 +65,14 @@ final class SentMessage
     }
 
     /**
-     * Whether `Zapmizer::track()` can follow this send.
+     * Whether `Zapmizer::track()` can follow this send: its `links.self` is
+     * a `sent-messages` or `meta-messages` link. False for an official send
+     * that went through a queue (no link) and for the legacy shape (a
+     * `/messages/{id}` link, sent without `api-version`).
      */
     public function isTrackable(): bool
     {
-        return $this->id !== null && $this->selfUrl !== null;
+        return $this->id !== null && TrackingPayload::link($this->selfUrl) !== null;
     }
 
     /**

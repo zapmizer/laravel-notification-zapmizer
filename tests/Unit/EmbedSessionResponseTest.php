@@ -2,14 +2,21 @@
 
 namespace NotificationChannels\Zapmizer\Test\Unit;
 
+use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
+use GuzzleHttp\Psr7\Request as PsrRequest;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Route;
 use InvalidArgumentException;
 use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Http\Responses\EmbedSessionResponse;
 use NotificationChannels\Zapmizer\Test\Concerns\AssertsContract;
 use NotificationChannels\Zapmizer\Test\Concerns\FakesZapmizerHttp;
@@ -17,6 +24,7 @@ use NotificationChannels\Zapmizer\Test\Concerns\InvalidBaseUris;
 use NotificationChannels\Zapmizer\Test\Fixtures\EmbedResponseWithExpiry;
 use NotificationChannels\Zapmizer\Test\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
+use RuntimeException;
 use TypeError;
 
 class EmbedSessionResponseTest extends TestCase
@@ -285,5 +293,327 @@ class EmbedSessionResponseTest extends TestCase
         $this->expectException(TypeError::class);
 
         EmbedSessionResponse::open(fn () => 'x');
+    }
+
+    protected function hook(): \Closure
+    {
+        return function (ZapmizerApiException $exception) {
+            $this->hooked[] = $exception;
+        };
+    }
+
+    protected function openWith(Response|\Throwable ...$answers): EmbedSessionResponse
+    {
+        $client = $this->client(...$answers);
+
+        return EmbedSessionResponse::open(fn () => $client->conversationSession('5521988887777', 'https://app.test'), $this->hook());
+    }
+
+    protected function assertCode(?string $code, \Illuminate\Http\JsonResponse $json): void
+    {
+        $this->assertSame(['code' => $code], $json->getData(true));
+
+        if ($code === null) {
+            $this->assertSame('{"code":null}', $json->getContent());
+        }
+    }
+
+    /** @dataProvider refusalsFromTheContract */
+    #[DataProvider('refusalsFromTheContract')]
+    public function testRefusalFromTheContract(int $status, string $body, int $answered, ?string $code)
+    {
+        $this->assertMatchesContract('POST', '/embed/sessions', $status, $body);
+        $this->recordReports();
+
+        $json = $this->answer($this->openWith(new Response($status, ['Content-Type' => 'application/json'], $body)));
+
+        $this->assertSame($answered, $json->getStatusCode());
+        $this->assertCode($code, $json);
+        $this->assertFalse($json->headers->has('Retry-After'));
+        $this->assertCount(1, $this->hooked);
+        $this->assertSame($status, $this->hooked[0]->status());
+        if ($status === 401) {
+            $this->assertInstanceOf(ZapmizerUnauthorizedException::class, $this->hooked[0]);
+        }
+        $this->assertSame([], $this->reported);
+    }
+
+    public static function refusalsFromTheContract(): array
+    {
+        return [
+            'X3 402' => [402, '{"error":"subscription_required","message":"Sem assinatura."}', 402, 'subscription_required'],
+            'X5 403 not a partner connection' => [403, '{"error":"not_a_partner_connection"}', 403, 'not_a_partner_connection'],
+            'X5 403 origin not allowed' => [403, '{"error":"origin_not_allowed","message":"Origem não liberada."}', 403, 'origin_not_allowed'],
+            'X5 403 missing ability' => [403, '{"error":"missing_ability"}', 403, 'missing_ability'],
+            'X7 422 connection without number' => [422, '{"error":"connection_without_number","message":"Sem número."}', 422, 'connection_without_number'],
+            'X7 422 number unavailable' => [422, '{"error":"number_unavailable"}', 422, 'number_unavailable'],
+            'X7 422 approver without access' => [422, '{"error":"approver_without_access"}', 422, 'approver_without_access'],
+            'X8 422 with errors' => [422, '{"message":"The phone field format is invalid.","errors":{"phone":["The phone field format is invalid."]}}', 422, null],
+            'X8 422 only message' => [422, '{"message":"Invalid."}', 422, null],
+            'X1 401' => [401, '{"message":"Unauthenticated."}', 422, 'reauth_required'],
+        ];
+    }
+
+    /** @dataProvider refusalsOutsideTheContract */
+    #[DataProvider('refusalsOutsideTheContract')]
+    public function testRefusalOutsideTheContract(Response $response, int $answered, ?string $code)
+    {
+        $this->recordReports();
+
+        $json = $this->answer($this->openWith($response));
+
+        $this->assertSame($answered, $json->getStatusCode());
+        $this->assertCode($code, $json);
+        $this->assertCount(1, $this->hooked);
+        $this->assertSame($response->getStatusCode(), $this->hooked[0]->status());
+        $this->assertSame([], $this->reported);
+    }
+
+    public static function refusalsOutsideTheContract(): array
+    {
+        $json = ['Content-Type' => 'application/json'];
+
+        return [
+            'X4 402 without error' => [new Response(402, $json, '{"message":"Payment required."}'), 402, null],
+            'X4 numeric error' => [new Response(402, $json, '{"error":402}'), 402, null],
+            'X6 403 without error' => [new Response(403, $json, '{"message":"Forbidden."}'), 403, null],
+            'X9 404 without error' => [new Response(404, $json, '{"message":"Not Found"}'), 404, null],
+            'X9 404 with error' => [new Response(404, $json, '{"error":"x"}'), 404, 'x'],
+            'X9b 400 in the Meta format' => [new Response(400, $json, '{"error":{"message":"Bad","type":"OAuthException","code":100}}'), 400, null],
+            'X10 409 with error' => [new Response(409, $json, '{"error":"bot_offline"}'), 409, 'bot_offline'],
+            'X10 409 without error' => [new Response(409, $json, '{"message":"Conflict."}'), 409, null],
+            'X11 419' => [new Response(419, $json, '{"message":"Page Expired"}'), 422, 'reauth_required'],
+        ];
+    }
+
+    public function testX9bTheHookSeesNoErrorInTheMetaFormat()
+    {
+        $this->answer($this->openWith(new Response(400, ['Content-Type' => 'application/json'], '{"error":{"message":"Bad","type":"OAuthException","code":100}}')));
+
+        $this->assertCount(1, $this->hooked);
+        $this->assertNull($this->hooked[0]->error());
+    }
+
+    public function testX2AMissingTokenIsReauthRequired()
+    {
+        Http::fake();
+
+        $json = $this->answer(EmbedSessionResponse::open(
+            fn () => app(InstanceClient::class, ['api_token' => null])->inboxSession('https://app.test'),
+            $this->hook(),
+        ));
+
+        $this->assertSame(422, $json->getStatusCode());
+        $this->assertCode('reauth_required', $json);
+        $this->assertCount(1, $this->hooked);
+        $this->assertInstanceOf(ZapmizerUnauthorizedException::class, $this->hooked[0]);
+        $this->assertSame(401, $this->hooked[0]->status());
+        Http::assertNothingSent();
+    }
+
+    /** @dataProvider retryAfters */
+    #[DataProvider('retryAfters')]
+    public function testX12ToX14TheRetryAfter(array $headers, ?string $retryAfter)
+    {
+        $this->recordReports();
+
+        $json = $this->answer($this->openWith(new Response(429, ['Content-Type' => 'application/json'] + $headers, '{"message":"Too Many Attempts."}')));
+
+        $this->assertSame(429, $json->getStatusCode());
+        $this->assertCode('rate_limited', $json);
+        $this->assertSame($retryAfter, $json->headers->get('Retry-After'));
+        $this->assertCount(1, $this->hooked);
+        $this->assertSame([], $this->reported);
+    }
+
+    public static function retryAfters(): array
+    {
+        return [
+            'X12 30' => [['Retry-After' => '30'], '30'],
+            'X13 absent' => [[], null],
+            'X14 http date' => [['Retry-After' => 'Wed, 21 Oct 2026 07:28:00 GMT'], null],
+            'X14 fraction' => [['Retry-After' => '30.5'], null],
+            'X14 negative' => [['Retry-After' => '-1'], null],
+            'X14 empty' => [['Retry-After' => ''], null],
+            'X14 spaces' => [['Retry-After' => ' 30 '], '30'],
+            'X14 zero' => [['Retry-After' => '0'], '0'],
+            'X14b above PHP_INT_MAX' => [['Retry-After' => '99999999999999999999'], '9223372036854775807'],
+        ];
+    }
+
+    /** @dataProvider downOrNoAnswer */
+    #[DataProvider('downOrNoAnswer')]
+    public function testX15X16DownOrNoAnswerIsUnavailable(Response|\Throwable $answer)
+    {
+        $this->recordReports();
+
+        $json = $this->answer($this->openWith($answer));
+
+        $this->assertSame(503, $json->getStatusCode());
+        $this->assertCode('unavailable', $json);
+        $this->assertSame([], $this->hooked);
+        $this->assertSame([], $this->reported);
+    }
+
+    public static function downOrNoAnswer(): array
+    {
+        return [
+            'X15 500' => [new Response(500, [], 'boom')],
+            'X15 502' => [new Response(502, [], 'bad gateway')],
+            'X15 503' => [new Response(503, [], 'down')],
+            'X16 timeout' => [new ConnectException('timed out', new PsrRequest('POST', 'embed/sessions'))],
+        ];
+    }
+
+    /** @dataProvider answersThatAreNotASession */
+    #[DataProvider('answersThatAreNotASession')]
+    public function testX17AnAnswerThatIsNotASessionIsUnavailableAndReported(Response $response)
+    {
+        $this->recordReports();
+
+        $json = $this->answer($this->openWith($response));
+
+        $this->assertSame(503, $json->getStatusCode());
+        $this->assertCode('unavailable', $json);
+        $this->assertCount(1, $this->reported);
+        $this->assertInstanceOf(ZapmizerConnectException::class, $this->reported[0]);
+        $this->assertNotInstanceOf(ZapmizerApiException::class, $this->reported[0]);
+        $this->assertSame([], $this->hooked);
+    }
+
+    public static function answersThatAreNotASession(): array
+    {
+        return array_map(fn (array $row) => [$row[0]], InstanceClientEmbedTest::answersThatAreNotASession());
+    }
+
+    public function testAnAppWideHttpFakeIsUnavailableAndReported()
+    {
+        Http::fake();
+        $this->recordReports();
+
+        $json = $this->answer(EmbedSessionResponse::open(
+            fn () => (new InstanceClient('team-token', new LaravelHttpTransport(), 'http://localhost/api'))->inboxSession('https://app.test'),
+            $this->hook(),
+        ));
+
+        $this->assertSame(503, $json->getStatusCode());
+        $this->assertCode('unavailable', $json);
+        $this->assertCount(1, $this->reported);
+        $this->assertSame([], $this->hooked);
+    }
+
+    /** @dataProvider invalidBaseUris */
+    #[DataProvider('invalidBaseUris')]
+    public function testX18AnInvalidBaseIsUnavailableReportedAndSendsNothing(string $base)
+    {
+        Http::fake();
+        $this->recordReports();
+
+        $json = $this->answer(EmbedSessionResponse::open(
+            fn () => (new InstanceClient('team-token', new LaravelHttpTransport(), $base))->conversationSession('5521988887777', 'https://app.test'),
+            $this->hook(),
+        ));
+
+        $this->assertSame(503, $json->getStatusCode());
+        $this->assertCode('unavailable', $json);
+        $this->assertCount(1, $this->reported);
+        $this->assertIsTheInvalidBaseUri($this->reported[0]);
+        $this->assertSame([], $this->hooked);
+        Http::assertNothingSent();
+    }
+
+    /** @dataProvider clientErrors */
+    #[DataProvider('clientErrors')]
+    public function testX19AClientErrorNeverAnswers401Or419(int $status)
+    {
+        $json = $this->answer($this->openWith(new Response($status, ['Content-Type' => 'application/json'], '{"error":"x"}')));
+
+        $this->assertNotContains($json->getStatusCode(), [401, 419]);
+        $this->assertSame(in_array($status, [401, 419], true) ? 422 : $status, $json->getStatusCode());
+    }
+
+    public static function clientErrors(): array
+    {
+        $statuses = range(400, 499);
+
+        return array_combine(array_map('strval', $statuses), array_map(fn (int $status) => [$status], $statuses));
+    }
+
+    public function testX20NotConnectedIsUnavailableAndReported()
+    {
+        $this->recordReports();
+        $exception = ZapmizerConnectException::notConnected();
+
+        $json = $this->answer(EmbedSessionResponse::open(fn () => throw $exception, $this->hook()));
+
+        $this->assertSame(503, $json->getStatusCode());
+        $this->assertCode('unavailable', $json);
+        $this->assertCount(1, $this->reported);
+        $this->assertSame($exception, $this->reported[0]);
+        $this->assertSame([], $this->hooked);
+    }
+
+    public function testX21AMalformedNameIsTheCallersError()
+    {
+        $this->recordReports();
+        $client = $this->created(self::CONVERSATION);
+
+        try {
+            EmbedSessionResponse::open(fn () => $client->conversationSession('5521988887777', 'https://app.test', [], 'u-1', "Ana \xB1"), $this->hook());
+            $this->fail('Expected GuzzleHttp\Exception\InvalidArgumentException.');
+        } catch (\GuzzleHttp\Exception\InvalidArgumentException) {
+            $this->addToAssertionCount(1);
+        }
+
+        $this->assertCount(0, $this->history);
+        $this->assertSame([], $this->reported);
+        $this->assertSame([], $this->hooked);
+    }
+
+    public function testO4AHookThatThrowsEscapesTheOpen()
+    {
+        $client = $this->client(new Response(403, ['Content-Type' => 'application/json'], '{"error":"origin_not_allowed"}'));
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('app bug');
+
+        EmbedSessionResponse::open(
+            fn () => $client->conversationSession('5521988887777', 'https://app.test'),
+            fn () => throw new RuntimeException('app bug'),
+        );
+    }
+
+    public function testWhatTheHookReturnsIsIgnored()
+    {
+        $client = $this->client(new Response(403, ['Content-Type' => 'application/json'], '{"error":"origin_not_allowed"}'));
+
+        $json = $this->answer(EmbedSessionResponse::open(
+            fn () => $client->conversationSession('5521988887777', 'https://app.test'),
+            fn () => response('x', 500),
+        ));
+
+        $this->assertSame(403, $json->getStatusCode());
+        $this->assertCode('origin_not_allowed', $json);
+    }
+
+    public function testO6TheRouterAnswersTheRefusal()
+    {
+        $client = $this->client(new Response(429, ['Content-Type' => 'application/json', 'Retry-After' => '30'], '{"message":"Too Many Attempts."}'));
+        Route::post('/embed-test', fn () => EmbedSessionResponse::open(fn () => $client->inboxSession('https://app.test')));
+
+        $this->postJson('/embed-test')
+            ->assertStatus(429)
+            ->assertExactJson(['code' => 'rate_limited'])
+            ->assertHeader('Retry-After', '30');
+    }
+
+    public function testO6TheRouterAnswersTheSession()
+    {
+        $client = $this->created(self::INBOX);
+        Route::post('/embed-test', fn () => EmbedSessionResponse::open(fn () => $client->inboxSession('https://app.test')));
+
+        $this->postJson('/embed-test')
+            ->assertOk()
+            ->assertExactJson(self::INBOX_SESSION);
     }
 }

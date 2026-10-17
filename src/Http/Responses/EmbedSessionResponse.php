@@ -8,6 +8,7 @@ use InvalidArgumentException;
 use NotificationChannels\Zapmizer\Connect\EmbedSession;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
 
 class EmbedSessionResponse implements Responsable
 {
@@ -29,7 +30,23 @@ class EmbedSessionResponse implements Responsable
      */
     public static function open(callable $open, ?callable $onRefusal = null): static
     {
-        return new static(session: $open());
+        try {
+            $session = $open();
+        } catch (ZapmizerApiException $exception) {
+            if ($onRefusal !== null) {
+                $onRefusal($exception);
+            }
+
+            return new static(failure: $exception);
+        } catch (ZapmizerUnavailableException $exception) {
+            return new static(failure: $exception);
+        } catch (ZapmizerConnectException $exception) {
+            report($exception);
+
+            return new static(failure: $exception);
+        }
+
+        return new static(session: $session);
     }
 
     /**
@@ -53,7 +70,31 @@ class EmbedSessionResponse implements Responsable
             return new JsonResponse($this->sessionPayload($this->session), 200);
         }
 
-        return new JsonResponse(['code' => $this->code], $this->status);
+        if ($this->failure === null) {
+            return new JsonResponse(['code' => $this->code], $this->status);
+        }
+
+        if (!$this->failure instanceof ZapmizerApiException) {
+            return new JsonResponse(['code' => self::UNAVAILABLE], 503);
+        }
+
+        $status = $this->failure->status();
+
+        if ($status === 401 || $status === 419) {
+            return new JsonResponse(['code' => self::REAUTH_REQUIRED], 422);
+        }
+
+        if ($status === 429) {
+            $retryAfter = $this->failure->apiError()->retryAfter;
+
+            return new JsonResponse(
+                ['code' => self::RATE_LIMITED],
+                429,
+                $retryAfter === null ? [] : ['Retry-After' => (string) $retryAfter],
+            );
+        }
+
+        return new JsonResponse(['code' => $this->refusalCode($this->failure)], $this->refusalStatus($this->failure));
     }
 
     protected function sessionPayload(EmbedSession $session): array

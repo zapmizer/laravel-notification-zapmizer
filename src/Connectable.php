@@ -88,6 +88,14 @@ trait Connectable
     }
 
     /**
+     * The model's customer id on Zapmizer (`external_id`): its key.
+     */
+    public function zapmizerExternalId(): string
+    {
+        return (string) $this->getKey();
+    }
+
+    /**
      * The model class used to store the connection.
      *
      * @return class-string<ZapmizerConnection>

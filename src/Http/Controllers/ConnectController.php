@@ -58,6 +58,11 @@ class ConnectController extends Controller
         'qr_unavailable' => 'qr_unavailable',
     ];
 
+    /**
+     * The webhook key of the pending state, read on the callback.
+     */
+    protected ?string $pendingWebhookKey = null;
+
     public function __construct(
         protected PartnerClient $partnerClient,
         protected ResolvesConnectable $resolver,
@@ -89,19 +94,25 @@ class ConnectController extends Controller
     /**
      * Create the authorization session and return the popup URL. The
      * webhook route goes along: Zapmizer registers it on the team once the
-     * number pairs, and the id/secret come back with the token.
+     * number pairs, and the id/secret come back with the token. So do the
+     * model's `external_id` (zapmizerExternalId(), which keys the
+     * subscription and the checkout) and the state's TTL as `expires_in`.
+     * An invalid `external_id` is a programming error: its
+     * InvalidArgumentException is not caught.
      */
     public function start(Request $request): JsonResponse
     {
         try {
             $connectable = $this->connectable($request);
-            $pending = $this->issueState($request, self::SESSION_KEY, $connectable);
+            $key = $this->webhookKeyFor($connectable);
+            $pending = $this->issueState($request, self::SESSION_KEY, $connectable, $key === null ? [] : ['webhook_key' => $key]);
 
             $session = $this->partnerClient->createSession(
                 redirectUri: route('zapmizer.connect.callback'),
                 state: $pending['state'],
-                webhookUrl: route('zapmizer.webhook'),
+                webhookUrl: $this->webhookUrl($key),
                 expiresIn: $this->stateTtlMinutes() * 60,
+                externalId: $connectable->zapmizerExternalId(),
             );
         } catch (PartnerCredentialsException $exception) {
             report($exception);
@@ -334,6 +345,23 @@ class ConnectController extends Controller
                 'exception' => $exception->getMessage(),
             ]);
         }
+    }
+
+    /**
+     * The key of the webhook this connectable's session registers; `null`
+     * is the package's single webhook route.
+     */
+    protected function webhookKeyFor(Model&Connectable $connectable): ?string
+    {
+        return null;
+    }
+
+    /**
+     * The webhook URL sent with the session for `$key`.
+     */
+    protected function webhookUrl(?string $key): string
+    {
+        return route('zapmizer.webhook');
     }
 
     protected function teamConnectedElsewhere(ZapmizerConnection $connection, int $teamId): bool

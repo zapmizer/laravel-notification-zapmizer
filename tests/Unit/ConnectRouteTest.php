@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
+use InvalidArgumentException;
 use NotificationChannels\Zapmizer\Connect\ResolvesAuthenticatedUser;
 use NotificationChannels\Zapmizer\Http\Controllers\ConnectController;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
@@ -17,9 +18,12 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Test\Concerns\AssertsContract;
 use NotificationChannels\Zapmizer\Test\Concerns\DrivesTheConnectRoutes;
 use NotificationChannels\Zapmizer\Test\Fixtures\CreatesConnectionTables;
+use NotificationChannels\Zapmizer\Test\Fixtures\ExternalIdTeam;
+use NotificationChannels\Zapmizer\Test\Fixtures\KeyedConnectController;
 use NotificationChannels\Zapmizer\Test\Fixtures\PlainModel;
 use NotificationChannels\Zapmizer\Test\Fixtures\PlainUser;
 use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesFirstTeam;
+use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesExternalIdTeam;
 use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesNothing;
 use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesPlainModel;
 use NotificationChannels\Zapmizer\Test\Fixtures\Team;
@@ -42,6 +46,13 @@ class ConnectRouteTest extends TestCase
 
     /** @var array<int, \Throwable> */
     protected array $reported = [];
+
+    protected function tearDown(): void
+    {
+        ExternalIdTeam::$externalId = null;
+
+        parent::tearDown();
+    }
 
     protected function defineEnvironment($app)
     {
@@ -216,27 +227,77 @@ class ConnectRouteTest extends TestCase
 
     // --- start ----------------------------------------------------------
 
-    public function testStartStoresStateAndReturnsThePopupUrl()
+    public function testS1TheStartSendsTheWholeSession()
     {
-        $this->fakeHttp(new Response(201, [], json_encode(['url' => 'http://zap.test/connect/1?s=abc', 'expires_at' => '2026-09-07T01:00:00Z'])));
+        $this->fakeHttp($this->sessionCreated());
         $this->actingAsUser();
 
-        $this->postJson(route('zapmizer.connect.start'))
+        $this->startConnect()
             ->assertOk()
             ->assertExactJson(['url' => 'http://zap.test/connect/1?s=abc', 'expires_at' => '2026-09-07T01:00:00+00:00']);
 
         $pending = session(ConnectController::SESSION_KEY);
         $this->assertEquals(40, strlen($pending['state']));
         $this->assertEquals(Team::class . ':' . $this->team()->id, $pending['connectable']);
+        $this->assertArrayNotHasKey('webhook_key', $pending);
 
-        $body = json_decode((string) $this->history[0]['request']->getBody(), true);
-        $this->assertEquals('http://localhost/zapmizer/connect/callback', $body['redirect_uri']);
-        $this->assertEquals($pending['state'], $body['state']);
+        $body = $this->sentBody(0);
+        $this->assertSame(['redirect_uri', 'state', 'webhook_url', 'expires_in', 'external_id'], array_keys($body));
+        $this->assertSame('http://localhost/zapmizer/connect/callback', $body['redirect_uri']);
+        $this->assertSame($pending['state'], $body['state']);
         // Zapmizer registers the receiver during the pairing: the route goes
         // along with the session.
-        $this->assertEquals('http://localhost/zapmizer/webhook', $body['webhook_url']);
-        $this->assertArrayNotHasKey('external_id', $body);
+        $this->assertSame('http://localhost/zapmizer/webhook', $body['webhook_url']);
+        $this->assertSame(1800, $body['expires_in']);
+        $this->assertSame((string) $this->team()->id, $body['external_id']);
+        $this->assertMatchesSchema('#/paths/~1connect~1sessions/post/requestBody/content/application~1json/schema', $body);
         $this->assertEquals('partner-id|partner-secret', $this->history[0]['request']->getHeaderLine('X-Partner-Key'));
+    }
+
+    public function testS2AnOverriddenExternalIdGoesAsIs()
+    {
+        config()->set('zapmizer.connect.resolver', ResolvesExternalIdTeam::class);
+        ExternalIdTeam::$externalId = 'tenant-9';
+        $this->fakeHttp($this->sessionCreated());
+        $this->actingAsUser();
+
+        $this->startConnect()->assertOk();
+
+        $this->assertSame('tenant-9', $this->sentBody(0)['external_id']);
+    }
+
+    /** @dataProvider invalidExternalIds */
+    #[DataProvider('invalidExternalIds')]
+    public function testS3AnInvalidExternalIdIsAProgrammingError(string $id)
+    {
+        config()->set('zapmizer.connect.resolver', ResolvesExternalIdTeam::class);
+        ExternalIdTeam::$externalId = $id;
+        $this->recordReports();
+        $this->fakeHttp();
+        $this->actingAsUser();
+
+        $this->startConnect()->assertStatus(500);
+
+        $this->assertCount(1, $this->reported);
+        $this->assertInstanceOf(InvalidArgumentException::class, $this->reported[0]);
+        $this->assertCount(0, $this->history);
+    }
+
+    public static function invalidExternalIds(): array
+    {
+        return ['empty' => [''], 'space' => ['a b'], 'dot dot' => ['..']];
+    }
+
+    public function testTheStepSevenSeamsCarryTheKey()
+    {
+        $this->app->bind(ConnectController::class, KeyedConnectController::class);
+        $this->fakeHttp($this->sessionCreated());
+        $this->actingAsUser();
+
+        $this->startConnect()->assertOk();
+
+        $this->assertSame('fixed-key', session(ConnectController::SESSION_KEY)['webhook_key']);
+        $this->assertSame('https://app.test/hook/fixed-key', $this->sentBody(0)['webhook_url']);
     }
 
     /** @dataProvider ttlFallbacks */

@@ -13,6 +13,7 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\InboundMessage;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
 use NotificationChannels\Zapmizer\Test\Fixtures\CreatesConnectionTables;
+use NotificationChannels\Zapmizer\Test\Fixtures\ExternalIdTeam;
 use NotificationChannels\Zapmizer\Test\Fixtures\Team;
 use NotificationChannels\Zapmizer\Test\Concerns\FakesZapmizerHttp;
 use NotificationChannels\Zapmizer\Test\TestCase;
@@ -37,6 +38,34 @@ class ConnectableTest extends TestCase
     protected function fakeHttp(Response ...$responses): void
     {
         $this->fakeZapmizer(new MockHandler($responses));
+    }
+
+    protected function tearDown(): void
+    {
+        ExternalIdTeam::$externalId = null;
+
+        parent::tearDown();
+    }
+
+    public function testTheExternalIdIsTheKey()
+    {
+        $team = new Team();
+        $team->id = 5;
+
+        $this->assertSame('5', $team->zapmizerExternalId());
+    }
+
+    public function testAnOverriddenExternalId()
+    {
+        $team = new ExternalIdTeam();
+        $team->id = 5;
+        ExternalIdTeam::$externalId = 'tenant-9';
+
+        $this->assertSame('tenant-9', $team->zapmizerExternalId());
+
+        ExternalIdTeam::$externalId = null;
+
+        $this->assertSame('5', $team->zapmizerExternalId());
     }
 
     public function testMigrationCreatesTableWithUniqueConnectable()

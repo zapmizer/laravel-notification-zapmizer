@@ -37,7 +37,7 @@ const reauthRequired = computed(() => props.integration.state === 'reauth_requir
 const cannotReceive = computed(() => props.integration.webhook_id !== null && props.integration.has_webhook_secret === false);
 
 const canRelink = computed(
-  () => props.integration.is_active && ['disconnected', 'off', 'qr_pending', 'qrcode'].includes(props.integration.state ?? ''),
+  () => props.integration.is_active && ['disconnected', 'off', 'qr_pending'].includes(props.integration.state ?? ''),
 );
 
 const health = computed(() => {
@@ -50,7 +50,7 @@ const health = computed(() => {
   if (props.integration.is_online) return { tone: 'gp-tag-mint', label: 'Online' };
   if (state === 'connected') return { tone: 'gp-tag-mint', label: 'Conectado' };
   if (state === 'connecting') return { tone: 'gp-tag-muted', label: 'Conectando...' };
-  if (state === 'disconnected' || state === 'off' || state === 'qrcode') return { tone: 'gp-tag-amber', label: 'Desconectado no celular' };
+  if (state === 'disconnected' || state === 'off' || state === 'qr_pending') return { tone: 'gp-tag-amber', label: 'Desconectado no celular' };
   if (state === undefined) return { tone: 'gp-tag-mint', label: 'Conectado' };
 
   return { tone: 'gp-tag-muted', label: 'Verificando...' };

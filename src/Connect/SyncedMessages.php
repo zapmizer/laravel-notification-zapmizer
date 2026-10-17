@@ -5,19 +5,21 @@ namespace NotificationChannels\Zapmizer\Connect;
 use NotificationChannels\Zapmizer\InboundMessage;
 
 /**
- * Class ReceivedMessages.
+ * Class SyncedMessages.
  *
- * One page of GET /whatsapp-messages: what the number received, in the order
- * Zapmizer stored it, each message translated the same way the `message`
- * webhook is (`InboundMessage::fromMessage()`, wwebjs and Rust engines alike).
+ * One page of GET /whatsapp-messages: every message of the number that
+ * changed since the cursor — received and sent, edited, revoked, the ones
+ * that came in the sync after a reconnect — in its current state, each
+ * translated the way the `message` webhook is (`InboundMessage::fromMessage()`,
+ * wwebjs and Rust engines alike).
  *
- * It is the way back to what the webhook did not deliver — the app was down
- * past Zapmizer's 3 attempts, or the messages arrived in the sync after the
- * number reconnected. Keep `nextAfter` and pass it as `$after` on the next
- * call; while `hasMore`, call again. The same message may come here and
- * through the webhook: deduplicate on `$message->id`.
+ * Zapmizer neither filters nor deduplicates: the same message may come back
+ * here more than once and also through the webhook. Deduplicate on
+ * `$message->id`, and skip `fromMe` when you only want what was received.
+ *
+ * Keep `cursor` and pass it on the next call; while `hasMore`, call again.
  */
-final class ReceivedMessages
+final class SyncedMessages
 {
     /**
      * @param list<InboundMessage> $messages
@@ -25,7 +27,7 @@ final class ReceivedMessages
      */
     public function __construct(
         public readonly array $messages,
-        public readonly int $nextAfter,
+        public readonly ?string $cursor,
         public readonly bool $hasMore,
         public readonly array $payloads = [],
     ) {
@@ -37,7 +39,7 @@ final class ReceivedMessages
      *
      * @param array<string, mixed> $body
      */
-    public static function fromResponse(array $body, int $after): self
+    public static function fromResponse(array $body, ?string $cursor): self
     {
         $wid = is_string($body['wid'] ?? null) && $body['wid'] !== '' ? $body['wid'] : null;
         $messages = [];
@@ -54,9 +56,11 @@ final class ReceivedMessages
             $payloads[] = $raw;
         }
 
+        $next = $body['next_cursor'] ?? null;
+
         return new self(
             messages: $messages,
-            nextAfter: is_numeric($body['next_after'] ?? null) ? max($after, (int) $body['next_after']) : $after,
+            cursor: is_string($next) && $next !== '' ? $next : $cursor,
             hasMore: (bool) ($body['has_more'] ?? false),
             payloads: $payloads,
         );

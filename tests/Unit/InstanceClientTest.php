@@ -317,13 +317,13 @@ class InstanceClientTest extends TestCase
         $this->assertFalse($this->history[0]['options']['allow_redirects']);
     }
 
-    public function testReceivedMessagesTranslatesEachMessageLikeTheWebhook()
+    public function testSyncMessagesTranslatesEachMessageLikeTheWebhook()
     {
         $client = $this->makeClient(new MockHandler([
             new Response(200, [], json_encode([
                 'wid' => '5581999990000@c.us',
                 'data' => [
-                    ['id' => 11, 'stored_at' => '2026-10-16T19:29:49+00:00', 'message' => [
+                    ['id' => 11, 'updated_at' => '2026-10-16T19:29:49+00:00', 'message' => [
                         'id' => ['id' => 'AAA', '_serialized' => 'false_5581988887777@c.us_AAA'],
                         'from' => '5581988887777@c.us',
                         'type' => 'document',
@@ -332,59 +332,67 @@ class InstanceClientTest extends TestCase
                         'timestamp' => 1792193389,
                         '_data' => ['mimetype' => 'application/pdf', 'filename' => 'extrato.pdf', 'size' => 555593],
                     ]],
-                    ['id' => 12, 'stored_at' => '2026-10-16T19:30:00+00:00', 'message' => ['type' => 'chat']],
+                    ['id' => 12, 'updated_at' => '2026-10-16T19:30:00+00:00', 'message' => ['type' => 'chat']],
+                    ['id' => 13, 'updated_at' => '2026-10-16T19:30:01+00:00', 'message' => [
+                        'id' => ['id' => 'BBB', '_serialized' => 'true_5581988887777@c.us_BBB'],
+                        'from' => '5581999990000@c.us',
+                        'to' => '5581988887777@c.us',
+                        'fromMe' => true,
+                        'type' => 'chat',
+                        'body' => 'recebido',
+                        'timestamp' => 1792193401,
+                    ]],
                 ],
-                'next_after' => 12,
+                'next_cursor' => '2026-10-16 19:30:01|13',
                 'has_more' => true,
             ])),
         ]));
 
-        $page = $client->receivedMessages(9, after: 10, limit: 50);
+        $page = $client->syncMessages(9, cursor: '2026-10-16 19:00:00|10', limit: 50);
 
-        $this->assertCount(1, $page->messages);
+        $this->assertCount(2, $page->messages);
         $this->assertSame('false_5581988887777@c.us_AAA', $page->messages[0]->id);
         $this->assertSame('5581988887777', $page->messages[0]->fromPhone);
         $this->assertSame('5581999990000@c.us', $page->messages[0]->to);
         $this->assertSame('extrato.pdf', $page->messages[0]->mediaFilename());
+        $this->assertTrue($page->messages[1]->fromMe);
         $this->assertSame('AAA', $page->payloads[0]['id']['id']);
-        $this->assertSame(12, $page->nextAfter);
+        $this->assertSame('2026-10-16 19:30:01|13', $page->cursor);
         $this->assertTrue($page->hasMore);
         $this->assertEquals(
-            'http://localhost/api/whatsapp-messages?bot_instance_id=9&after=10&limit=50',
+            'http://localhost/api/whatsapp-messages?bot_instance_id=9&cursor=2026-10-16%2019%3A00%3A00%7C10&limit=50',
             (string) $this->history[0]['request']->getUri(),
         );
     }
 
-    public function testReceivedMessagesNeverMovesTheCursorBack()
+    public function testSyncMessagesKeepsTheCursorWhenNothingNewCame()
     {
         $client = $this->makeClient(new MockHandler([
-            new Response(200, [], json_encode(['wid' => null, 'data' => [], 'next_after' => 3, 'has_more' => false])),
-            new Response(200, [], json_encode(['data' => []])),
+            new Response(200, [], json_encode(['wid' => null, 'data' => [], 'has_more' => false])),
         ]));
 
-        $this->assertSame(10, $client->receivedMessages(9, after: 10)->nextAfter);
-        $this->assertSame(10, $client->receivedMessages(9, after: 10)->nextAfter);
+        $this->assertSame('2026-10-16 19:00:00|10', $client->syncMessages(9, cursor: '2026-10-16 19:00:00|10')->cursor);
     }
 
-    public function testReceivedMessagesStartsFromSinceAndRefusesLikeEveryEndpoint()
+    public function testSyncMessagesStartsFromSinceAndRefusesLikeEveryEndpoint()
     {
         $client = $this->makeClient(new MockHandler([
-            new Response(200, [], json_encode(['data' => [], 'next_after' => 0, 'has_more' => false])),
+            new Response(200, [], json_encode(['data' => [], 'next_cursor' => '1970-01-01 00:00:00|0', 'has_more' => false])),
             new Response(401, [], '{}'),
             new Response(422, [], '{"message":"meta"}'),
             new Response(503, [], ''),
         ]));
 
-        $client->receivedMessages(9, since: 1792190000);
+        $client->syncMessages(9, since: 1792190000);
 
         $this->assertEquals(
-            'http://localhost/api/whatsapp-messages?bot_instance_id=9&after=0&since=1792190000',
+            'http://localhost/api/whatsapp-messages?bot_instance_id=9&since=1792190000',
             (string) $this->history[0]['request']->getUri(),
         );
 
         $this->expectExceptionInOrder(
             [ZapmizerUnauthorizedException::class, ZapmizerConnectException::class, ZapmizerUnavailableException::class],
-            fn () => $client->receivedMessages(9),
+            fn () => $client->syncMessages(9),
         );
     }
 }

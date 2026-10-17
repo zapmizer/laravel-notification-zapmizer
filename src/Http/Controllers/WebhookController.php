@@ -5,9 +5,20 @@ namespace NotificationChannels\Zapmizer\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use Illuminate\Support\Str;
+use NotificationChannels\Zapmizer\Events\CallReceived;
 use NotificationChannels\Zapmizer\Events\ConnectionStateChanged;
+use NotificationChannels\Zapmizer\Events\ContactNumberChanged;
+use NotificationChannels\Zapmizer\Events\GroupAdminsChanged;
+use NotificationChannels\Zapmizer\Events\GroupJoinRequested;
+use NotificationChannels\Zapmizer\Events\GroupMembershipChanged;
+use NotificationChannels\Zapmizer\Events\GroupUpdated;
+use NotificationChannels\Zapmizer\Events\MessageEdited;
+use NotificationChannels\Zapmizer\Events\MessageReacted;
 use NotificationChannels\Zapmizer\Events\MessageReceived;
+use NotificationChannels\Zapmizer\Events\MessageRevoked;
 use NotificationChannels\Zapmizer\Events\MessageStatusUpdated;
+use NotificationChannels\Zapmizer\Events\MessageTranscribed;
+use NotificationChannels\Zapmizer\Events\PollVoted;
 use NotificationChannels\Zapmizer\Events\WebhookEvent;
 use NotificationChannels\Zapmizer\Events\WebhookHandled;
 use NotificationChannels\Zapmizer\Events\WebhookReceived;
@@ -91,6 +102,17 @@ class WebhookController extends Controller
         return [
             'message_status' => MessageStatusUpdated::class,
             'connection' => ConnectionStateChanged::class,
+            'message_reacted' => MessageReacted::class,
+            'message_edited' => MessageEdited::class,
+            'message_revoked' => MessageRevoked::class,
+            'message_transcribed' => MessageTranscribed::class,
+            'incoming_call' => CallReceived::class,
+            'poll_vote' => PollVoted::class,
+            'contact_number_changed' => ContactNumberChanged::class,
+            'group_membership' => GroupMembershipChanged::class,
+            'group_admins_changed' => GroupAdminsChanged::class,
+            'group_join_request' => GroupJoinRequested::class,
+            'group_updated' => GroupUpdated::class,
         ];
     }
 

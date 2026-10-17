@@ -71,7 +71,7 @@ final class Fields
     {
         $value = $data[$key] ?? null;
 
-        return is_array($value) ? array_values(array_filter($value, 'is_string')) : [];
+        return is_array($value) && array_is_list($value) ? array_values(array_filter($value, 'is_string')) : [];
     }
 
     /**

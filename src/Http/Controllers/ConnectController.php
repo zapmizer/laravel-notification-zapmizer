@@ -14,6 +14,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use LogicException;
+use NotificationChannels\Zapmizer\Connect\BotInstance;
 use NotificationChannels\Zapmizer\Connect\ConnectToken;
 use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Connect\InstanceConnection;
@@ -74,6 +75,13 @@ class ConnectController extends Controller
         'plan_limit' => 'plan_limit',
         'subscription_required' => 'subscription_required',
     ];
+
+    /**
+     * The states of Zapmizer's process (`state` of GET /bot-instances/{id})
+     * while the number is still coming up: offline in one of them is
+     * `connecting`, not `disconnected`.
+     */
+    protected const BOOTING_STATES = ['unprovisioned', 'booting', 'provisioning', 'syncing', 'rebooting'];
 
     /**
      * The webhook key of the pending state, read on the callback.
@@ -507,8 +515,9 @@ class ConnectController extends Controller
      *
      * A 404 on `/connection` is what a team without Zapmizer's QR feature
      * (the official number) gets: then the state comes from `is_online` of
-     * GET /bot-instances/{id} — `connected` or `disconnected` — and only a
-     * 404 there too is `instance_gone`.
+     * GET /bot-instances/{id} — `connected`, `connecting` while the process
+     * is still booting, or `disconnected` — and only a 404 there too is
+     * `instance_gone`.
      *
      * @return array{state: ?string, is_online: bool}
      */
@@ -526,9 +535,9 @@ class ConnectController extends Controller
             try {
                 $instance = $client->connection($id);
             } catch (InstanceGoneException) {
-                $isOnline = $client->instance($id)->isOnline;
+                $number = $client->instance($id);
 
-                return ['state' => $isOnline ? 'connected' : 'disconnected', 'is_online' => $isOnline];
+                return ['state' => $this->stateFromIsOnline($number), 'is_online' => $number->isOnline];
             }
 
             $this->syncConnectedNumber($connection, $instance);
@@ -545,6 +554,19 @@ class ConnectController extends Controller
         } catch (ZapmizerUnavailableException | ZapmizerConnectException) {
             return ['state' => 'zapmizer_unavailable', 'is_online' => false];
         }
+    }
+
+    /**
+     * The state of a number without the `/connection` route, from its
+     * `is_online` and the state of Zapmizer's process.
+     */
+    protected function stateFromIsOnline(BotInstance $number): string
+    {
+        if ($number->isOnline) {
+            return 'connected';
+        }
+
+        return in_array($number->state, static::BOOTING_STATES, true) ? 'connecting' : 'disconnected';
     }
 
     /**

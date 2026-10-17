@@ -259,9 +259,9 @@ class ConnectRouteTest extends TestCase
     /**
      * A `GET /bot-instances/{id}` answer from the contract (`Numero`).
      */
-    protected function numeroAnswer(bool $online): Response
+    protected function numeroAnswer(bool $online, string $state = 'ready'): Response
     {
-        $body = json_encode(['data' => InstanceClientInstanceTest::numero(['is_online' => $online, 'supports_templates' => true])]);
+        $body = json_encode(['data' => InstanceClientInstanceTest::numero(['is_online' => $online, 'supports_templates' => true, 'state' => $state])]);
         $this->assertMatchesContract('GET', '/bot-instances/{id}', 200, $body);
 
         return new Response(200, ['Content-Type' => 'application/json'], $body);
@@ -396,11 +396,11 @@ class ConnectRouteTest extends TestCase
 
     /** @dataProvider officialNumbers */
     #[DataProvider('officialNumbers')]
-    public function testL5WithoutTheQrRouteTheStateComesFromIsOnline(bool $online, string $state)
+    public function testL5WithoutTheQrRouteTheStateComesFromIsOnline(bool $online, string $process, string $state)
     {
         // A team without Zapmizer's QR feature (the official number) gets a
         // 404 on /connection; llms.txt says to fall back to `is_online`.
-        $this->connectedThroughTheCallback($this->notFound('/bot-instances/{id}/connection'), $this->numeroAnswer($online));
+        $this->connectedThroughTheCallback($this->notFound('/bot-instances/{id}/connection'), $this->numeroAnswer($online, $process));
 
         $this->getJson(route('zapmizer.connect.show', ['live' => 1]))
             ->assertOk()
@@ -416,8 +416,17 @@ class ConnectRouteTest extends TestCase
     public static function officialNumbers(): array
     {
         return [
-            'online' => [true, 'connected'],
-            'offline' => [false, 'disconnected'],
+            'online' => [true, 'ready', 'connected'],
+            'offline' => [false, 'ready', 'disconnected'],
+            'off' => [false, 'off', 'disconnected'],
+            // The process is still coming up (right after a reconnect): not
+            // "disconnected" yet. Values of zapbot's BotInstanceState.
+            'unprovisioned' => [false, 'unprovisioned', 'connecting'],
+            'booting' => [false, 'booting', 'connecting'],
+            'provisioning' => [false, 'provisioning', 'connecting'],
+            'syncing' => [false, 'syncing', 'connecting'],
+            'rebooting' => [false, 'rebooting', 'connecting'],
+            'online while syncing' => [true, 'syncing', 'connected'],
         ];
     }
 

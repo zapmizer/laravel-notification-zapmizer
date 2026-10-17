@@ -2,7 +2,7 @@
 
 Esta pasta vai junto com o código. Ao abrir pela tag que o app fixou, você lê a doc daquela versão.
 
-1. [Enviar notificações](envio.md): o canal `zapmizer` numa `Notification`, o `ZapmizerMessage` e o formato do WID.
+1. [Enviar notificações](envio.md): o canal `zapmizer` numa `Notification`, o `ZapmizerMessage`, o formato do WID, o retorno tipado (`SentMessage`), o acompanhamento do envio e o template do número oficial.
 2. [Erros](erros.md): a árvore de exceções, o que a `ZapmizerApiException` carrega e as falhas que não são embrulhadas.
 3. [Conectar um número por model](connect.md): o fluxo multi-tenant com `Connectable`, do popup de pareamento ao webhook assinado, ao reconnect e à revogação (em inglês).
 4. [Embutir a conversa e a caixa de entrada](embed.md): o `EmbedSessionResponse`, o `user` do atendente, a resposta ao `@zapmizer/embed` e os testes.

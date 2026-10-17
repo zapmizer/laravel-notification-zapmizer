@@ -143,6 +143,19 @@ class ZapmizerTemplateTest extends TestCase
         }
     }
 
+    public function testARedirectIsNotAnApiAnswer()
+    {
+        try {
+            $this->client(new Response(302, ['Location' => 'http://localhost/login'], ''))->sendTemplate('5581999990000', '5511999999999', 'boas_vindas');
+            $this->fail('Expected unexpectedResponse.');
+        } catch (ZapmizerConnectException $exception) {
+            $this->assertNotInstanceOf(ZapmizerApiException::class, $exception);
+            $this->assertStringContainsString('redirected (302 to http://localhost/login)', $exception->getMessage());
+        }
+
+        $this->assertFalse($this->history[0]['options']['allow_redirects']);
+    }
+
     public function testWithoutTokenItFailsBeforeAnyRequest()
     {
         $transport = new RecordingTransport();

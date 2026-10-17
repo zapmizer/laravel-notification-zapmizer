@@ -7,6 +7,7 @@ use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use InvalidArgumentException;
+use NotificationChannels\Zapmizer\Exceptions\ErrorCode;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerRateLimitedException;
@@ -393,10 +394,25 @@ class MessageTrackingTest extends TestCase
             $cases["{$method} 429"] = [$method, self::answer('{"message":"Too Many Attempts."}', 429, ['Retry-After' => '5']), ZapmizerRateLimitedException::class, 429];
             $cases["{$method} 503"] = [$method, new Response(503, [], ''), ZapmizerUnavailableException::class, null];
             $cases["{$method} network"] = [$method, $network, ZapmizerUnavailableException::class, null];
+            $cases["{$method} 403 missing_ability"] = [$method, self::answer('{"error":"missing_ability","message":"This connection does not grant messages:read."}', 403), ZapmizerApiException::class, 403];
+            $cases["{$method} redirect to login"] = [$method, new Response(302, ['Location' => 'http://localhost/login'], ''), ZapmizerConnectException::class, null];
             $cases["{$method} html"] = [$method, new Response(200, ['Content-Type' => 'text/html'], '<html>login</html>'), ZapmizerConnectException::class, null];
         }
 
         return $cases;
+    }
+
+    public function testMissingAbilityIsTheErrorCode()
+    {
+        $client = $this->client(new RecordingTransport(self::answer('{"error":"missing_ability","message":"This connection does not grant messages:read."}', 403)));
+
+        try {
+            $client->track('https://app.zapmizer.com/api/sent-messages/1');
+            $this->fail('Expected ZapmizerApiException.');
+        } catch (ZapmizerApiException $exception) {
+            $this->assertSame(403, $exception->status());
+            $this->assertSame(ErrorCode::MISSING_ABILITY, $exception->error());
+        }
     }
 
     public function testTheFailuresOfTheContractMatchIt()

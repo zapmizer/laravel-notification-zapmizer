@@ -2577,6 +2577,7 @@ class ConnectRouteTest extends TestCase
         $this->assertCount(5, $this->history);
         $this->assertRevoked('1|sanctum');
         $this->assertNoWebhookCalls();
+        $this->deliverSigned($this->messageEnvelope(), 'whsec_1')->assertUnauthorized();
     }
 
     public function testC35AnUnreadableSecretIssuesANewKey()

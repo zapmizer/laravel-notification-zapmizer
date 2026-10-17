@@ -155,6 +155,7 @@ class ConnectionWebhookTest extends TestCase
         $queries = $this->connectionQueries();
         $this->assertCount(1, $queries);
         $this->assertSame([self::KA], $queries[0]['bindings']);
+        $this->assertStringContainsString('"zapmizer_connections"."webhook_key"', $queries[0]['query']);
         Log::shouldHaveReceived('warning')
             ->with('zapmizer: delivery refused by signature.', Mockery::on(fn (array $context) => $context['reason'] === 'no known secret signs this delivery'))
             ->once();

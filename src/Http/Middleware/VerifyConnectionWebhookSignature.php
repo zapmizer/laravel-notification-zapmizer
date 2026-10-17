@@ -74,9 +74,11 @@ class VerifyConnectionWebhookSignature extends VerifyWebhookSignature
         }
 
         if (!$this->belongsToConnection($request, $connection)) {
+            $body = json_decode($request->getContent(), true);
+
             Log::info('zapmizer: delivery for another number discarded.', [
                 'connection_id' => $connection->getKey(),
-                'wid' => json_decode($request->getContent(), true)['wid'],
+                'wid' => is_array($body) ? ($body['wid'] ?? null) : null,
             ]);
 
             return new Response('Webhook Received', 200);

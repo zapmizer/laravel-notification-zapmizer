@@ -1935,6 +1935,25 @@ class ConnectRouteTest extends TestCase
         $this->assertNoWebhookCalls();
     }
 
+    public function testW6AnEmptyRawStoredTokenIsOverwritten()
+    {
+        Log::spy();
+        $this->fakeTwoConnects([]);
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+
+        // Fixture exception: a raw '' in api_token is not reachable through
+        // the library, so it is written straight into the table.
+        DB::table('zapmizer_connections')->update(['api_token' => '']);
+
+        $this->connect()->assertSee('status: "ok"', false);
+
+        $connection = $this->team()->zapmizerConnection->fresh();
+        $this->assertSame('2|sanctum', $connection->api_token);
+        $this->assertExactlyTheseWarnings($this->columnWarnings($connection->id, 'api_token'));
+    }
+
     public function testA1TheRefusedTeamDoesNotRevokeThePrevious()
     {
         $this->revokePrevious();

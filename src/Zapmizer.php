@@ -11,6 +11,7 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Messages\MetaMessageStatus;
 use NotificationChannels\Zapmizer\Messages\QrMessageStatus;
 use NotificationChannels\Zapmizer\Messages\SentMessage;
+use NotificationChannels\Zapmizer\Messages\SentTemplate;
 use NotificationChannels\Zapmizer\Support\JsonResponse;
 use NotificationChannels\Zapmizer\Support\Payload;
 use Psr\Http\Message\ResponseInterface;
@@ -136,6 +137,39 @@ class Zapmizer
             'connect_timeout' => ZapmizerApi::TRANSFER_CONNECT_TIMEOUT,
             'timeout' => ZapmizerApi::TRANSFER_TIMEOUT,
         ])));
+    }
+
+    /**
+     * Send an approved template (`POST /template-messages`) — official
+     * number only. Free text there only goes up to 24 h after the contact's
+     * last message; past that, `sendMessage()` answers `409 window_closed`
+     * (`ErrorCode::WINDOW_CLOSED`) and a template is the way to reach them.
+     *
+     * @param string $template The name approved on Meta
+     * @param string|null $language Only needed when the name exists in more than one language
+     * @param array<int|string, string> $body The body variables, in the order they appear
+     * @param string|null $header The header variable, when the template has one
+     *
+     * @throws Exceptions\ZapmizerException
+     */
+    public function sendTemplate(string $from, string $to, string $template, ?string $language = null, array $body = [], ?string $header = null): SentTemplate
+    {
+        $this->guardToken();
+
+        $variables = array_filter([
+            'body' => $body === [] ? null : array_values($body),
+            'header' => $header,
+        ], fn ($value) => $value !== null);
+
+        $payload = array_filter([
+            'from' => $from,
+            'to' => $to,
+            'template' => $template,
+            'language' => $language,
+            'variables' => $variables === [] ? null : $variables,
+        ], fn ($value) => $value !== null);
+
+        return SentTemplate::fromArray($this->decode($this->request('POST', '/template-messages', ['json' => $payload])));
     }
 
     /**

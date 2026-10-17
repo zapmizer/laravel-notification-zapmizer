@@ -14,8 +14,10 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use LogicException;
+use NotificationChannels\Zapmizer\Connect\BotInstance;
 use NotificationChannels\Zapmizer\Connect\ConnectToken;
 use NotificationChannels\Zapmizer\Connect\InstanceClient;
+use NotificationChannels\Zapmizer\Connect\InstanceConnection;
 use NotificationChannels\Zapmizer\Connect\PartnerClient;
 use NotificationChannels\Zapmizer\Contracts\Connectable;
 use NotificationChannels\Zapmizer\Contracts\ResolvesConnectable;
@@ -75,6 +77,13 @@ class ConnectController extends Controller
     ];
 
     /**
+     * The states of Zapmizer's process (`state` of GET /bot-instances/{id})
+     * while the number is still coming up: offline in one of them is
+     * `connecting`, not `disconnected`.
+     */
+    protected const BOOTING_STATES = ['unprovisioned', 'booting', 'provisioning', 'syncing', 'rebooting'];
+
+    /**
      * The webhook key of the pending state, read on the callback.
      */
     protected ?string $pendingWebhookKey = null;
@@ -90,7 +99,9 @@ class ConnectController extends Controller
      * With `?live=1` the paired instance is queried on Zapmizer and the
      * connection carries `state` (`connected`, `disconnected`, ... or the
      * package's `reauth_required`, `instance_gone`, `zapmizer_unavailable`)
-     * and `is_online` — a panel showing whether the number is up.
+     * and `is_online` — a panel showing whether the number is up. The live
+     * query also stores a number changed on WhatsApp (syncConnectedNumber()),
+     * so it runs before the connection is serialized.
      */
     public function show(Request $request): JsonResponse
     {
@@ -104,7 +115,9 @@ class ConnectController extends Controller
             return new JsonResponse(['connection' => $connection]);
         }
 
-        return new JsonResponse(['connection' => $connection->toArray() + $this->liveState($connection)]);
+        $live = $this->liveState($connection);
+
+        return new JsonResponse(['connection' => $connection->toArray() + $live]);
     }
 
     /**
@@ -500,6 +513,12 @@ class ConnectController extends Controller
      * JSON. Every failure becomes a `state` the panel can name instead of
      * an error the screen would have to map.
      *
+     * A 404 on `/connection` is what a team without Zapmizer's QR feature
+     * (the official number) gets: then the state comes from `is_online` of
+     * GET /bot-instances/{id} — `connected`, `connecting` while the process
+     * is still booting, or `disconnected` — and only a 404 there too is
+     * `instance_gone`.
+     *
      * @return array{state: ?string, is_online: bool}
      */
     protected function liveState(ZapmizerConnection $connection): array
@@ -508,8 +527,20 @@ class ConnectController extends Controller
             return ['state' => null, 'is_online' => false];
         }
 
+        $id = (int) $connection->bot_instance_id;
+
         try {
-            $instance = $connection->instanceClient()->connection((int) $connection->bot_instance_id);
+            $client = $connection->instanceClient();
+
+            try {
+                $instance = $client->connection($id);
+            } catch (InstanceGoneException) {
+                $number = $client->instance($id);
+
+                return ['state' => $this->stateFromIsOnline($number), 'is_online' => $number->isOnline];
+            }
+
+            $this->syncConnectedNumber($connection, $instance);
 
             return ['state' => $instance->state, 'is_online' => $instance->isOnline];
         } catch (DecryptException) {
@@ -523,6 +554,86 @@ class ConnectController extends Controller
         } catch (ZapmizerUnavailableException | ZapmizerConnectException) {
             return ['state' => 'zapmizer_unavailable', 'is_online' => false];
         }
+    }
+
+    /**
+     * The state of a number without the `/connection` route, from its
+     * `is_online` and the state of Zapmizer's process.
+     */
+    protected function stateFromIsOnline(BotInstance $number): string
+    {
+        if ($number->isOnline) {
+            return 'connected';
+        }
+
+        return in_array($number->state, static::BOOTING_STATES, true) ? 'connecting' : 'disconnected';
+    }
+
+    /**
+     * Store the number the live query found when WhatsApp paired another one
+     * on the same instance — without it, the webhook keeps refusing the new
+     * number's events until a new connect. Only `connected` with a number
+     * counts (the number of another state may be a stale one), and only a
+     * DIFFERENT number writes: this runs on every poll of the panel. The
+     * write follows the connect's rule — a paired number is active — and
+     * `connected_at` is the moment the change was seen, since it dates the
+     * stored number.
+     *
+     * The write is conditional: inside a transaction, on the row locked for
+     * update, and only while `phone_number` and `bot_instance_id` are still
+     * the ones this request read — a connect callback that stored another
+     * pairing meanwhile wins. It goes through `save()`, so the model's
+     * events (`saving`, `updating`, `updated`, `saved`) fire as usual.
+     *
+     * A failed write is reported and the connection keeps the values it
+     * had, so the answer normally shows the stored number. A listener that
+     * throws rolls the transaction back, but whatever it did outside the
+     * database stays; and a listener deferred until after the commit may
+     * still fail after the number is stored, with this answer showing the
+     * old one until the next poll.
+     */
+    protected function syncConnectedNumber(ZapmizerConnection $connection, InstanceConnection $instance): void
+    {
+        if (!$instance->isConnected() || $instance->number === $connection->phone_number) {
+            return;
+        }
+
+        $read = $connection->getAttributes();
+
+        try {
+            $connection->getConnection()->transaction(function () use ($connection, $instance, $read) {
+                $current = $connection->newQuery()->whereKey($connection->getKey())->lockForUpdate()->first();
+
+                if ($current === null || !$this->samePairing($current->getAttributes(), $read)) {
+                    return;
+                }
+
+                $connection->forceFill([
+                    'phone_number' => $instance->number,
+                    'connected_at' => now(),
+                    'is_active' => true,
+                ])->save();
+            });
+        } catch (Throwable $exception) {
+            report($exception);
+            $connection->setRawAttributes($read);
+        }
+    }
+
+    /**
+     * Whether the row still holds the pairing (`phone_number`,
+     * `bot_instance_id`) this request read. Compared as strings: the driver
+     * may hand the id back as an int or as text.
+     */
+    private function samePairing(array $current, array $read): bool
+    {
+        foreach (['phone_number', 'bot_instance_id'] as $column) {
+            if ((string) ($current[$column] ?? '') !== (string) ($read[$column] ?? '')) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**

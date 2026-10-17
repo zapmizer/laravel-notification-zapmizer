@@ -181,13 +181,23 @@ The panel that shows the connected number usually wants to say whether it is onl
 
 | `connection.state` | `is_online` | Meaning |
 |---|---|---|
-| `connected` | `true`/`false` | Zapmizer's own state; `is_online` is its `is_online`. Other Zapmizer states (`disconnected`, `off`, `qrcode`, `booting`, ...) come through as they are. |
+| `connected` | `true`/`false` | Zapmizer's own state; `is_online` is its `is_online`. The other states (`qr_pending`, `connecting`, `disconnected`, `off`) come through as they are. |
 | `reauth_required` | `false` | The stored token was revoked on Zapmizer, or no longer decrypts (`APP_KEY` changed; logged as a warning) — the user has to connect again. |
-| `instance_gone` | `false` | The instance was deleted on Zapmizer (404). |
+| `instance_gone` | `false` | The instance was deleted on Zapmizer (404 on both routes, below). |
 | `zapmizer_unavailable` | `false` | Zapmizer is down, refused the call with another 4xx (403, 422, 429, ...), or answered something that is not JSON. |
 | `null` | `false` | Nothing to query: no token or no instance stored. |
 
-Without `live` no request leaves your server and `state`/`is_online` are absent. The route is throttled (60/min) because `live` reaches Zapmizer — poll it on user action or every minute, not every second.
+Without `live` no request leaves your server and `state`/`is_online` are absent. The route is throttled (60/min) because `live` reaches Zapmizer. The stubs poll it every 15 seconds, and every 5 seconds for two minutes after a reconnect (below).
+
+**Official numbers.** Zapmizer answers 404 on `/connection` to a team without its QR feature, which is the case of an official number (Meta's API). On that 404 the route asks `GET /api/bot-instances/{id}` instead, as Zapmizer recommends, and `state` comes from its `is_online`: `connected` when online; offline, `connecting` while Zapmizer's process is still coming up (its `state` is `unprovisioned`, `booting`, `provisioning`, `syncing` or `rebooting`, as right after a reconnect) and `disconnected` otherwise. That path has no `off` or `qr_pending`: an official number whose process is down (`off`) shows as `disconnected`. Only a 404 there too is `instance_gone`; a 401 is `reauth_required` and anything else `zapmizer_unavailable`.
+
+**A number changed on WhatsApp is stored.** When the answer is `connected` with a number other than the stored `phone_number`, the route stores the new one before answering, so `connection.phone_number` already shows it. Without it, the webhook would keep refusing the new number's events (it matches `X-Wid` and the body's `wid` against `phone_number`) until a new connect. It writes:
+
+- `phone_number`: the new number;
+- `is_active`: `true`, as the connect does for a paired number;
+- `connected_at`: now. It dates the stored number, so it is the moment the panel saw the change, not the moment WhatsApp made it.
+
+The same number, a `null` number and any other state write nothing: the panel polls this route, and the number of a state other than `connected` may be a stale one. The write runs in a transaction on the row locked for update, and only while `phone_number` and `bot_instance_id` are still the ones the request read: a connect that stored another pairing meanwhile wins. It goes through `save()`, so the model's events fire. A failed write is reported and normally leaves the stored number in the answer; a listener deferred until after the commit that fails may leave the new number stored and this answer showing the old one until the next poll. To change the rule (for example, to keep a connection your app deactivated inactive), override `syncConnectedNumber(ZapmizerConnection $connection, InstanceConnection $instance)` in a subclass of the controller.
 
 ### Reconnecting a number from the panel
 
@@ -213,7 +223,7 @@ Past 10 calls a minute the route's own throttle answers 429. Only `needs_client`
 
 | `status` | Meaning |
 |---|---|
-| `reconnected` | The number is back. Reload `show?live=1`. |
+| `reconnected` | The number is back. Poll `show?live=1` (the stubs' `beginTurnOn()`). |
 | `denied` | The customer cancelled (`?error=access_denied`). |
 | `plan_limit` | The plan has no room for the number online. |
 | `subscription_required` | The account has no active subscription. |
@@ -279,8 +289,32 @@ php artisan vendor:publish --provider="NotificationChannels\Zapmizer\ZapmizerSer
 This copies into `resources/js/`:
 
 - `components/zapmizer/ConnectButton.vue` — opens the popup, listens to its `postMessage` (checking `event.origin` and `source === 'zapmizer-connect'`), shows a message per `status`, and has a "Já conectei" button for a popup that was closed by hand (emits `recheck`). It emits `connected` on `ok` and on `webhook_failed`, which also shows the warning that the number cannot receive.
-- `components/zapmizer/ConnectionPanel.vue` — the connected number, its live state (from `show?live=1`), a "Religar número" button (when the connection is active and `state` is `disconnected`, `off`, `qr_pending` or `qrcode`; it calls `relinkZapmizer()` and listens to the `zapmizer-reconnect` popup), the warning "this number sends but does not receive" when `webhook_id` is set and `has_webhook_secret === false`, "Trocar número" (a new connect, emits `reconnect`) and disconnect.
-- `composables/useZapmizerIntegration.ts` — `reload({ live })`, `start()`, `relink()`, `disconnect()`; `openZapmizerConnect()` for the button and `relinkZapmizer()` for the panel.
+- `components/zapmizer/ConnectionPanel.vue` — the connected number, its live state (from `show?live=1`), a "Religar número" button (when the connection is active and `state` is `disconnected`, `off` or `qr_pending`; it calls `relinkZapmizer()` and listens to the `zapmizer-reconnect` popup), the warning "this number sends but does not receive" when `webhook_id` is set and `has_webhook_secret === false`, "Trocar número" (a new connect, emits `reconnect`) and disconnect.
+- `composables/useZapmizerIntegration.ts` — `reload({ live })`, `start()`, `relink()`, `disconnect()`, `startPolling()`, `stopPolling()` and `beginTurnOn()`; `openZapmizerConnect()` for the button and `relinkZapmizer()` for the panel.
+
+The polling asks `show?live=1` right away and then every 15 seconds. `beginTurnOn()` is for the moment after a reconnect. It shows the number as `connecting` and polls every 5 seconds for two minutes, until the state is `connected`. For the first 30 seconds it also ignores an `off`, which Zapmizer still answers while the number boots. A late answer never overwrites a newer one. The polling stops when the component unmounts, when the connection is gone, on `reauth_required` and `instance_gone`, and on a 401, 403 or 419 from `show`. A `reload()` in the middle of a poll does not stop it. Network errors, 429 and 503 keep it going. The panel emits `relinked` when its "Religar número" works (`online`, `starting`, or the popup's `reconnected`):
+
+```vue
+<script setup lang="ts">
+import { onMounted } from 'vue';
+import ConnectionPanel from '@/components/zapmizer/ConnectionPanel.vue';
+import { useZapmizerIntegration } from '@/composables/useZapmizerIntegration';
+
+const { integration, reload, startPolling, beginTurnOn, disconnect } = useZapmizerIntegration();
+
+onMounted(startPolling);
+</script>
+
+<template>
+  <ConnectionPanel
+    v-if="integration"
+    :integration="integration"
+    @refresh="reload({ live: true })"
+    @relinked="beginTurnOn()"
+    @disconnect="disconnect()"
+  />
+</template>
+```
 - `types/zapmizer.ts` — `ZapmizerConnection`, `ZapmizerConnectStatus`, `ZapmizerConnectMessage`, `ZapmizerReconnectStatus`, `ZapmizerReconnectMessage`, `ZapmizerRelinkResult`.
 
 The lasting warning of a `webhook_failed` is the panel's: the button emits `connected`, the screen switches to the panel, and the button's warning goes with it.
@@ -631,6 +665,52 @@ try {
 - `state` and `expires_in` only matter on that 409: a 200 or 202 never comes back to `$redirectUri`, so discard the state. `state` is checked like in `createSession()` (`InvalidArgumentException` before any request), `expires_in` is kept between 900 and 86400, and both are only sent when not `null`.
 - Refusals: 402 is a `ZapmizerApiException` with `error()` `plan_limit` (upgrade the plan) or `subscription_required` (checkout); read Zapmizer's text from `payload()['message']`. 403 has `status()` 403: without `error()` the token did not come from a connect, or the account's e-mail is not verified; `missing_ability` may come too. 404 is an `InstanceGoneException` with **two meanings**: the number does not exist, or it is not this connection's number. A 409 with another code (or none) is a `ZapmizerApiException` with that `error()`. 422 carries `errors()['redirect_uri']` when the redirect is not allowed for you. 429 is a `ZapmizerRateLimitedException` (10 a minute per number) with `retryAfter()`. A `needs_reconnect` without a safe `url` (below) is `unexpectedResponse`.
 
+### Reading the number
+
+```php
+use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;
+
+$client = $connection->instanceClient();
+
+try {
+    $instance = $client->instance($connection->bot_instance_id);
+} catch (InstanceGoneException $e) {
+    // the number does not exist, or it is not this connection's
+}
+
+if (! $instance->isOnline) {
+    // ask the reconnect: it decides whether turning the number on is enough
+}
+
+if ($instance->isOfficial()) {
+    // Meta's API: free text only within 24 h of the contact's last message
+}
+```
+
+- `instance(int $botInstanceId): BotInstance` — `GET /api/bot-instances/{id}`. This is how Zapmizer says to confirm whether the number is up: the call has no side effect and works on any account, including an official number, which has no `/connection` route. `BotInstance` has `id`, `state` (the state of Zapmizer's process, such as `ready` or `off`, not the pairing state of `connection()`), `stateLabel`, `isOnline`, `isUp`, `supportsGroups`, `supportsTemplates`, `createdAt` (`?CarbonImmutable`), `selfUrl` and `isOfficial()` (`supportsTemplates`: `true` on an official number). It does not carry the number; the connection's `phone_number` does. A flag Zapmizer did not send is `false`.
+- `instances(): array` — `GET /api/bot-instances`, a list of `BotInstance`. With a connect token it holds only the connection's number, so only the first page is read.
+- Errors: 401 `ZapmizerUnauthorizedException`; 404 `InstanceGoneException` (`instance()` only); 403 `missing_ability` (a token without `numbers:read`; the connect token has it) and the other 4xx `ZapmizerApiException`; 429 `ZapmizerRateLimitedException`; 5xx or no answer `ZapmizerUnavailableException`; a redirect, a body that is not JSON or one without `data` `unexpectedResponse`.
+
+### Transcribing audio in a conversation
+
+```php
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
+
+try {
+    $settings = $connection->instanceClient()->updateConversationSettings($connection->bot_instance_id, '5581999998888', true);
+} catch (ZapmizerApiException $e) {
+    // 422: $e->errors()['wid']
+}
+
+$settings->wid;                 // '5581999998888@c.us', as Zapmizer normalized it
+$settings->autoTranscribeAudio; // true
+```
+
+- `conversationSettings(int $botInstanceId, string $wid): ConversationSettings` — `GET /api/bot-instances/{id}/conversation-settings`. A conversation never adjusted answers the defaults.
+- `updateConversationSettings(int $botInstanceId, string $wid, bool $autoTranscribeAudio): ConversationSettings` — `PUT` on the same route. With `true`, Zapmizer transcribes every audio received in that conversation, groups included, and delivers the text in the `message_transcribed` webhook event (it reaches your app through `WebhookReceived`). With and without the Brazilian ninth digit it is the same conversation.
+- `$wid` is the contact (`5581999998888` or `...@c.us`) or the group (`...@g.us`); Zapmizer validates it (422 with `errors()['wid']`). `ConversationSettings` has `wid` (Zapmizer's normalized form) and `autoTranscribeAudio`.
+- The connect token carries `messages:read` and `messages:create`, the abilities of the two routes, so it never gets a 403 here. A token without them gets `403 missing_ability`: a `ZapmizerApiException` with `error() === ErrorCode::MISSING_ABILITY`. 401 `ZapmizerUnauthorizedException`, 404 `InstanceGoneException` (the number does not exist or is not this connection's), 429 `ZapmizerRateLimitedException`, 5xx `ZapmizerUnavailableException`.
+
 ### Revoking the token
 
 ```php
@@ -705,7 +785,7 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;          // Z
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerRateLimitedException;  // 429 — ->retryAfter()
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException; // team token revoked or missing (401)
 use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;   // partner key refused (401/403)
-use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;         // instance deleted or not this connection's (404 on connection() and reconnect())
+use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;         // instance deleted or not this connection's (404 on connection(), instance(), reconnect() and the conversation settings)
 use NotificationChannels\Zapmizer\Exceptions\MediaRejectedException;        // media request refused (422) — ->reason()
 use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;     // media endpoint rate limit (429) — ->retryAfter()
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;  // timeout / 5xx / no answer
@@ -714,7 +794,7 @@ use NotificationChannels\Zapmizer\Exceptions\NoConnectableException;        // r
 
 None of them renders a response: the routes above answer their JSON codes themselves, and anywhere else your exception handler decides. [erros.md](erros.md) (in Portuguese) shows how to read a `ZapmizerApiException` and the `ErrorCode` constants.
 
-The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceClient`) are container-bound with the configured transport, `LaravelHttpTransport` by default — see [transporte.md](transporte.md). Fake them in tests with `Http::fake()`. Every client sends `Accept: application/json` and does **not** follow redirects: a revoked token makes Zapmizer redirect to its login page, and a redirect or a non-JSON answer is an exception (`unexpectedResponse`) instead of a silent "success". `InstanceClient` always acts for one connection: its token is mandatory, there is no fallback to `zapmizer.api_token` — get it through `$connection->instanceClient()`. It knows `connection($id)`, `createWebhook($url)`, `rotateWebhookSecret($id)`, `deleteWebhook($id)` (these three with a full-access token only, section 7), `media($botInstanceId, $messageId, $timestamp)`, `reconnect()` and `revokeToken()` (section 9), `conversationSession()` and `inboxSession()` ([embed.md](embed.md)) — instances are created and paired on Zapmizer's page, not from here. `media()` is the one endpoint whose 200 is not JSON (the bytes); its 202/404 answers are, and a redirect is still refused; its 422 (bad request, Meta Cloud instance) is a `MediaRejectedException` and its 429 (rate limit) a `MediaRateLimitedException`. On `InstanceClient`, any other 4xx is a `ZapmizerApiException` (401 `ZapmizerUnauthorizedException`, 429 `ZapmizerRateLimitedException`), except the 404 of `connection()` and `reconnect()` (`InstanceGoneException`), of `deleteWebhook()` (done) and of `media()` (`unavailable`), the 409 `needs_reconnect` of `reconnect()` (a result) and the 401 of `revokeToken()` (done). On `PartnerClient`, a refused partner credential (401/403) is a `PartnerCredentialsException`, `exchangeCode()` and `subscription()` return `null` on 404 (unknown, expired or already used code; no approved connect with that `external_id`), and any other 4xx is a `ZapmizerApiException` (429 `ZapmizerRateLimitedException`). A 4xx of a partner call is logged as `zapmizer: partner call failed.`, except 404 and 409, which are business answers (no connect yet, already subscribed, payment pending), and 429, logged as the warning `zapmizer: partner call rate-limited.` with `endpoint` and `retry_after`, without the body.
+The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceClient`) are container-bound with the configured transport, `LaravelHttpTransport` by default — see [transporte.md](transporte.md). Fake them in tests with `Http::fake()`. Every client sends `Accept: application/json` and does **not** follow redirects: a revoked token makes Zapmizer redirect to its login page, and a redirect or a non-JSON answer is an exception (`unexpectedResponse`) instead of a silent "success". `InstanceClient` always acts for one connection: its token is mandatory, there is no fallback to `zapmizer.api_token` — get it through `$connection->instanceClient()`. It knows `connection($id)`, `instance($id)`, `instances()`, `conversationSettings($id, $wid)` and `updateConversationSettings($id, $wid, $on)` (section 9), `createWebhook($url)`, `rotateWebhookSecret($id)`, `deleteWebhook($id)` (these three with a full-access token only, section 7), `media($botInstanceId, $messageId, $timestamp)`, `reconnect()` and `revokeToken()` (section 9), `conversationSession()` and `inboxSession()` ([embed.md](embed.md)) — instances are created and paired on Zapmizer's page, not from here. `media()` is the one endpoint whose 200 is not JSON (the bytes); its 202/404 answers are, and a redirect is still refused; its 422 (bad request, Meta Cloud instance) is a `MediaRejectedException` and its 429 (rate limit) a `MediaRateLimitedException`. On `InstanceClient`, any other 4xx is a `ZapmizerApiException` (401 `ZapmizerUnauthorizedException`, 429 `ZapmizerRateLimitedException`), except the 404 of `connection()`, `instance()`, `reconnect()` and the conversation settings (`InstanceGoneException`), of `deleteWebhook()` (done) and of `media()` (`unavailable`), the 409 `needs_reconnect` of `reconnect()` (a result) and the 401 of `revokeToken()` (done). On `PartnerClient`, a refused partner credential (401/403) is a `PartnerCredentialsException`, `exchangeCode()` and `subscription()` return `null` on 404 (unknown, expired or already used code; no approved connect with that `external_id`), and any other 4xx is a `ZapmizerApiException` (429 `ZapmizerRateLimitedException`). A 4xx of a partner call is logged as `zapmizer: partner call failed.`, except 404 and 409, which are business answers (no connect yet, already subscribed, payment pending), and 429, logged as the warning `zapmizer: partner call rate-limited.` with `endpoint` and `retry_after`, without the body.
 
 `PartnerClient::createSession($redirectUri, $state = null, $webhookUrl = null, $expiresIn = null, $externalId = null)` keeps `expires_in` between Zapmizer's floor of **900 seconds** (`PartnerClient::MIN_EXPIRES_IN`) and its ceiling of **86400** (`PartnerClient::MAX_EXPIRES_IN`): the same signature covers the page, the authorization and the QR code, and a shorter one died mid-pairing. `ConnectToken` carries `userId` and `teamId` (both `int`) and `hasNumber()`: `false` when `phone_number` or `bot_instance_id` came `null` (the number ceased to exist between the approval and the exchange; Zapmizer says to start a new session).
 

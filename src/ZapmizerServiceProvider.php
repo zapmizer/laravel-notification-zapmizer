@@ -17,6 +17,7 @@ use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
 use NotificationChannels\Zapmizer\Contracts\ResolvesConnectable;
 use NotificationChannels\Zapmizer\Contracts\Transport;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
+use NotificationChannels\Zapmizer\Support\ConnectionWebhook;
 
 class ZapmizerServiceProvider extends ServiceProvider
 {
@@ -108,13 +109,19 @@ class ZapmizerServiceProvider extends ServiceProvider
 
         // The webhook is public and stateless — registered outside the
         // user-facing middleware on purpose. The signature check is on the
-        // route itself (routes/webhook.php), not left to the config.
+        // route itself (routes/webhook.php), not left to the config. The
+        // per-connection route (`zapmizer.webhook.per_connection`) joins it,
+        // same group.
         Route::group([
             'prefix' => config('zapmizer.routes.prefix', 'zapmizer'),
             'middleware' => config('zapmizer.routes.webhook_middleware', []),
             'as' => 'zapmizer.',
         ], function () {
             $this->loadRoutesFrom(__DIR__ . '/../routes/webhook.php');
+
+            if (ConnectionWebhook::enabled()) {
+                $this->loadRoutesFrom(__DIR__ . '/../routes/connection-webhook.php');
+            }
         });
     }
 

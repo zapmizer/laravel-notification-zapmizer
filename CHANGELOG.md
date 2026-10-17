@@ -1,5 +1,13 @@
 # Changelog
 
+# 0.4.0
+
+Sem breaking. **Recuperar mensagens exige o Zapmizer com `GET /api/whatsapp-messages`.**
+
+- **Sincronizar as mensagens do número.** `ZapmizerConnection::syncMessages($cursor = null, $since = null, $limit = null): Connect\SyncedMessages` lê tudo o que mudou nas mensagens do número desde o cursor (recebidas e enviadas, editadas, apagadas, as do sync na reconexão), cada uma traduzida como no webhook (`InboundMessage::fromMessage()`, motor wwebjs ou Rust). O Zapmizer não filtra nem deduplica: pule `fromMe` e deduplique por `$message->id`. `SyncedMessages` traz `messages`, `payloads` (o objeto cru, na mesma ordem), `cursor` (opaco; mantém o anterior quando nada veio) e `hasMore`. Entrada sem id é descartada sem travar a página. Sem `bot_instance_id` lança `ZapmizerUnauthorizedException`. Veja "Recovering what the webhook missed" em `docs/connect.md`.
+- `Connect\InstanceClient::syncMessages(int $botInstanceId, ?string $cursor = null, ?int $since = null, ?int $limit = null)`.
+- Laravel do 8.83 ao 13, com PHP 8.1.
+
 # 0.3.1
 
 Sem breaking.

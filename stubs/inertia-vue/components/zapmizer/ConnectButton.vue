@@ -7,7 +7,10 @@ import type { ZapmizerConnectMessage } from '@/types/zapmizer';
 withDefaults(defineProps<{ reauthRequired?: boolean }>(), { reauthRequired: false });
 
 /**
- * `connected`: o popup respondeu `ok` — a conexão já está ativa, com número.
+ * `connected`: o popup respondeu `ok` ou `webhook_failed` — a conexão já está
+ * ativa, com número. No `webhook_failed` o aviso de "não recebe" fica em
+ * `error`, mas é passageiro: a tela troca para o painel, e o aviso que fica é
+ * o do ConnectionPanel (`has_webhook_secret === false`).
  * `recheck`: o usuário clicou "já conectei" — quem decide é o estado que
  * voltar do servidor, não o clique.
  */
@@ -19,10 +22,11 @@ const error = ref('');
 const MESSAGES: Record<string, string> = {
   denied: 'Autorização cancelada. Tente novamente quando quiser conectar.',
   plan_limit: 'O plano do Zapmizer não tem vaga para mais um número. Libere um número lá (ou mude de plano) e tente de novo.',
-  qr_unavailable: 'Esse time do Zapmizer não consegue parear número por QR code. Confira as configurações do time lá e tente de novo.',
+  subscription_required: 'A conta do Zapmizer foi vinculada, mas não tem assinatura ativa. Conecte de novo para assinar.',
   invalid_state: 'O link de autorização expirou. Tente novamente.',
   exchange_failed: 'Não foi possível concluir a conexão. Tente novamente.',
-  webhook_failed: 'O número foi pareado, mas o recebimento de mensagens não pôde ser configurado. Tente conectar de novo.',
+  rate_limited: 'O Zapmizer está ocupado agora. Feche a janela e conecte de novo em um minuto.',
+  webhook_failed: 'Conectado e enviando, mas as mensagens recebidas não podem ser verificadas. Desconecte e conecte de novo para receber.',
   team_already_connected: 'Essa conta do Zapmizer já está conectada a outra conta aqui. Desconecte lá primeiro ou autorize outro time do Zapmizer.',
   no_connectable: 'Não há o que conectar nesta conta. Entre de novo e tente outra vez.',
 };
@@ -36,8 +40,8 @@ function onMessage(event: MessageEvent<Partial<ZapmizerConnectMessage>>) {
   if (event.origin !== window.location.origin) return;
   if (event.data?.source !== 'zapmizer-connect') return;
 
-  if (event.data.status === 'ok') {
-    error.value = '';
+  if (event.data.status === 'ok' || event.data.status === 'webhook_failed') {
+    error.value = event.data.status === 'webhook_failed' ? MESSAGES.webhook_failed : '';
     emit('connected');
 
     return;

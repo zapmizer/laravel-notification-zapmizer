@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { AlertCircleIcon, Loader2Icon, RefreshCwIcon, SmartphoneIcon, Trash2Icon } from 'lucide-vue-next';
-import { computed, ref } from 'vue';
-import type { ZapmizerConnection } from '@/types/zapmizer';
+import { AlertCircleIcon, Loader2Icon, RefreshCwIcon, RotateCcwIcon, SmartphoneIcon, Trash2Icon } from 'lucide-vue-next';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { relinkZapmizer } from '@/composables/useZapmizerIntegration';
+import type { ZapmizerConnection, ZapmizerReconnectMessage } from '@/types/zapmizer';
 
 /**
  * O número conectado e o estado dele. `integration` é o que `show?live=1`
@@ -14,12 +15,27 @@ const props = withDefaults(
   { refreshing: false, removing: false },
 );
 
+/**
+ * `reconnect` ("Trocar número") é um connect novo, com outro número ou outra
+ * conta. "Religar número" é outra coisa: traz de volta o MESMO número, com o
+ * token que a conexão já tem, e é resolvido aqui dentro.
+ */
 const emit = defineEmits<{ refresh: []; reconnect: []; disconnect: [] }>();
 
 const number = computed(() => props.integration.phone_number || '');
 const teamName = computed(() => props.integration.zapmizer_team_name ?? null);
 
-const reauthRequired = computed(() => props.integration.state === 'reauth_required');
+/** O religar respondeu 409: o token não serve mais, ou a instância sumiu. */
+const relinkNeedsConnect = ref(false);
+
+const reauthRequired = computed(() => props.integration.state === 'reauth_required' || relinkNeedsConnect.value);
+
+/** Conectado, mas sem secret do webhook: envia e não recebe. `undefined` não acende. */
+const cannotReceive = computed(() => props.integration.webhook_id !== null && props.integration.has_webhook_secret === false);
+
+const canRelink = computed(
+  () => props.integration.is_active && ['disconnected', 'off', 'qr_pending', 'qrcode'].includes(props.integration.state ?? ''),
+);
 
 const health = computed(() => {
   const state = props.integration.state;
@@ -37,6 +53,57 @@ const health = computed(() => {
 });
 
 const confirmingRemoval = ref(false);
+
+const relinking = ref(false);
+const relinkMessage = ref('');
+
+const UNAVAILABLE = 'O Zapmizer está indisponível no momento. Tente novamente em instantes.';
+const RELINK_FAILED = 'Não foi possível religar o número. Tente de novo.';
+
+const RELINK_MESSAGES: Record<string, string> = {
+  denied: 'Religação cancelada.',
+  plan_limit: 'O plano do Zapmizer não tem vaga para mais um número. Libere um número lá (ou mude de plano) e tente de novo.',
+  subscription_required: 'A conta do Zapmizer foi vinculada, mas não tem assinatura ativa. Conecte de novo para assinar.',
+};
+
+async function relink() {
+  relinkMessage.value = '';
+  relinkNeedsConnect.value = false;
+  relinking.value = true;
+
+  try {
+    const result = await relinkZapmizer();
+
+    // `needs_client`: o popup abriu; o resultado chega por postMessage.
+    if (result.status === 'online' || result.status === 'starting') emit('refresh');
+    if (result.status === 'refused') relinkMessage.value = result.message;
+  } catch (e) {
+    const status = (e as { response?: { status?: number } }).response?.status ?? 0;
+
+    if (status === 409) relinkNeedsConnect.value = true;
+    else relinkMessage.value = status === 503 || status === 429 ? UNAVAILABLE : RELINK_FAILED;
+  } finally {
+    relinking.value = false;
+  }
+}
+
+/** Mesma conferência de origem do ConnectButton, para o popup do religar. */
+function onMessage(event: MessageEvent<Partial<ZapmizerReconnectMessage>>) {
+  if (event.origin !== window.location.origin) return;
+  if (event.data?.source !== 'zapmizer-reconnect') return;
+
+  if (event.data.status === 'reconnected') {
+    relinkMessage.value = '';
+    emit('refresh');
+
+    return;
+  }
+
+  relinkMessage.value = RELINK_MESSAGES[event.data.status ?? ''] ?? RELINK_FAILED;
+}
+
+onMounted(() => window.addEventListener('message', onMessage));
+onBeforeUnmount(() => window.removeEventListener('message', onMessage));
 </script>
 
 <template>
@@ -77,7 +144,23 @@ const confirmingRemoval = ref(false);
         class="flex items-start gap-2 rounded border border-gp-coral/40 bg-gp-coral/10 px-3 py-2 text-[12px] text-gp-coral"
       >
         <AlertCircleIcon class="mt-px size-3.5 shrink-0" />
-        A conexão está inativa: o recebimento de mensagens não pôde ser configurado. Conecte de novo.
+        A conexão está inativa. Conecte de novo.
+      </p>
+
+      <p
+        v-if="cannotReceive"
+        class="flex items-start gap-2 rounded border border-gp-amber/40 bg-gp-amber/10 px-3 py-2 text-[12px] text-gp-amber"
+      >
+        <AlertCircleIcon class="mt-px size-3.5 shrink-0" />
+        Este número envia, mas não recebe mensagens: desconecte e conecte de novo.
+      </p>
+
+      <p
+        v-if="relinkMessage"
+        class="flex items-start gap-2 rounded border border-gp-coral/40 bg-gp-coral/10 px-3 py-2 text-[12px] text-gp-coral"
+      >
+        <AlertCircleIcon class="mt-px size-3.5 shrink-0" />
+        {{ relinkMessage }}
       </p>
 
       <div class="flex flex-wrap items-center gap-2">
@@ -90,6 +173,18 @@ const confirmingRemoval = ref(false);
           <RefreshCwIcon class="size-3.5" :class="{ 'animate-spin': refreshing }" />
           Atualizar estado
         </button>
+        <button
+          v-if="canRelink"
+          type="button"
+          class="inline-flex items-center gap-1.5 rounded border border-gp-teal bg-gp-teal/10 px-3 py-1.5 text-[12px] text-gp-teal transition-colors hover:bg-gp-teal/20 disabled:opacity-50"
+          :disabled="relinking"
+          @click="relink"
+        >
+          <Loader2Icon v-if="relinking" class="size-3.5 animate-spin" />
+          <RotateCcwIcon v-else class="size-3.5" />
+          Religar número
+        </button>
+        <!-- Connect novo (outro número ou outra conta), não o religar. -->
         <button
           type="button"
           class="inline-flex items-center gap-1.5 rounded border border-gp-border bg-gp-panel-2 px-3 py-1.5 text-[12px] text-gp-text transition-colors hover:border-gp-text"

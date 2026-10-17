@@ -76,6 +76,67 @@ class InstanceClient
     }
 
     /**
+     * The number as the API sees it (GET /bot-instances/{id}): `isOnline`
+     * and whether it is official (`supportsTemplates`). It is the way to
+     * confirm the number is up on any account: an official number has no
+     * `/connection` route. 404: the number does not exist, or it is not
+     * this connection's.
+     *
+     * @throws ZapmizerConnectException
+     */
+    public function instance(int $botInstanceId): BotInstance
+    {
+        $response = $this->request('GET', "/bot-instances/{$botInstanceId}");
+
+        $this->guardUnauthorized($response);
+
+        if ($response->getStatusCode() === 404) {
+            throw new InstanceGoneException(ApiError::from($response), $botInstanceId);
+        }
+
+        $this->guardFailure($response);
+
+        $data = $this->decode($response)['data'] ?? null;
+
+        if (!is_array($data) || array_is_list($data)) {
+            throw ZapmizerConnectException::unexpectedResponse('bot instance response carries no `data` object');
+        }
+
+        return BotInstance::fromArray($data);
+    }
+
+    /**
+     * The numbers the token sees (GET /bot-instances). With a connect token
+     * that is the connection's number only: zero or one item. Only the first
+     * page is read.
+     *
+     * @return array<int, BotInstance>
+     *
+     * @throws ZapmizerConnectException
+     */
+    public function instances(): array
+    {
+        $response = $this->request('GET', '/bot-instances');
+
+        $this->guardUnauthorized($response);
+        $this->guardFailure($response);
+
+        $data = $this->decode($response)['data'] ?? null;
+
+        if (!is_array($data) || !array_is_list($data)) {
+            throw ZapmizerConnectException::unexpectedResponse('bot instance list carries no `data` list');
+        }
+
+        return array_map(function (mixed $item): BotInstance {
+            if (!is_array($item)) {
+                throw ZapmizerConnectException::unexpectedResponse('bot instance list carries an item that is not an object');
+            }
+
+            return BotInstance::fromArray($item);
+        }, $data);
+    }
+
+    /**
      * @throws InvalidArgumentException
      * @throws ZapmizerConnectException
      */

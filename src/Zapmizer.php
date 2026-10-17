@@ -3,12 +3,16 @@
 namespace NotificationChannels\Zapmizer;
 
 use Illuminate\Container\Container;
+use InvalidArgumentException;
 use NotificationChannels\Zapmizer\Connect\ZapmizerApi;
 use NotificationChannels\Zapmizer\Contracts\Transport;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
+use NotificationChannels\Zapmizer\Messages\MetaMessageStatus;
+use NotificationChannels\Zapmizer\Messages\QrMessageStatus;
 use NotificationChannels\Zapmizer\Messages\SentMessage;
 use NotificationChannels\Zapmizer\Support\JsonResponse;
+use NotificationChannels\Zapmizer\Support\Payload;
 use Psr\Http\Message\ResponseInterface;
 
 /**
@@ -132,6 +136,94 @@ class Zapmizer
             'connect_timeout' => ZapmizerApi::TRANSFER_CONNECT_TIMEOUT,
             'timeout' => ZapmizerApi::TRANSFER_TIMEOUT,
         ])));
+    }
+
+    /**
+     * Where a send from a QR number is now (`GET /sent-messages/{id}`).
+     * Prefer `track()`, which reads the kind of number from the send.
+     *
+     * @throws InvalidArgumentException when `$id` is empty
+     * @throws Exceptions\ZapmizerException
+     */
+    public function sentMessage(string $id): QrMessageStatus
+    {
+        if ($id === '') {
+            throw new InvalidArgumentException('The sent message id must not be empty.');
+        }
+
+        $this->guardToken();
+
+        return QrMessageStatus::fromArray($this->decode($this->request('GET', '/sent-messages/' . rawurlencode($id))));
+    }
+
+    /**
+     * Where a send from the official number is now (`GET /meta-messages/{id}`).
+     * Prefer `track()`, which reads the kind of number from the send.
+     *
+     * @throws InvalidArgumentException when `$id` is not a positive integer
+     * @throws Exceptions\ZapmizerException
+     */
+    public function metaMessage(int|string $id): MetaMessageStatus
+    {
+        $id = Payload::positiveId($id);
+
+        if ($id === null) {
+            throw new InvalidArgumentException('The meta message id must be a positive integer.');
+        }
+
+        $this->guardToken();
+
+        return MetaMessageStatus::fromArray($this->decode($this->request('GET', "/meta-messages/{$id}")));
+    }
+
+    /**
+     * Follow a send by its `links.self` — the `SentMessage` itself or the
+     * link stored from it. The link says whether the number is QR
+     * (`sent-messages`) or official (`meta-messages`); the call goes to
+     * this client's API base with this client's token, never to the host
+     * written in the link. Null when the send has nothing to follow (an
+     * official send that went through a queue, or no `links.self`): that is
+     * not an error.
+     *
+     * @throws InvalidArgumentException when the link is not a tracking link
+     *                                  (e.g. `/messages/{id}` of the legacy
+     *                                  shape, sent without `api-version`)
+     * @throws Exceptions\ZapmizerException
+     */
+    public function track(SentMessage|string $sent): QrMessageStatus|MetaMessageStatus|null
+    {
+        if ($sent instanceof SentMessage) {
+            if (!$sent->isTrackable()) {
+                return null;
+            }
+
+            $sent = $sent->selfUrl;
+        }
+
+        [$kind, $id] = $this->trackingLink($sent);
+
+        return $kind === 'meta-messages' ? $this->metaMessage($id) : $this->sentMessage($id);
+    }
+
+    /**
+     * The kind (`sent-messages` or `meta-messages`) and the id of a
+     * `links.self`.
+     *
+     * @return array{0: string, 1: string}
+     *
+     * @throws InvalidArgumentException
+     */
+    protected function trackingLink(string $link): array
+    {
+        $path = Payload::url($link, underscoreInHost: true) === null ? null : parse_url($link, PHP_URL_PATH);
+
+        if (!is_string($path)
+            || preg_match('#/(sent-messages|meta-messages)/([^/]+)\z#', $path, $match) !== 1
+            || ($match[1] === 'meta-messages' && !ctype_digit($match[2]))) {
+            throw new InvalidArgumentException('Not a tracking link (`sent-messages/{id}` or `meta-messages/{id}`): send with `api-version: 2025-06-27` to get one.');
+        }
+
+        return [$match[1], rawurldecode($match[2])];
     }
 
     /**

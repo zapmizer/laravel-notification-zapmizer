@@ -149,13 +149,14 @@ class InstanceClient
         array $appearance = [],
         ?string $userId = null,
         ?string $userName = null,
+        ?string $userEmail = null,
     ): EmbedSession {
         return $this->embedSession($this->withoutNulls([
             'component' => 'conversation',
             'phone' => $phone,
             'parent_origin' => $parentOrigin,
             'appearance' => $this->withoutNulls($appearance) ?: null,
-            'user' => $this->embedUser($userId, $userName),
+            'user' => $this->embedUser($userId, $userName, $userEmail),
         ]));
     }
 
@@ -164,13 +165,18 @@ class InstanceClient
      *
      * @throws ZapmizerConnectException
      */
-    public function inboxSession(string $parentOrigin, array $appearance = [], ?string $userId = null, ?string $userName = null): EmbedSession
-    {
+    public function inboxSession(
+        string $parentOrigin,
+        array $appearance = [],
+        ?string $userId = null,
+        ?string $userName = null,
+        ?string $userEmail = null,
+    ): EmbedSession {
         return $this->embedSession($this->withoutNulls([
             'component' => 'inbox',
             'parent_origin' => $parentOrigin,
             'appearance' => $this->withoutNulls($appearance) ?: null,
-            'user' => $this->embedUser($userId, $userName),
+            'user' => $this->embedUser($userId, $userName, $userEmail),
         ]));
     }
 
@@ -423,9 +429,14 @@ class InstanceClient
         return EmbedSession::fromArray($this->decode($response));
     }
 
-    private function embedUser(?string $id, ?string $name): ?array
+    private function embedUser(?string $id, ?string $name, ?string $email): ?array
     {
         $user = array_filter(['id' => $id, 'name' => $name], fn (?string $value) => $value !== null && trim($value) !== '');
+        $email = trim((string) $email);
+
+        if ($email !== '' && filter_var($email, FILTER_VALIDATE_EMAIL) !== false) {
+            $user['email'] = $email;
+        }
 
         return $user === [] ? null : $user;
     }

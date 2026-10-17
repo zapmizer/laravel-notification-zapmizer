@@ -51,6 +51,14 @@ class UnavailableCacheStore implements Store
         $this->down();
     }
 
+    /**
+     * In the contract from Laravel 13 on.
+     */
+    public function touch($key, $seconds)
+    {
+        $this->down();
+    }
+
     public function forget($key)
     {
         $this->down();

@@ -153,7 +153,7 @@ class WebhookCatalogEventsTest extends TestCase
 
     /** @dataProvider catalog */
     #[DataProvider('catalog')]
-    public function testAMissingOrEmptyIdentifierDispatchesNoTypedEvent(string $name, string $class, string $property, array $identifiers)
+    public function testAMissingOrEmptyIdentifierDispatchesNoTypedEvent(string $name, string $class, string $property, array $identifiers, array $expected)
     {
         Event::fake([$class, WebhookReceived::class]);
         $this->connectedTeam('secret-a');
@@ -179,7 +179,7 @@ class WebhookCatalogEventsTest extends TestCase
 
     /** @dataProvider catalog */
     #[DataProvider('catalog')]
-    public function testOnlyTheIdentifierIsNeeded(string $name, string $class, string $property, array $identifiers)
+    public function testOnlyTheIdentifierIsNeeded(string $name, string $class, string $property, array $identifiers, array $expected)
     {
         Event::fake([$class]);
         $this->connectedTeam('secret-a');

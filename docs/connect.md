@@ -7,9 +7,9 @@ The single-tenant setup (`ZAPMIZER_API_TOKEN` + `ZAPMIZER_FROM_NUMBER`) keeps wo
 ## How it works
 
 ```
-your app ──(X-Partner-Key)──> POST /api/connect/sessions { redirect_uri, state, webhook_url } ──> { url }   [popup]
+your app ──(X-Partner-Key)──> POST /api/connect/sessions { redirect_uri, state, webhook_url, expires_in, external_id } ──> { url }   [popup]
 user authorizes a team AND pairs a number (QR code) on the hosted page
-        ──> redirect to your callback with ?code&state   (or ?error=access_denied|plan_limit|qr_unavailable)
+        ──> redirect to your callback with ?code&state   (or ?error=access_denied|plan_limit|subscription_required)
 your app ──(X-Partner-Key)──> POST /api/connect/token { code }
         ──> { token, user_id, team_id, team_name, phone_number, bot_instance_id, webhook_id, webhook_secret }
 everything stored (token and secret encrypted), connection ACTIVE
@@ -66,6 +66,7 @@ class Team extends Model implements Connectable
 | `hasActiveZapmizer()` | Active and with a paired number. |
 | `zapmizer()` | A `Zapmizer` client authenticated as the connection (token + `api-version`). |
 | `zapmizerMessage($to)` | A `ZapmizerMessage` with `from` = the paired number — the analogue of `$user->charge()`. |
+| `zapmizerExternalId()` | The model's customer id on Zapmizer, sent by the connect route as `external_id`; it keys the subscription and the checkout (section 8). Default: `(string) $this->getKey()`. |
 
 ```php
 $team->zapmizerMessage('5511999999999')->text('Hello')->send();
@@ -73,7 +74,23 @@ $team->zapmizerMessage('5511999999999')->text('Hello')->send();
 
 Both `zapmizer()` and `zapmizerMessage()` throw `ZapmizerConnectException` when the model isn't connected.
 
-The `ZapmizerConnection` model (`zapmizer.models.connection` to subclass it) exposes: `api_token`, `zapmizer_team_id`, `zapmizer_team_name`, `phone_number`, `bot_instance_id`, `connected_at`, `webhook_id`, `webhook_secret`, `webhook_previous_secret`, `is_active`. All of them are filled by the callback in one go. The token and both secrets are `encrypted` casts and hidden from serialization; `api_token_masked` (`••••1234`, or `••••` when the stored token no longer decrypts) is what a screen gets. `hasApiToken()` / `isConnected()` check the raw attribute and never decrypt, so a token written with an old `APP_KEY` shows as connected and fails loudly at send time — not on every `toArray()`. Do **not** add an accessor over those attributes — it would win over the cast and return the ciphertext.
+Override `zapmizerExternalId()` when the key alone does not name the customer. Two kinds of model connected in the same app collide: a `Team` 5 and a `User` 5 both send `5` and become the **same customer** on Zapmizer. Prefix the id:
+
+```php
+class Team extends Model implements Connectable
+{
+    use ConnectsZapmizer;
+
+    public function zapmizerExternalId(): string
+    {
+        return 'team-' . $this->getKey();
+    }
+}
+```
+
+Zapmizer matches `external_id` without regard to case (`Abc` and `abc` are the same customer), so the ids must be unique ignoring case. An id outside `[A-Za-z0-9_.-]`, longer than 191 characters, empty, `.` or `..` is a programming error: `start` throws `InvalidArgumentException` (a 500) before calling Zapmizer.
+
+The `ZapmizerConnection` model (`zapmizer.models.connection` to subclass it) exposes: `api_token`, `zapmizer_team_id`, `zapmizer_team_name`, `phone_number`, `bot_instance_id`, `connected_at`, `webhook_id`, `webhook_secret`, `webhook_previous_secret`, `is_active`. All of them are filled by the callback in one go. The token and both secrets are `encrypted` casts and hidden from serialization; `api_token_masked` (`••••1234`, or `••••` when the stored token no longer decrypts) and `has_webhook_secret` (whether a webhook secret is stored; `false` means the number sends but cannot verify what it receives) are what a screen gets. A subclass of the model that redefines `$appends` must list both. `hasApiToken()` / `isConnected()` check the raw attribute and never decrypt, so a token written with an old `APP_KEY` shows as connected and fails loudly at send time — not on every `toArray()`. Do **not** add an accessor over those attributes — it would win over the cast and return the ciphertext.
 
 ## 4. Who gets connected: the resolver
 
@@ -112,9 +129,11 @@ All under the package prefix (`zapmizer`), behind `web` + `auth`:
 | Route name | Method | Returns |
 |---|---|---|
 | `zapmizer.connect.show` | GET | `{ connection }` — the model's connection, or `null`. With `?live=1` the paired instance is queried on Zapmizer and `connection` also carries `state` and `is_online` (below). |
-| `zapmizer.connect.start` | POST | `{ url, expires_at }` — open `url` in a popup (520×720 works). `expires_at` is ISO 8601 with the offset (`2026-09-07T01:00:00+00:00`), or `null`. Stores the `state` in the session and sends `route('zapmizer.webhook')` as the session's `webhook_url`. |
-| `zapmizer.connect.callback` | GET | HTML page that `postMessage`s `{ source: 'zapmizer-connect', status, message }` to the opener and closes — it never answers a 500 (that would leave the opener waiting). Stores token, team, number, instance and webhook; the connection is born **active**. |
-| `zapmizer.connect.destroy` | DELETE | Deletes the webhook on Zapmizer (best-effort: a failure is logged and the local row goes anyway) and the local connection with its credentials. Zapmizer has no endpoint to revoke the team token — it is forgotten here, not revoked there. |
+| `zapmizer.connect.start` | POST | `{ url, expires_at }` — open `url` in a popup (520×720 works). `expires_at` is ISO 8601 with the offset (`2026-09-07T01:00:00+00:00`), or `null`. Stores the `state` in the session and sends, with the session, `route('zapmizer.webhook')` as `webhook_url`, the model's `zapmizerExternalId()` as `external_id` and the state's TTL as `expires_in` (`zapmizer.connect.state_ttl_minutes` × 60, at least Zapmizer's 900 seconds), so the hosted link lives as long as the state. 10 a minute. |
+| `zapmizer.connect.callback` | GET | HTML page that `postMessage`s `{ source: 'zapmizer-connect', status, message }` to the opener and closes — it never answers a 500 (that would leave the opener waiting). Stores token, team, number, instance and webhook; the connection is born **active**. It never calls `/webhooks`. |
+| `zapmizer.connect.destroy` | DELETE | Revokes the connection's token on Zapmizer (`DELETE /api/connect/token`, best-effort: a failure is a warning and the local row goes anyway) and deletes the local connection with its credentials. Zapmizer drops the webhook the connect created only when no other live grant uses the same URL: grants of earlier connects that were never revoked (`revoke_previous_token` off, section 9) keep it. The remedy then is a per-connection webhook URL. |
+| `zapmizer.connect.reconnect` | POST | Brings the stored number back with the token the connection already holds — see "Reconnecting a number from the panel". 10 a minute. |
+| `zapmizer.connect.reconnect.callback` | GET | HTML page that `postMessage`s `{ source: 'zapmizer-reconnect', status, message }` to the opener and closes. Stores nothing. |
 
 ### The callback's `status`
 
@@ -122,24 +141,37 @@ Every outcome the popup reports has a stable `status` — the message that goes 
 
 | `status` | Meaning |
 |---|---|
-| `ok` | Connected: token, number and webhook stored, connection active. Reload `show`. |
-| `denied` | The user cancelled on the hosted page. |
+| `ok` | Connected: token, number and webhook stored, connection active. Reload `show`. `NumberConnected` fires. |
+| `denied` | The user cancelled on the hosted page (`?error=access_denied`). |
 | `plan_limit` | The Zapmizer plan has no room for another number. The user frees one up (or upgrades) over there and tries again. |
-| `qr_unavailable` | The Zapmizer team cannot pair by QR code. Retrying does not help until the team is fixed over there. |
-| `invalid_state` | The session `state` is missing, mismatched, bound to another model or expired (`zapmizer.connect.state_ttl_minutes`). |
-| `exchange_failed` | The code is unknown/used, the partner key was refused, Zapmizer is down or answered something that is not JSON — details in the log. Nothing was stored. |
-| `webhook_failed` | Number paired and stored, but the webhook secret could not be obtained (below). The connection is stored **inactive**; connecting again fixes it. |
-| `team_already_connected` | Another model here already holds this Zapmizer team. One connectable per team — two would receive every message twice. |
+| `subscription_required` | The Zapmizer account was linked, but it has no active subscription. Connecting again leads to the checkout on the hosted page. |
+| `invalid_state` | The session `state` is missing, mismatched, bound to another model or expired (`zapmizer.connect.state_ttl_minutes`, 30 by default). |
+| `exchange_failed` | The code is unknown/used, the partner key was refused, Zapmizer is down or answered something that is not JSON, the token came without a number or with an invalid id, or the hosted page sent an `?error=` the package does not know (logged as `zapmizer: unknown connect error.`) — details in the log. Nothing was stored. |
+| `rate_limited` | Zapmizer kept answering 429 on the code exchange (below). Close the window and connect again in a minute. |
+| `webhook_failed` | Number paired and stored, connection **active**: it sends, but no webhook secret is stored, so it cannot verify what it receives (below). `has_webhook_secret` is `false`. Disconnect and connect again to receive. `NumberConnected` fires. |
+| `team_already_connected` | Another model here already holds this Zapmizer team. One connectable per team — two would receive every message twice. The new token is revoked. |
 | `no_connectable` | The resolver found nothing to connect on this request. |
 
-Re-authorizing the **same** Zapmizer team overwrites number and instance with what the new pairing brought, and keeps the stored webhook secret when Zapmizer reused the same webhook. A **different** team resets everything: the old webhook is deleted over there (best-effort) and the new team's number, instance and webhook take over.
+**The `state` comes first.** It is checked before anything the popup brings back, `?error=` included: a return whose `state` is missing, expired or bound to another model answers `invalid_state`, and nothing that depends on the return runs. A `state` that does not match the pending one (another tab's, or a forged one) leaves the pending state in the session; a matching one spends it, whatever comes next.
+
+**A 429 on the code exchange** does not spend the code. Instead of answering the opener, the popup shows a page that refreshes after `Retry-After` + 1 second (10 seconds without a usable header) and tries the same code again. It gives up with `rate_limited` after 5 attempts, when the wait would pass 240 seconds from the first attempt, or when the state would expire first. A refresh that comes back with another code answers `invalid_state` without calling Zapmizer.
+
+**Orphan tokens are revoked.** A token the exchange handed out but the package did not store — another model holds the team (`team_already_connected`), or no number came with it (`exchange_failed`) — would stay valid with no one holding it. It is revoked right away, in one attempt; a failure is the warning `zapmizer: the orphan token was not revoked.` and never changes the status.
+
+Re-authorizing the **same** Zapmizer team overwrites number and instance with what the new pairing brought, and keeps the stored webhook secret when Zapmizer reused the same webhook. A **different** team resets everything here: the new team's number, instance and webhook take over. Nothing is deleted on Zapmizer from the callback; the old webhook goes when the previous token is revoked (`revoke_previous_token`, section 9).
 
 ### The webhook secret
 
-Zapmizer registers the webhook for the session's `webhook_url` on the team while pairing, and hands the id and secret back with the token. The secret is only ever given **once**, on creation — so when the team **already had** a webhook for that URL (a reconnection, or a manual registration), Zapmizer reuses it and answers `webhook_secret: null`. The package then:
+Zapmizer registers the webhook for the session's `webhook_url` on the team while pairing, and hands the id and secret back with the token. The secret is only ever given **once**, on creation — so when the team **already had** a webhook for that URL (a reconnection, a manual registration, another live connection), Zapmizer reuses it and answers `webhook_secret: null`.
 
-- keeps the secret it already has, when the reused webhook is the one stored on the connection (same `webhook_id`);
-- otherwise **rotates** (`POST /api/webhooks/{id}/secret`) right away to get a valid pair — without a secret the connection could verify no delivery at all. A failed rotation leaves the connection **inactive**, logs the reason and reports `webhook_failed`.
+The callback **never calls `/webhooks`**: Zapmizer refuses those endpoints to a connect token (403 `missing_ability`). So:
+
+- a `null` secret for the webhook stored on the connection (same `webhook_id`) keeps the secret already stored;
+- a `null` secret without a stored, readable one — another `webhook_id`, a first connect, or a stored secret that no longer decrypts because `APP_KEY` changed — stores the connection **active** and without a secret, logs `zapmizer: connected without a webhook secret.` and reports `webhook_failed`. The number sends, but no delivery to it can be verified.
+
+The remedy is to disconnect (`destroy` revokes the token) and connect again: with no other live grant on that URL, Zapmizer creates the webhook again and hands a new secret. If it still comes back `null`, another grant keeps the webhook alive; the way out is a per-connection webhook URL.
+
+A stored token or secret that no longer decrypts (`APP_KEY` changed) counts as absent, with a warning, and the next connect overwrites it — on the same team or on a team switch.
 
 ### `show?live=1`
 
@@ -148,22 +180,91 @@ The panel that shows the connected number usually wants to say whether it is onl
 | `connection.state` | `is_online` | Meaning |
 |---|---|---|
 | `connected` | `true`/`false` | Zapmizer's own state; `is_online` is its `is_online`. Other Zapmizer states (`disconnected`, `off`, `qrcode`, `booting`, ...) come through as they are. |
-| `reauth_required` | `false` | The stored token was revoked on Zapmizer — the user has to connect again. |
+| `reauth_required` | `false` | The stored token was revoked on Zapmizer, or no longer decrypts (`APP_KEY` changed; logged as a warning) — the user has to connect again. |
 | `instance_gone` | `false` | The instance was deleted on Zapmizer (404). |
 | `zapmizer_unavailable` | `false` | Zapmizer is down, refused the call with another 4xx (403, 422, 429, ...), or answered something that is not JSON. |
 | `null` | `false` | Nothing to query: no token or no instance stored. |
 
 Without `live` no request leaves your server and `state`/`is_online` are absent. The route is throttled (60/min) because `live` reaches Zapmizer — poll it on user action or every minute, not every second.
 
+### Reconnecting a number from the panel
+
+When the paired number drops (the phone was logged out, the instance is `disconnected` or `off`), `POST zapmizer/connect/reconnect` (`zapmizer.connect.reconnect`) asks Zapmizer to bring it back with the token the connection already holds. No new token, nothing stored. It answers 200:
+
+| JSON | Meaning |
+|---|---|
+| `{ status: 'online' }` | Back online. |
+| `{ status: 'starting' }` | Booting; reload `show?live=1` in a moment. |
+| `{ status: 'needs_client', url, expires_at }` | The customer has to act on Zapmizer: open `url` in a popup (the stubs name it `zapmizer-reconnect`). `expires_at` is ISO 8601 with the offset, or `null`. |
+| `{ status: 'refused', code, message }` | Zapmizer refused with a 402: `code` is `plan_limit`, `subscription_required` or a code Zapmizer adds later; `message` is Zapmizer's text, or the package's when it sent none. `ReconnectRefused` fires. |
+
+Or one of these codes:
+
+| `code` | HTTP | Meaning |
+|---|---|---|
+| `no_instance` | 409 | Nothing to reconnect: no connection, no token or no instance stored, or Zapmizer answered 404. Connect again. |
+| `reauth_required` | 409 | The token is no longer valid (401, 403 — logged as `zapmizer: reconnect refused.`), or it no longer decrypts. Connect again. |
+| `zapmizer_unavailable` | 503 | Zapmizer is down, rate-limited the call (429), refused it otherwise (422, another 409, a 402 without a code), answered something unexpected, or `base_uri` is invalid. Reported. |
+| `no_connectable` | 403 | The resolver found nothing to connect. |
+
+Past 10 calls a minute the route's own throttle answers 429. Only `needs_client` keeps the state in the session, under its own key (`zapmizer_reconnect`): a reconnect never touches a pending connect. The popup comes back to `zapmizer.connect.reconnect.callback`, which checks the state first, like the connect, and posts `{ source: 'zapmizer-reconnect', status, message }` to the opener:
+
+| `status` | Meaning |
+|---|---|
+| `reconnected` | The number is back. Reload `show?live=1`. |
+| `denied` | The customer cancelled (`?error=access_denied`). |
+| `plan_limit` | The plan has no room for the number online. |
+| `subscription_required` | The account has no active subscription. |
+| `invalid_state` | As in the connect. |
+| `failed` | Anything else; an unknown `?error=` is logged as `zapmizer: unknown reconnect error.`. |
+| `no_connectable` | The resolver found nothing to connect. |
+
+An `?error=` wins over `status=reconnected`. The page is the Blade view `zapmizer::reconnect-result`, apart from `connect-result`: a `connect-result` you published keeps serving the connect and does not reach the reconnect.
+
+### Events
+
+Two Laravel events let your app react without extending the controllers:
+
+| Event | Payload | Fires when |
+|---|---|---|
+| `NumberConnected` | `$connectable`, `$connection` | the connect callback stored the paired number (`ok` or `webhook_failed`) |
+| `ReconnectRefused` | `$connectable`, `$connection`, `$code`, `$message` | Zapmizer refused a reconnect with a 402; `$message` is Zapmizer's text, or `null` |
+
+```php
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Log;
+use NotificationChannels\Zapmizer\Events\NumberConnected;
+use NotificationChannels\Zapmizer\Events\ReconnectRefused;
+use NotificationChannels\Zapmizer\Exceptions\ErrorCode;
+
+Event::listen(NumberConnected::class, function (NumberConnected $event) {
+    Log::info('WhatsApp connected.', [
+        'team' => $event->connectable->getKey(),
+        'number' => $event->connection->phone_number,
+        'ip' => request()->ip(),
+    ]);
+});
+
+Event::listen(ReconnectRefused::class, function (ReconnectRefused $event) {
+    if ($event->code === ErrorCode::SUBSCRIPTION_REQUIRED) {
+        Log::info('Reconnect refused: no subscription.', ['team' => $event->connectable->getKey()]);
+    }
+});
+```
+
+The payload carries no token. A listener runs inside the request, so the popup waits for it: queue heavy work (`ShouldQueue`). One that throws is reported and does not change the answer — the popup still says `ok`, the reconnect still answers `refused`. The events carry no request; use `request()` when the listener needs it.
+
 ### JSON error codes
 
-The JSON endpoints (`show`, `start`, `destroy`) answer these themselves, with or without `Accept: application/json` (the package's exceptions do not render):
+The JSON endpoints (`show`, `start`, `destroy`, `reconnect`) answer these themselves, with or without `Accept: application/json` (the package's exceptions do not render):
 
 | `code` | HTTP | Meaning |
 |---|---|---|
 | `zapmizer_unavailable` | 503 | Zapmizer is down, misbehaving or refused the session (404, 409, 422, 429), the configuration is missing or invalid (partner credentials, `base_uri`, an authenticated user that is not `Connectable` with the default resolver), or the answer was unexpected — back off and retry. Reported: the report says which. |
 | `partner_unauthorized` | 503 | Your partner credentials were refused — configuration error, logged and reported. |
 | `no_connectable` | 403 | The resolver found nothing to connect on this request (no user, a user without a team). |
+| `no_instance` | 409 | `reconnect` only: nothing to reconnect (above). |
+| `reauth_required` | 409 | `reconnect` only: the token is no longer valid or no longer decrypts (above). |
 
 ### Inertia + Vue components
 
@@ -175,12 +276,14 @@ php artisan vendor:publish --provider="NotificationChannels\Zapmizer\ZapmizerSer
 
 This copies into `resources/js/`:
 
-- `components/zapmizer/ConnectButton.vue` — opens the popup, listens to its `postMessage` (checking `event.origin` and `source === 'zapmizer-connect'`), shows a message per `status`, and has a "Já conectei" button for a popup that was closed by hand (emits `recheck`; `connected` on `ok`).
-- `components/zapmizer/ConnectionPanel.vue` — the connected number, its live state (from `show?live=1`), reconnect and disconnect.
-- `composables/useZapmizerIntegration.ts` — `reload({ live })`, `start()`, `disconnect()`; `openZapmizerConnect()` for the button.
-- `types/zapmizer.ts` — `ZapmizerConnection`, `ZapmizerConnectStatus`, `ZapmizerConnectMessage`.
+- `components/zapmizer/ConnectButton.vue` — opens the popup, listens to its `postMessage` (checking `event.origin` and `source === 'zapmizer-connect'`), shows a message per `status`, and has a "Já conectei" button for a popup that was closed by hand (emits `recheck`). It emits `connected` on `ok` and on `webhook_failed`, which also shows the warning that the number cannot receive.
+- `components/zapmizer/ConnectionPanel.vue` — the connected number, its live state (from `show?live=1`), a "Religar número" button (when the connection is active and `state` is `disconnected`, `off`, `qr_pending` or `qrcode`; it calls `relinkZapmizer()` and listens to the `zapmizer-reconnect` popup), the warning "this number sends but does not receive" when `webhook_id` is set and `has_webhook_secret === false`, "Trocar número" (a new connect, emits `reconnect`) and disconnect.
+- `composables/useZapmizerIntegration.ts` — `reload({ live })`, `start()`, `relink()`, `disconnect()`; `openZapmizerConnect()` for the button and `relinkZapmizer()` for the panel.
+- `types/zapmizer.ts` — `ZapmizerConnection`, `ZapmizerConnectStatus`, `ZapmizerConnectMessage`, `ZapmizerReconnectStatus`, `ZapmizerReconnectMessage`, `ZapmizerRelinkResult`.
 
-They expect `axios`, `lucide-vue-next` and Ziggy's `route()`; the markup uses utility classes from the app they came from (`gp-*`) — restyle them as yours. The result page of the popup is a Blade view you can publish with `--tag=views` (`resources/views/vendor/zapmizer/connect-result.blade.php`).
+The lasting warning of a `webhook_failed` is the panel's: the button emits `connected`, the screen switches to the panel, and the button's warning goes with it.
+
+They expect `axios`, `lucide-vue-next` and Ziggy's `route()`; the markup uses utility classes from the app they came from (`gp-*`) — restyle them as yours. The popup pages are Blade views you can publish with `--tag=views` (`resources/views/vendor/zapmizer/connect-result.blade.php`, `connect-wait.blade.php` and `reconnect-result.blade.php`).
 
 ## 6. Receiving messages: the signed webhook
 
@@ -340,9 +443,13 @@ Calls `POST /api/webhooks/{id}/secret` and stores both the new secret and the pr
 
 That also means **rotating once does not revoke a leaked secret**: the previous one keeps signing (and validating) until the next rotation. To retire a compromised secret, rotate **twice**.
 
+**Only with a full-access token.** Zapmizer refuses the `/webhooks` endpoints to a connect token — the one the connect flow stores — with 403 `missing_ability`. The same goes for `registerWebhook()` and `deleteRemoteWebhook()`. They work with a token that has every ability (`*`).
+
+For a connection that came from the connect flow, replace a leaked secret by disconnecting (`destroy` revokes the token) and connecting again: with no other live grant on the same URL, Zapmizer creates the webhook again and hands a new secret. A per-connection webhook URL keeps other grants off it.
+
 ## 8. Subscription and checkout
 
-`PartnerClient` also reads a customer's subscription and creates its checkout. The customer is identified by the `external_id` you sent with the connect session: it exists on Zapmizer once the customer approves that connect, and before that both calls answer 404. The package's own connect route (`zapmizer.connect.start`) does not send an `external_id` yet; call `createSession()` yourself to send one.
+`PartnerClient` also reads a customer's subscription and creates its checkout. The customer is identified by the `external_id` you sent with the connect session: it exists on Zapmizer once the customer approves that connect, and before that both calls answer 404. The package's connect route sends `zapmizerExternalId()`.
 
 Warning: Zapmizer matches `external_id` without regard to case (`Abc` and `abc` are the same customer), so the ids your app sends must be unique ignoring case.
 
@@ -398,7 +505,7 @@ if ($subscription === null) {
 
 ## 9. Reconnect and revoke
 
-These calls act for one connection, with its token: get the client through `$connection->instanceClient()`. None of them is called by the package's routes; your app decides when.
+These calls act for one connection, with its token: get the client through `$connection->instanceClient()`. The package's routes do it (section 5: the reconnect, and the revocation on `destroy` and with `revoke_previous_token`); use the client for your own flow.
 
 Embedding a conversation or the inbox has its own page, in Portuguese: [embed.md](embed.md).
 
@@ -474,9 +581,32 @@ try {
 }
 ```
 
-- `revokeToken(): void` — `DELETE /api/connect/token` revokes the token the client authenticates with. Use it when the customer removes the integration, and to revoke the previous token after a new connect replaced it (the client must be built for the previous token, as above: `instanceClient()` uses whichever `api_token` is stored when it is called, so calling it after the swap revokes the new token and leaves the old one valid). In this release the package's own connect callback (`zapmizer.connect.callback`) overwrites `api_token` without revoking the previous one, so revoking it is up to your app. To revoke it with the package's callback, capture the previous token in an `updating` observer on `NotificationChannels\Zapmizer\Models\ZapmizerConnection` (`$connection->getOriginal('api_token')` when `$connection->isDirty('api_token')`) and revoke it after the save; a built-in option is planned for a later release. Zapmizer also points to it to recover a lost webhook secret.
+- `revokeToken(): void` — `DELETE /api/connect/token` revokes the token the client authenticates with. Use it when the customer removes the integration, and to revoke the previous token after a new connect replaced it (the client must be built for the previous token, as above: `instanceClient()` uses whichever `api_token` is stored when it is called, so calling it after the swap revokes the new token and leaves the old one valid). The package's routes do both: `destroy` revokes the connection's token, and with `zapmizer.connect.revoke_previous_token` on the connect callback revokes the token the connection held before (below). Zapmizer also points to it to recover a lost webhook secret.
 - It returns on 204 (revoked now) and on 401 (the token was already revoked, or is not valid). A 404 is a `ZapmizerApiException` with `status()` 404: the token did not come from a connect and **is still valid**. A 403 (e-mail not verified) also means nothing was revoked. 5xx or no answer is a `ZapmizerUnavailableException`, a 429 a `ZapmizerRateLimitedException`, and a redirect or another 2xx `unexpectedResponse`.
 - 401 and 404 also come from a wrong `base_uri` or environment (an unknown route answers 404). Never let a failed revocation block the removal: catch it, report it and go on.
+
+### The package's revocations
+
+`destroy` always revokes the connection's token. The connect callback revokes the token the exchange handed out but did not store (an orphan, section 5) and, with `zapmizer.connect.revoke_previous_token` on, the token the connection held before, once the new one is saved — never the new one, and nothing when both are the same. Each is one attempt:
+
+| `DELETE /api/connect/token` answers | Effect |
+|---|---|
+| 204 | Revoked; nothing logged. |
+| 401 | Already revoked, or not valid; nothing logged. |
+| 404 | The token did not come from a connect and **is still valid**: warning with `status` 404. |
+| 403, 429, 5xx, no answer, a redirect, another 2xx | Warning with `status` (when there is one) and the exception's message. |
+
+A failed revocation never changes the popup's status nor stops `destroy`: the new token is already stored (or the row goes anyway), and the cost is one more grant on Zapmizer, which the warning names. The warnings are `zapmizer: the previous token was not revoked.` (`connection_id`), `zapmizer: the orphan token was not revoked.` (`team_id`) and, on `destroy`, `zapmizer: the token was not revoked and is still valid.` (404) or `zapmizer: the token was not revoked.`. A token that no longer decrypts is not sent: `zapmizer: could not read the previous token to revoke it.` / `zapmizer: could not read the token to revoke it.`.
+
+`revoke_previous_token` is **off by default**. Off, each new connect leaves the previous grant valid, and after a team switch the old webhook keeps delivering (a 401 in the log for each). Turn it on:
+
+```env
+ZAPMIZER_CONNECT_REVOKE_PREVIOUS_TOKEN=true
+```
+
+`true`, `1`, `on` and `yes` turn it on; anything else, absent included, leaves it off.
+
+**When you turn it on, remove the `updating` observer** the previous version of this guide taught for revoking the previous token: otherwise the token is revoked twice, and the second `DELETE` logs.
 
 ### Catch order
 
@@ -502,7 +632,7 @@ use NotificationChannels\Zapmizer\Exceptions\NoConnectableException;        // r
 
 None of them renders a response: the routes above answer their JSON codes themselves, and anywhere else your exception handler decides. [erros.md](erros.md) (in Portuguese) shows how to read a `ZapmizerApiException` and the `ErrorCode` constants.
 
-The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceClient`) are container-bound with the configured transport, `LaravelHttpTransport` by default — see [transporte.md](transporte.md). Fake them in tests with `Http::fake()`. Every client sends `Accept: application/json` and does **not** follow redirects: a revoked token makes Zapmizer redirect to its login page, and a redirect or a non-JSON answer is an exception (`unexpectedResponse`) instead of a silent "success". `InstanceClient` always acts for one connection: its token is mandatory, there is no fallback to `zapmizer.api_token` — get it through `$connection->instanceClient()`. It knows `connection($id)`, `createWebhook($url)`, `rotateWebhookSecret($id)`, `deleteWebhook($id)`, `media($botInstanceId, $messageId, $timestamp)`, `reconnect()` and `revokeToken()` (section 9), `conversationSession()` and `inboxSession()` ([embed.md](embed.md)) — instances are created and paired on Zapmizer's page, not from here. `media()` is the one endpoint whose 200 is not JSON (the bytes); its 202/404 answers are, and a redirect is still refused; its 422 (bad request, Meta Cloud instance) is a `MediaRejectedException` and its 429 (rate limit) a `MediaRateLimitedException`. On `InstanceClient`, any other 4xx is a `ZapmizerApiException` (401 `ZapmizerUnauthorizedException`, 429 `ZapmizerRateLimitedException`), except the 404 of `connection()` and `reconnect()` (`InstanceGoneException`), of `deleteWebhook()` (done) and of `media()` (`unavailable`), the 409 `needs_reconnect` of `reconnect()` (a result) and the 401 of `revokeToken()` (done). On `PartnerClient`, a refused partner credential (401/403) is a `PartnerCredentialsException`, `exchangeCode()` and `subscription()` return `null` on 404 (unknown, expired or already used code; no approved connect with that `external_id`), and any other 4xx is a `ZapmizerApiException` (429 `ZapmizerRateLimitedException`). A 4xx of a partner call is logged as `zapmizer: partner call failed.`, except 404 and 409: those are business answers (no connect yet, already subscribed, payment pending).
+The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceClient`) are container-bound with the configured transport, `LaravelHttpTransport` by default — see [transporte.md](transporte.md). Fake them in tests with `Http::fake()`. Every client sends `Accept: application/json` and does **not** follow redirects: a revoked token makes Zapmizer redirect to its login page, and a redirect or a non-JSON answer is an exception (`unexpectedResponse`) instead of a silent "success". `InstanceClient` always acts for one connection: its token is mandatory, there is no fallback to `zapmizer.api_token` — get it through `$connection->instanceClient()`. It knows `connection($id)`, `createWebhook($url)`, `rotateWebhookSecret($id)`, `deleteWebhook($id)` (these three with a full-access token only, section 7), `media($botInstanceId, $messageId, $timestamp)`, `reconnect()` and `revokeToken()` (section 9), `conversationSession()` and `inboxSession()` ([embed.md](embed.md)) — instances are created and paired on Zapmizer's page, not from here. `media()` is the one endpoint whose 200 is not JSON (the bytes); its 202/404 answers are, and a redirect is still refused; its 422 (bad request, Meta Cloud instance) is a `MediaRejectedException` and its 429 (rate limit) a `MediaRateLimitedException`. On `InstanceClient`, any other 4xx is a `ZapmizerApiException` (401 `ZapmizerUnauthorizedException`, 429 `ZapmizerRateLimitedException`), except the 404 of `connection()` and `reconnect()` (`InstanceGoneException`), of `deleteWebhook()` (done) and of `media()` (`unavailable`), the 409 `needs_reconnect` of `reconnect()` (a result) and the 401 of `revokeToken()` (done). On `PartnerClient`, a refused partner credential (401/403) is a `PartnerCredentialsException`, `exchangeCode()` and `subscription()` return `null` on 404 (unknown, expired or already used code; no approved connect with that `external_id`), and any other 4xx is a `ZapmizerApiException` (429 `ZapmizerRateLimitedException`). A 4xx of a partner call is logged as `zapmizer: partner call failed.`, except 404 and 409, which are business answers (no connect yet, already subscribed, payment pending), and 429, logged as the warning `zapmizer: partner call rate-limited.` with `endpoint` and `retry_after`, without the body.
 
 `PartnerClient::createSession($redirectUri, $state = null, $webhookUrl = null, $expiresIn = null, $externalId = null)` keeps `expires_in` between Zapmizer's floor of **900 seconds** (`PartnerClient::MIN_EXPIRES_IN`) and its ceiling of **86400** (`PartnerClient::MAX_EXPIRES_IN`): the same signature covers the page, the authorization and the QR code, and a shorter one died mid-pairing. `ConnectToken` carries `userId` and `teamId` (both `int`) and `hasNumber()`: `false` when `phone_number` or `bot_instance_id` came `null` (the number ceased to exist between the approval and the exchange; Zapmizer says to start a new session).
 
@@ -514,15 +644,18 @@ The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceCli
 | `zapmizer.api_version` | `api-version` header, sent by every client when set |
 | `zapmizer.default_country_code` | country code completed on national numbers (default `55`) |
 | `zapmizer.connect.resolver` | which model a request connects |
-| `zapmizer.connect.state_ttl_minutes` | how long the popup has to come back (default 10) |
+| `zapmizer.connect.state_ttl_minutes` | how long the popup has to come back, also sent as `expires_in` (default 30) |
+| `zapmizer.connect.revoke_previous_token` | revoke the token a connection held before when a new connect replaces it (default off; recommended on) |
 | `zapmizer.webhook.secret` | the single-tenant webhook secret (`ZAPMIZER_WEBHOOK_SECRET`) |
 | `zapmizer.webhook.tolerance` | accepted timestamp drift in seconds (default 300) |
 | `zapmizer.models.connection` | subclass the connection model |
 | `zapmizer.routes.*` | enable/prefix/middleware of the package routes |
 
+On the model, `zapmizerExternalId()` (section 3). For behaviour after a connect or a refused reconnect, the `NumberConnected` and `ReconnectRefused` events (section 5).
+
 ## Upgrading from 0.3.x
 
-The partner client changed. The package's routes keep their behaviour, except the `start` JSON and a token answer without ids (below).
+The partner client changed, and so did the connect flow ("Connect flow" below).
 
 - `PartnerClient::createSession($redirectUri, $state = null, $webhookUrl = null, $expiresIn = null, $externalId = null)`: `state` became optional and `externalId` was added at the end. Named and positional calls keep working; a subclass that overrides `createSession()` must update its signature.
 - `createSession()`, `subscription()` and `checkout()` throw `InvalidArgumentException` for an invalid `external_id` or `state` (`""`, `"0"` or whitespace at either end) before calling Zapmizer.
@@ -530,6 +663,34 @@ The partner client changed. The package's routes keep their behaviour, except th
 - `ConnectSession::$expiresAt` is a `?CarbonImmutable` instead of a `?string`. The `start` JSON normalizes it: `2026-09-07T01:00:00Z` becomes `2026-09-07T01:00:00+00:00`, without fractions of a second.
 - `ConnectToken`: `teamId` is an `int` (never `null`), `userId` was added as the second constructor argument, and an answer without a valid `user_id`/`team_id` throws `unexpectedResponse`. The callback then reports `exchange_failed` and stores nothing (it used to store the connection with a `null` `zapmizer_team_id`).
 - A partner call answered 404 or 409 no longer logs `zapmizer: partner call failed.`.
+
+**Connect flow.**
+
+| Before | Now |
+|---|---|
+| `Contracts\Connectable` without `zapmizerExternalId()` | required; models using the trait need no change |
+| `start` sent neither `external_id` nor `expires_in` | it sends both; the hosted link lasts the TTL |
+| `state_ttl_minutes` defaulted to 10; `null` gave 0 | defaults to 30; `null`/invalid means 30. A published config keeps its 10 |
+| `?error=subscription_required` → `exchange_failed` | `subscription_required` |
+| status `qr_unavailable` | gone (Zapmizer has not sent it since 1.148.8) |
+| `?error=` answered before the `state` | the `state` is checked first; with an invalid one, `invalid_state` |
+| a callback with a wrong `state` spent the pending one | the pending state only goes when the `state` matches |
+| a token without a number stored inactive (or active without an instance) | `exchange_failed`, nothing stored, the token revoked |
+| `team_already_connected` left the new token valid | the new token is revoked |
+| an invalid `bot_instance_id`/`webhook_id` became 0 | `exchange_failed` |
+| a 429 on the exchange → `exchange_failed` | the popup waits and retries; `rate_limited` when it cannot |
+| a 429 of a partner call: `Log::error` with the body | `Log::warning` without the body |
+| `webhook_failed` = inactive | `webhook_failed` = active, sends, no secret to receive; new message ("Connected and sending, but incoming messages can't be verified…"); the `ConnectButton` stub emits `connected` and shows the warning |
+| `destroy` did not revoke | `destroy` revokes the token |
+| `APP_KEY` changed: callback `exchange_failed`, `destroy` and `show?live=1` 500 | the unreadable value counts as absent, with a warning; the next connect overwrites it (team switch included); `show?live=1` answers `state: reauth_required` |
+| the `connect-result` view also served a reconnect you built | a new `reconnect-result` view |
+
+The callback and `destroy` no longer call `/webhooks` (rotation, remote deletion): with a connect token they always failed with 403 `missing_ability`, left the connection inactive, and the next connect repeated the failure.
+
+- **Turn `revoke_previous_token` on** (`ZAPMIZER_CONNECT_REVOKE_PREVIOUS_TOKEN=true`), and remove the `updating` observer the previous version of this guide taught.
+- A `config/zapmizer.php` you published keeps `'state_ttl_minutes' => (int) env('ZAPMIZER_CONNECT_STATE_TTL', 10)`: raise it to 30, or delete the key to take the package's default.
+- Re-publish the stubs with `php artisan vendor:publish --tag=zapmizer-wizard --force`. `--force` overwrites your local edits of the published files: save them first and apply them again.
+- A subclass of `ConnectController`: `obtainWebhookSecret()` and `forgetRemoteWebhook()` are gone, and the state methods moved to the `HandlesPopupState` trait with the same signatures. `popupStatus()` reads `static::POPUP_ERRORS`. An own `result()` with a map of messages now receives `subscription_required` and `rate_limited` (and no longer `qr_unavailable`): add both keys.
 
 ## Upgrading from 0.1.x
 

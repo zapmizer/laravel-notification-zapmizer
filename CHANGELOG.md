@@ -8,6 +8,8 @@
 
 **Breaking no cliente de parceiro:** `ConnectToken`, `ConnectSession::$expiresAt` e a assinatura do `createSession()` mudaram. Veja "Cliente de parceiro" abaixo.
 
+**Breaking no fluxo de connect:** veja "Fluxo de connect" abaixo.
+
 - **Transporte HTTP.** `PartnerClient`, `InstanceClient` e `Zapmizer` (o envio) mandam as requisições pelo `Http` do Laravel (`Connect\Transports\LaravelHttpTransport`), padrão e único transporte da lib. Para trocar, `zapmizer.http.transport` nomeia uma classe que implementa `Contracts\Transport`. Veja `docs/transporte.md`.
 - O `getPrevious()` da `ZapmizerUnavailableException` pode mudar de classe conforme a versão do Laravel: uma exceção do `Http` do Laravel (`ConnectionException` etc.) ou, do Laravel 8 ao 11 em alguns casos (corpo cortado), a do Guzzle.
 - `zapmizer.http.connect_timeout` e `zapmizer.http.timeout` (`ZAPMIZER_HTTP_CONNECT_TIMEOUT`, `ZAPMIZER_HTTP_TIMEOUT`), `null` por padrão. Sem valor, vale o padrão do `Http` da versão: nenhum no Laravel 8; 30 s de total e 10 s de conexão no 9.52 e do 10 em diante.
@@ -125,6 +127,51 @@ Quebras: nenhuma de comportamento. Só métodos e classes novos, e o `PartnerCli
   - na mesma rota, com um usuário autenticado sem `Connectable` no resolvedor padrão (`notConnectable()`): de 500 a 503 `zapmizer_unavailable` com `report()`;
   - o `VerificationClient` não muda.
 - **Subclasses:** uma subclasse de `InstanceClient` que sobrescreve `conversationSession()` ou `inboxSession()` precisa aceitar o parâmetro novo, senão dá erro fatal de assinatura.
+
+**Fluxo de connect:**
+
+| Antes | Agora |
+| --- | --- |
+| `Contracts\Connectable` sem `zapmizerExternalId()` | método obrigatório; quem usa o trait não muda |
+| `start` sem `external_id` nem `expires_in` | manda os dois; o link vale o TTL |
+| `state_ttl_minutes` padrão 10; `null` dava 0 | padrão 30; `null`/inválido = 30. Uma config publicada guarda o 10 |
+| `?error=subscription_required` → `exchange_failed` | `subscription_required` |
+| status `qr_unavailable` | sai (a Zapmizer não envia desde 1.148.8) |
+| `?error=` respondido antes do `state` | `state` conferido antes; com `state` inválido, `invalid_state` |
+| um callback com `state` errado consumia o pending | o pending só sai quando o `state` bate |
+| token sem número gravado inativo (ou ativo sem instância) | `exchange_failed`, nada gravado, token revogado |
+| `team_already_connected` deixava o token novo valendo | o token novo é revogado |
+| `bot_instance_id`/`webhook_id` inválido virava 0 | `exchange_failed` |
+| 429 na troca → `exchange_failed` | o popup espera e repete; `rate_limited` se não der |
+| 429 de chamada de parceiro: `Log::error` com o corpo | `Log::warning` sem corpo |
+| `webhook_failed` = inativa | `webhook_failed` = ativa, envia, sem secret para receber; mensagem nova ("Connected and sending, but incoming messages can't be verified…"); o stub `ConnectButton` emite `connected` e mostra o aviso |
+| `destroy` não revogava | `destroy` revoga o token |
+| `APP_KEY` trocado: callback `exchange_failed`, `destroy` e `show?live=1` 500 | o valor ilegível vale como ausente, com warning; é sobrescrito no connect seguinte (inclusive na troca de time); `show?live=1` responde `state: reauth_required` |
+| view `connect-result` usada também por quem montava reconnect | view nova `reconnect-result` |
+
+Correções (já não funcionavam com token de connect, 403 `missing_ability`):
+
+- o callback tentava rotacionar o secret: a conexão ficava inativa e o connect seguinte repetia a falha;
+- `destroy` e troca de time tentavam apagar o webhook remoto, só logavam e deixavam o token valendo;
+- a doc ensinava a rotação (§7).
+
+Novo:
+
+- rotas de reconnect;
+- `revoke_previous_token` (desligada por padrão; recomendado ligar);
+- eventos `NumberConnected` e `ReconnectRefused`;
+- `has_webhook_secret` na serialização da conexão (aditivo);
+- `ZapmizerApiException::context()`;
+- callback que não responde 500 com parâmetro em array.
+
+Stubs: republicar com `php artisan vendor:publish --tag=zapmizer-wizard --force`. Atenção: o `--force` sobrescreve as edições locais dos arquivos publicados; guarde-as antes e reaplique.
+
+Subclasses:
+
+- do `ConnectController`: saem `obtainWebhookSecret()` e `forgetRemoteWebhook()`, e os métodos de estado vão para o trait com as mesmas assinaturas. O `popupStatus()` lê `static::POPUP_ERRORS`. Um `result()` próprio com mapa de mensagens passa a receber `subscription_required` e `rate_limited` (e não recebe mais `qr_unavailable`): acrescente as duas chaves;
+- de `ZapmizerApiException`: ganham `context()`.
+
+Veja "Connect flow" em "Upgrading from 0.3.x" (`docs/connect.md`).
 
 **Upgrade da 0.3:**
 

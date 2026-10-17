@@ -18,8 +18,8 @@ use NotificationChannels\Zapmizer\Support\Payload;
  *
  * `webhookSecret` is null when no webhook was requested AND when Zapmizer
  * reused a webhook the team already had for that URL (the secret is only
- * ever handed out once, on creation): a null secret with a non-null id
- * means "rotate to get one".
+ * ever handed out once, on creation): a null secret with a non-null id is
+ * a reused webhook, whose secret is the one stored on the first connect.
  */
 final class ConnectToken
 {
@@ -89,9 +89,9 @@ final class ConnectToken
     }
 
     /**
-     * Zapmizer registered (or reused) a webhook but did not hand the secret
-     * out: the caller must rotate to obtain one before any delivery can be
-     * verified.
+     * Zapmizer reused a webhook and did not hand the secret out (it only
+     * comes on creation): only a secret already stored for the same webhook
+     * can verify its deliveries.
      */
     public function needsWebhookSecret(): bool
     {

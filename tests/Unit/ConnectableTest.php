@@ -116,6 +116,20 @@ class ConnectableTest extends TestCase
         $this->assertTrue($serialized['is_active']);
     }
 
+    public function testM1TheSerializationSaysWhetherASecretIsStored()
+    {
+        $with = $this->connectedTeam('whsec_abcdef')->zapmizerConnection->fresh()->toArray();
+        $without = $this->connectedTeam(number: '5581922220000', overrides: ['webhook_secret' => null])->zapmizerConnection->fresh()->toArray();
+
+        $this->assertTrue($with['has_webhook_secret']);
+        $this->assertFalse($without['has_webhook_secret']);
+
+        foreach ([$with, $without] as $serialized) {
+            $this->assertArrayNotHasKey('webhook_secret', $serialized);
+            $this->assertArrayNotHasKey('webhook_previous_secret', $serialized);
+        }
+    }
+
     public function testSigningSecretsOfferThePreviousOneDuringRotation()
     {
         $team = $this->connectedTeam('new', overrides: ['webhook_previous_secret' => 'old']);

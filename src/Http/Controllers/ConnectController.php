@@ -241,14 +241,15 @@ class ConnectController extends Controller
     /**
      * Store everything the exchange brought on the model's connection. The
      * hosted page paired the number before handing out the code, so the
-     * connection is born ACTIVE — as long as a number came.
+     * connection is born ACTIVE. Nothing here calls `/webhooks`: the connect
+     * token cannot (403 `missing_ability`).
      *
      * A DIFFERENT team than the one stored gets a clean slate first: the old
-     * number, instance and webhook belong to the old token, and the old
-     * webhook is deleted over there (best-effort). The SAME team keeps its
-     * stored webhook secret when Zapmizer reused the webhook (same id, no
-     * secret in the answer); any other missing secret is obtained by
-     * rotating — without one, no delivery can be verified.
+     * number, instance and webhook belong to the old token. The SAME team
+     * keeps its stored webhook secret when Zapmizer reused the webhook (same
+     * id, no secret in the answer). Without any secret the connection stays
+     * active — it sends — and the popup says `webhook_failed`: it cannot
+     * verify what it receives until it disconnects and connects again.
      */
     protected function storeToken(Model&Connectable $connectable, ConnectToken $token): View
     {
@@ -266,17 +267,6 @@ class ConnectController extends Controller
             && $connection->zapmizer_team_id !== null
             && $connection->zapmizer_team_id !== $token->teamId;
 
-        // A webhook replaced on the same team (new id): the old one would keep
-        // delivering with a secret this row is about to forget.
-        $replacingWebhook = !$switchingTeam
-            && $connection->webhook_id !== null
-            && $token->webhookId !== null
-            && $connection->webhook_id !== $token->webhookId;
-
-        if ($switchingTeam || $replacingWebhook) {
-            $this->forgetRemoteWebhook($connection);
-        }
-
         if ($switchingTeam) {
             $connection->forgetPairing();
         }
@@ -291,12 +281,17 @@ class ConnectController extends Controller
             'zapmizer_team_name' => $token->teamName,
             'phone_number' => $token->phoneNumber,
             'bot_instance_id' => $token->botInstanceId,
-            'connected_at' => $token->phoneNumber === null ? null : now(),
+            'connected_at' => now(),
             'webhook_id' => $token->webhookId,
-            'webhook_secret' => $reusedWebhook ? $connection->webhook_secret : $token->webhookSecret,
-            'webhook_previous_secret' => $reusedWebhook ? $connection->webhook_previous_secret : null,
-            'is_active' => $token->phoneNumber !== null,
+            'is_active' => true,
         ]);
+
+        if (!$reusedWebhook) {
+            $connection->forceFill([
+                'webhook_secret' => $token->webhookSecret,
+                'webhook_previous_secret' => null,
+            ]);
+        }
 
         try {
             $connection->save();
@@ -312,18 +307,24 @@ class ConnectController extends Controller
             return $this->result('team_already_connected');
         }
 
-        if ($token->needsWebhookSecret() && !$reusedWebhook && !$this->obtainWebhookSecret($connection)) {
-            return $this->result('webhook_failed');
+        $status = $token->needsWebhookSecret() && !$reusedWebhook ? 'webhook_failed' : 'ok';
+
+        if ($status === 'webhook_failed') {
+            Log::warning('zapmizer: connected without a webhook secret.', [
+                'connection_id' => $connection->getKey(),
+                'webhook_id' => $connection->webhook_id,
+            ]);
         }
 
-        return $this->result('ok');
+        return $this->result($status);
     }
 
     /**
-     * Disconnect the model from Zapmizer: the webhook over there is deleted
-     * (best-effort — a failure is logged and the local row goes anyway),
-     * the local row with its credentials dies. The team token itself cannot
-     * be revoked through the API; it is simply forgotten here.
+     * Disconnect the model from Zapmizer: the token is revoked
+     * (`DELETE /connect/token`, best-effort — a failure is a warning and the
+     * local row goes anyway) and the local row with its credentials dies.
+     * Zapmizer drops the webhook the connect created once no other live
+     * grant uses the same URL.
      */
     public function destroy(Request $request): JsonResponse
     {
@@ -334,36 +335,30 @@ class ConnectController extends Controller
         }
 
         if ($connection !== null) {
-            $this->forgetRemoteWebhook($connection);
+            if ($connection->hasApiToken()) {
+                $this->revokeOnDestroy($connection, (string) $connection->api_token);
+            }
+
             $connection->delete();
         }
 
         return new JsonResponse(['status' => 'disconnected']);
     }
 
-    /**
-     * Zapmizer reused a webhook the team already had for our URL and kept
-     * its secret to itself. Rotating is the only way to get one; a
-     * connection without it would accept nothing, so it is deactivated when
-     * the rotation fails — the log says why, the popup says `webhook_failed`.
-     */
-    protected function obtainWebhookSecret(ZapmizerConnection $connection): bool
+    private function revokeOnDestroy(ZapmizerConnection $connection, string $token): void
     {
-        try {
-            $connection->rotateWebhookSecret();
+        $exception = $this->tryRevoke($token);
 
-            return true;
-        } catch (Throwable $exception) {
-            Log::warning('zapmizer: could not obtain the webhook secret after connecting.', [
-                'connection_id' => $connection->getKey(),
-                'webhook_id' => $connection->webhook_id,
-                'exception' => $exception->getMessage(),
-            ]);
-
-            $connection->forceFill(['is_active' => false])->save();
-
-            return false;
+        if ($exception === null) {
+            return;
         }
+
+        $stillValid = $exception instanceof ZapmizerApiException && $exception->status() === 404;
+
+        Log::warning(
+            $stillValid ? 'zapmizer: the token was not revoked and is still valid.' : 'zapmizer: the token was not revoked.',
+            ['connection_id' => $connection->getKey()] + $this->failureContext($exception),
+        );
     }
 
     /**
@@ -435,24 +430,6 @@ class ConnectController extends Controller
     }
 
     /**
-     * Best-effort deletion of the webhook on Zapmizer. Whatever the reason
-     * it fails (token revoked, Zapmizer down), the local decision stands;
-     * the log is what tells an operator to clean it up by hand.
-     */
-    protected function forgetRemoteWebhook(ZapmizerConnection $connection): void
-    {
-        try {
-            $connection->deleteRemoteWebhook();
-        } catch (Throwable $exception) {
-            Log::warning('zapmizer: could not delete the webhook on Zapmizer.', [
-                'connection_id' => $connection->getKey(),
-                'webhook_id' => $connection->webhook_id,
-                'exception' => $exception->getMessage(),
-            ]);
-        }
-    }
-
-    /**
      * The key of the webhook this connectable's session registers; `null`
      * is the package's single webhook route.
      */
@@ -511,7 +488,7 @@ class ConnectController extends Controller
             'invalid_state' => 'This connection session is invalid or has expired. Close this window and try again.',
             'exchange_failed' => 'The connection could not be completed. Close this window and try again.',
             'rate_limited' => 'Zapmizer is busy right now. Close this window and connect again in a minute.',
-            'webhook_failed' => 'The number was paired, but the receiver could not be set up. Close this window and try again.',
+            'webhook_failed' => "Connected and sending, but incoming messages can't be verified. Disconnect and connect again to receive.",
             'team_already_connected' => 'This Zapmizer account is already connected to another account here. Disconnect it there first, or authorize a different Zapmizer team.',
             'no_connectable' => 'There is nothing to connect on this account. Close this window, sign in again and retry.',
         ];

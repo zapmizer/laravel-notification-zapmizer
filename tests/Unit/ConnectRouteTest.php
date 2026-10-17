@@ -636,8 +636,10 @@ class ConnectRouteTest extends TestCase
 
     // --- callback -------------------------------------------------------
 
-    public function testCallbackExchangesTheCodeAndStoresAnActiveConnection()
+    public function testX1TheExchangeStoresAnActiveConnection()
     {
+        Carbon::setTestNow('2026-10-16 12:00:00');
+        Log::spy();
         $this->fakeHttp(new Response(200, [], $this->tokenPayload()));
         $this->actingAsUser();
 
@@ -659,7 +661,7 @@ class ConnectRouteTest extends TestCase
         // The hosted page paired the number: everything lands at once.
         $this->assertEquals('5581911110000', $connection->phone_number);
         $this->assertEquals(9, $connection->bot_instance_id);
-        $this->assertNotNull($connection->connected_at);
+        $this->assertTrue($connection->connected_at->equalTo(now()));
         $this->assertEquals(42, $connection->webhook_id);
         $this->assertEquals('whsec_new', $connection->webhook_secret);
         $this->assertNull($connection->webhook_previous_secret);
@@ -670,141 +672,92 @@ class ConnectRouteTest extends TestCase
         $this->assertNull(session(ConnectController::SESSION_KEY));
         $this->assertCount(1, $this->history);
         $this->assertEquals(['code' => '12.secret'], json_decode((string) $this->history[0]['request']->getBody(), true));
+        Log::shouldNotHaveReceived('warning');
+        $this->assertNoWebhookCalls();
     }
 
-    public function testCallbackRotatesWhenZapmizerReusedTheWebhookAndKeptTheSecret()
+    public function testW1TheSameWebhookKeepsTheStoredSecret()
     {
+        Log::spy();
         $this->fakeHttp(
-            new Response(200, [], $this->tokenPayload(['webhook_secret' => null])),
-            new Response(200, [], json_encode(['data' => ['id' => 42, 'secret' => 'whsec_rotated', 'previous_secret' => 'whsec_unknown']])),
+            $this->sessionCreated(),
+            $this->tokenAnswer(['webhook_secret' => 'whsec_1']),
+            $this->sessionCreated(),
+            $this->tokenAnswer(['token' => '2|sanctum', 'phone_number' => '5581922220000', 'bot_instance_id' => 10, 'webhook_secret' => null]),
         );
         $this->actingAsUser();
 
-        $this->withSession($this->pendingSession())
-            ->get(route('zapmizer.connect.callback', ['code' => 'c', 'state' => 's']))
-            ->assertOk()
-            ->assertSee('status: "ok"', false);
-
-        $connection = $this->team()->zapmizerConnection;
-        $this->assertEquals(42, $connection->webhook_id);
-        $this->assertEquals('whsec_rotated', $connection->webhook_secret);
-        $this->assertEquals('whsec_unknown', $connection->webhook_previous_secret);
-        $this->assertTrue($connection->is_active);
-
-        // Rotated with the NEW token, on the webhook Zapmizer named.
-        $rotate = $this->history[1]['request'];
-        $this->assertEquals('POST', $rotate->getMethod());
-        $this->assertEquals('http://zap.test/api/webhooks/42/secret', (string) $rotate->getUri());
-        $this->assertEquals('Bearer 1|sanctum', $rotate->getHeaderLine('Authorization'));
-    }
-
-    /** @dataProvider rotationFailures */
-    #[DataProvider('rotationFailures')]
-    public function testCallbackDeactivatesWhenTheSecretCannotBeObtained(Response $failure)
-    {
-        Log::spy();
-        $this->fakeHttp(new Response(200, [], $this->tokenPayload(['webhook_secret' => null])), $failure);
-        $this->actingAsUser();
-
-        $this->withSession($this->pendingSession())
-            ->get(route('zapmizer.connect.callback', ['code' => 'c', 'state' => 's']))
-            ->assertOk()
-            ->assertSee('status: "webhook_failed"', false)
-            ->assertSee('window.opener.postMessage', false);
-
-        // The pairing is kept — the token, number and webhook id are real —
-        // but nothing can be verified without a secret: inactive, with a log.
-        $connection = $this->team()->zapmizerConnection;
-        $this->assertEquals('1|sanctum', $connection->api_token);
-        $this->assertEquals('5581911110000', $connection->phone_number);
-        $this->assertEquals(42, $connection->webhook_id);
-        $this->assertNull($connection->webhook_secret);
-        $this->assertFalse($connection->is_active);
-        $this->assertFalse($this->team()->fresh()->hasActiveZapmizer());
-        Log::shouldHaveReceived('warning')->withArgs(fn (string $message) => str_contains($message, 'could not obtain the webhook secret'));
-    }
-
-    public static function rotationFailures(): array
-    {
-        return [
-            'zapmizer down' => [new Response(500, [], '')],
-            'token refused' => [new Response(401, [], '{}')],
-            'webhook gone' => [new Response(404, [], '{}')],
-        ];
-    }
-
-    public function testCallbackKeepsTheStoredSecretWhenTheSameWebhookIsReused()
-    {
-        // Reconnecting the same team: Zapmizer finds our URL already
-        // registered and answers the same id without a secret. The one
-        // stored is still the one signing — no rotation needed.
-        $this->fakeHttp(new Response(200, [], $this->tokenPayload(['token' => '2|sanctum', 'phone_number' => '5581922220000', 'bot_instance_id' => 10, 'webhook_secret' => null])));
-        $this->actingAsUser();
-        $this->authorizedTeam([
-            'phone_number' => '5581911110000', 'bot_instance_id' => 9, 'connected_at' => now()->subDay(), 'is_active' => true,
-            'webhook_id' => 42, 'webhook_secret' => 'whsec_old', 'webhook_previous_secret' => 'whsec_older',
-        ]);
-
-        $this->withSession($this->pendingSession())
-            ->get(route('zapmizer.connect.callback', ['code' => 'c', 'state' => 's']))
-            ->assertOk()
-            ->assertSee('status: "ok"', false);
+        $this->connect()->assertSee('status: "ok"', false);
+        $this->connect()->assertSee('status: "ok"', false);
 
         $connection = $this->team()->zapmizerConnection;
         $this->assertEquals(1, ZapmizerConnection::count());
         $this->assertEquals('2|sanctum', $connection->api_token);
         $this->assertEquals('5581922220000', $connection->phone_number);
         $this->assertEquals(10, $connection->bot_instance_id);
-        $this->assertTrue($connection->connected_at->isAfter(now()->subMinute()));
         $this->assertEquals(42, $connection->webhook_id);
-        $this->assertEquals('whsec_old', $connection->webhook_secret);
-        $this->assertEquals('whsec_older', $connection->webhook_previous_secret);
+        $this->assertEquals('whsec_1', $connection->webhook_secret);
+        $this->assertNull($connection->webhook_previous_secret);
         $this->assertTrue($connection->is_active);
-        $this->assertCount(1, $this->history);
+        $this->assertCount(4, $this->history);
+        Log::shouldNotHaveReceived('warning');
+        $this->assertNoWebhookCalls();
     }
 
-    public function testCallbackOnTheSameTeamWithANewWebhookDeletesTheOldOne()
+    /** @dataProvider connectsWithoutASecret */
+    #[DataProvider('connectsWithoutASecret')]
+    public function testW2WithoutASecretTheConnectionSendsButCannotReceive(array $connects, int $webhookId)
     {
-        $this->fakeHttp(
-            new Response(200, [], $this->tokenPayload(['token' => '2|sanctum', 'webhook_id' => 43, 'webhook_secret' => 'whsec_43'])),
-            new Response(200, [], json_encode(['message' => 'Webhook removido.'])),
-        );
-        $this->actingAsUser();
-        $this->authorizedTeam(['phone_number' => '5581911110000', 'bot_instance_id' => 9, 'is_active' => true, 'webhook_id' => 42, 'webhook_secret' => 'whsec_old']);
+        Log::spy();
+        $answers = [];
 
-        $this->withSession($this->pendingSession())
-            ->get(route('zapmizer.connect.callback', ['code' => 'c', 'state' => 's']))
-            ->assertOk()
-            ->assertSee('status: "ok"', false);
+        foreach ($connects as $overrides) {
+            $answers[] = $this->sessionCreated();
+            $answers[] = $this->tokenAnswer($overrides);
+        }
+
+        $this->fakeHttp(...$answers);
+        $this->actingAsUser();
+
+        foreach ($connects as $overrides) {
+            $response = $this->connect();
+        }
+
+        $response->assertSee('status: "webhook_failed"', false)
+            ->assertSee("Connected and sending, but incoming messages can't be verified. Disconnect and connect again to receive.");
 
         $connection = $this->team()->zapmizerConnection;
-        $this->assertEquals(43, $connection->webhook_id);
-        $this->assertEquals('whsec_43', $connection->webhook_secret);
-
-        // The old webhook is deleted with the OLD token, before it is replaced.
-        $delete = $this->history[1]['request'];
-        $this->assertEquals('DELETE', $delete->getMethod());
-        $this->assertEquals('http://zap.test/api/webhooks/42', (string) $delete->getUri());
-        $this->assertEquals('Bearer team-token', $delete->getHeaderLine('Authorization'));
+        $this->assertTrue($connection->is_active);
+        $this->assertSame($webhookId, $connection->webhook_id);
+        $this->assertNull($connection->webhook_secret);
+        $this->assertFalse($connection->toArray()['has_webhook_secret']);
+        $this->assertTrue($this->team()->fresh()->hasActiveZapmizer());
+        Log::shouldHaveReceived('warning')->with('zapmizer: connected without a webhook secret.', ['connection_id' => $connection->id, 'webhook_id' => $webhookId])->once();
+        $this->assertCount(2 * count($connects), $this->history);
+        $this->assertNoWebhookCalls();
     }
 
-    public function testCallbackOnAnotherTeamForgetsThePairingAndDeletesTheOldWebhook()
+    public static function connectsWithoutASecret(): array
+    {
+        return [
+            'first connect' => [[['webhook_secret' => null]], 42],
+            'new webhook without secret' => [[[], ['token' => '2|sanctum', 'webhook_id' => 43, 'webhook_secret' => null]], 43],
+        ];
+    }
+
+    public function testW3AnotherTeamForgetsThePairingWithoutCallingWebhooks()
     {
         Log::spy();
         $this->fakeHttp(
-            new Response(200, [], $this->tokenPayload(['token' => '2|sanctum', 'team_id' => 8, 'team_name' => 'Other', 'phone_number' => '5581933330000', 'bot_instance_id' => 30, 'webhook_id' => 77, 'webhook_secret' => 'whsec_77'])),
-            new Response(200, [], json_encode(['message' => 'Webhook removido.'])),
+            $this->sessionCreated(),
+            $this->tokenAnswer(),
+            $this->sessionCreated(),
+            $this->tokenAnswer(['token' => '2|sanctum', 'team_id' => 8, 'team_name' => 'Other', 'phone_number' => '5581933330000', 'bot_instance_id' => 30, 'webhook_id' => 77, 'webhook_secret' => 'whsec_77']),
         );
         $this->actingAsUser();
-        $this->authorizedTeam([
-            'phone_number' => '5581911110000', 'bot_instance_id' => 9, 'connected_at' => now(), 'is_active' => true,
-            'webhook_id' => 42, 'webhook_secret' => 'whsec_old', 'webhook_previous_secret' => 'whsec_older',
-        ]);
 
-        $this->withSession($this->pendingSession())
-            ->get(route('zapmizer.connect.callback', ['code' => 'c', 'state' => 's']))
-            ->assertOk()
-            ->assertSee('status: "ok"', false);
+        $this->connect()->assertSee('status: "ok"', false);
+        $this->connect()->assertSee('status: "ok"', false);
 
         $connection = $this->team()->zapmizerConnection;
         $this->assertEquals(1, ZapmizerConnection::count());
@@ -820,34 +773,30 @@ class ConnectRouteTest extends TestCase
         $this->assertEquals('whsec_77', $connection->webhook_secret);
         $this->assertNull($connection->webhook_previous_secret);
         $this->assertTrue($connection->is_active);
-
-        // The old webhook is deleted with the OLD token.
-        $delete = $this->history[1]['request'];
-        $this->assertEquals('DELETE', $delete->getMethod());
-        $this->assertEquals('http://zap.test/api/webhooks/42', (string) $delete->getUri());
-        $this->assertEquals('Bearer team-token', $delete->getHeaderLine('Authorization'));
+        $this->assertCount(4, $this->history);
         Log::shouldNotHaveReceived('warning');
+        $this->assertNoWebhookCalls();
     }
 
-    public function testCallbackOnAnotherTeamSurvivesAFailedRemoteDeletion()
+    public function testW4ANewWebhookOnTheSameTeamStoresItsSecret()
     {
-        Log::spy();
         $this->fakeHttp(
-            new Response(200, [], $this->tokenPayload(['token' => '2|sanctum', 'team_id' => 8, 'team_name' => 'Other', 'webhook_id' => 77, 'webhook_secret' => 'whsec_77'])),
-            new Response(401, [], '{}'),
+            $this->sessionCreated(),
+            $this->tokenAnswer(),
+            $this->sessionCreated(),
+            $this->tokenAnswer(['token' => '2|sanctum', 'webhook_id' => 43, 'webhook_secret' => 'whsec_43']),
         );
         $this->actingAsUser();
-        $this->authorizedTeam(['phone_number' => '5581911110000', 'bot_instance_id' => 9, 'is_active' => true, 'webhook_id' => 42, 'webhook_secret' => 'whsec_old']);
 
-        $this->withSession($this->pendingSession())
-            ->get(route('zapmizer.connect.callback', ['code' => 'c', 'state' => 's']))
-            ->assertOk()
-            ->assertSee('status: "ok"', false);
+        $this->connect()->assertSee('status: "ok"', false);
+        $this->connect()->assertSee('status: "ok"', false);
 
-        $this->assertEquals(8, $this->team()->zapmizerConnection->zapmizer_team_id);
-        $this->assertEquals(77, $this->team()->zapmizerConnection->webhook_id);
-        $this->assertEquals('whsec_77', $this->team()->zapmizerConnection->webhook_secret);
-        Log::shouldHaveReceived('warning')->withArgs(fn (string $message) => str_contains($message, 'could not delete the webhook'));
+        $connection = $this->team()->zapmizerConnection;
+        $this->assertEquals(43, $connection->webhook_id);
+        $this->assertEquals('whsec_43', $connection->webhook_secret);
+        $this->assertNull($connection->webhook_previous_secret);
+        $this->assertCount(4, $this->history);
+        $this->assertNoWebhookCalls();
     }
 
     public function testCallbackRefusesATeamAlreadyConnectedElsewhere()
@@ -1804,48 +1753,102 @@ class ConnectRouteTest extends TestCase
 
     // --- destroy --------------------------------------------------------
 
-    public function testDestroyDeletesTheConnectionAndTheRemoteWebhook()
+    /** @dataProvider destroyRevocationsFromTheContract */
+    #[DataProvider('destroyRevocationsFromTheContract')]
+    public function testD1DestroyRevokesAndDeletes(int $status, string $body)
     {
-        $this->fakeHttp(new Response(200, [], json_encode(['message' => 'Webhook removido.'])));
+        $this->assertMatchesContract('DELETE', '/connect/token', $status, $body);
+        Log::spy();
+        $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer(), new Response($status, $body === '' ? [] : ['Content-Type' => 'application/json'], $body));
         $this->actingAsUser();
-        $this->authorizedTeam(['webhook_id' => 42, 'webhook_secret' => 'whsec']);
+        $this->connect()->assertSee('status: "ok"', false);
 
         $this->deleteJson(route('zapmizer.connect.destroy'))->assertOk()->assertExactJson(['status' => 'disconnected']);
 
-        $this->assertEquals(0, ZapmizerConnection::count());
-        $this->assertCount(1, $this->history);
-        $this->assertEquals('DELETE', $this->history[0]['request']->getMethod());
-        $this->assertEquals('http://zap.test/api/webhooks/42', (string) $this->history[0]['request']->getUri());
-        $this->assertEquals('Bearer team-token', $this->history[0]['request']->getHeaderLine('Authorization'));
-
-        // Nothing to delete: no call, still ok.
-        $this->deleteJson(route('zapmizer.connect.destroy'))->assertOk();
-        $this->assertCount(1, $this->history);
+        $this->assertSame(0, ZapmizerConnection::count());
+        $this->assertCount(3, $this->history);
+        $this->assertRevoked('1|sanctum');
+        Log::shouldNotHaveReceived('warning');
+        $this->assertNoWebhookCalls();
     }
 
-    public function testDestroyWithoutARegisteredWebhookCallsNothing()
+    public static function destroyRevocationsFromTheContract(): array
     {
-        $this->fakeHttp();
-        $this->actingAsUser();
-        $this->authorizedTeam();
-
-        $this->deleteJson(route('zapmizer.connect.destroy'))->assertOk();
-
-        $this->assertEquals(0, ZapmizerConnection::count());
-        $this->assertCount(0, $this->history);
+        return [
+            'revoked 204' => [204, ''],
+            'already gone 401' => [401, '{"message":"Unauthenticated."}'],
+        ];
     }
 
-    public function testDestroyIsBestEffortOnTheRemoteSide()
+    /** @dataProvider failedDestroyRevocationsFromTheContract */
+    #[DataProvider('failedDestroyRevocationsFromTheContract')]
+    public function testD2AFailedRevocationStillDeletesFromTheContract(int $status, string $body, string $message, ?int $warned)
+    {
+        $this->assertMatchesContract('DELETE', '/connect/token', $status, $body);
+        $this->assertAFailedRevocationStillDeletes(new Response($status, ['Content-Type' => 'application/json'], $body), $message, $warned);
+    }
+
+    public static function failedDestroyRevocationsFromTheContract(): array
+    {
+        return [
+            'not a connect token 404' => [404, '{"message":"No connect grant for this token."}', 'zapmizer: the token was not revoked and is still valid.', 404],
+        ];
+    }
+
+    /** @dataProvider failedDestroyRevocationsOutsideTheContract */
+    #[DataProvider('failedDestroyRevocationsOutsideTheContract')]
+    public function testD2AFailedRevocationStillDeletesOutsideTheContract(Response|\Throwable $answer, ?int $warned)
+    {
+        $this->assertAFailedRevocationStillDeletes($answer, 'zapmizer: the token was not revoked.', $warned);
+    }
+
+    /**
+     * [answer, status in the warning]: a 5xx, the network and a 200 have
+     * none.
+     */
+    public static function failedDestroyRevocationsOutsideTheContract(): array
+    {
+        return [
+            'forbidden 403' => [new Response(403, ['Content-Type' => 'application/json'], '{"message":"Forbidden."}'), 403],
+            '5xx' => [new Response(500, [], ''), null],
+            'network' => [new ConnectException('timed out', new \GuzzleHttp\Psr7\Request('DELETE', 'connect/token')), null],
+            '200 {}' => [new Response(200, ['Content-Type' => 'application/json'], '{}'), null],
+        ];
+    }
+
+    protected function assertAFailedRevocationStillDeletes(Response|\Throwable $answer, string $message, ?int $warned): void
     {
         Log::spy();
-        $this->fakeHttp(new Response(500, [], ''));
+        $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer(), $answer);
         $this->actingAsUser();
-        $this->authorizedTeam(['webhook_id' => 42, 'webhook_secret' => 'whsec']);
+        $this->connect()->assertSee('status: "ok"', false);
+        $id = $this->team()->zapmizerConnection->id;
 
-        $this->deleteJson(route('zapmizer.connect.destroy'))->assertOk();
+        $this->deleteJson(route('zapmizer.connect.destroy'))->assertOk()->assertExactJson(['status' => 'disconnected']);
 
-        $this->assertEquals(0, ZapmizerConnection::count());
-        Log::shouldHaveReceived('warning')->withArgs(fn (string $message) => str_contains($message, 'could not delete the webhook'));
+        $this->assertSame(0, ZapmizerConnection::count());
+        $this->assertCount(3, $this->history);
+        $this->assertRevoked('1|sanctum');
+        $this->assertRevocationWarning($message, ['connection_id' => $id], $warned);
+        $this->assertNoWebhookCalls();
+    }
+
+    public function testD3NothingToRevokeCallsNothing()
+    {
+        $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer());
+        $this->actingAsUser();
+
+        $this->deleteJson(route('zapmizer.connect.destroy'))->assertOk()->assertExactJson(['status' => 'disconnected']);
+        $this->assertCount(0, $this->history);
+
+        $this->connect()->assertSee('status: "ok"', false);
+        $this->team()->zapmizerConnection->forceFill(['api_token' => null])->save();
+
+        $this->deleteJson(route('zapmizer.connect.destroy'))->assertOk()->assertExactJson(['status' => 'disconnected']);
+
+        $this->assertSame(0, ZapmizerConnection::count());
+        $this->assertCount(2, $this->history);
+        $this->assertNoWebhookCalls();
     }
 
     // --- resolver -------------------------------------------------------

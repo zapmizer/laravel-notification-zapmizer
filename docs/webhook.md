@@ -36,7 +36,9 @@ Todo evento tipado também tem:
 - `$event->connection`: a `ZapmizerConnection` cujo segredo assinou a entrega, `null` no single-tenant;
 - `$event->payload`: o corpo decodificado.
 
-O `MessageReceived` também ganhou o `$event->envelope`.
+O `MessageReceived` também ganhou o `$event->envelope`. Um `MessageReceived` serializado antes do deploy (listener na fila) volta sem a propriedade: num listener `ShouldQueue`, leia `$event->envelope ?? null` até a fila antiga esvaziar.
+
+O `created_at` só é lido em ISO 8601 estrito, com fuso (`2025-10-17T12:00:00.000000Z`); outro formato vira `createdAt` `null` e uma linha de log.
 
 ### Leitura tolerante
 

@@ -4,7 +4,7 @@ namespace NotificationChannels\Zapmizer\Events;
 
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
 use NotificationChannels\Zapmizer\Webhook\Envelope;
-use NotificationChannels\Zapmizer\Webhook\MessageStatus;
+use NotificationChannels\Zapmizer\Webhook\StatusUpdate;
 
 /**
  * Class MessageStatusUpdated.
@@ -19,14 +19,14 @@ class MessageStatusUpdated extends WebhookEvent
     /**
      * @param array<string, mixed> $payload
      */
-    public function __construct(public MessageStatus $status, Envelope $envelope, ?ZapmizerConnection $connection, array $payload)
+    public function __construct(public StatusUpdate $status, Envelope $envelope, ?ZapmizerConnection $connection, array $payload)
     {
         parent::__construct($envelope, $connection, $payload);
     }
 
     public static function fromWebhook(array $payload, ?ZapmizerConnection $connection): ?self
     {
-        $status = MessageStatus::fromData($payload['data'] ?? null);
+        $status = StatusUpdate::fromData($payload['data'] ?? null);
 
         return $status === null ? null : new self($status, Envelope::fromPayload($payload), $connection, $payload);
     }

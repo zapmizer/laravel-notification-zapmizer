@@ -14,7 +14,7 @@ Os eventos do catálogo não têm `handle*` na lib. Por isso continuam responden
 
 | `name` | Evento | Propriedade | Campos |
 |---|---|---|---|
-| `message_status` | `MessageStatusUpdated` | `status` (`MessageStatus`) | `wappMessageId`, `to`, `ack`, `status`, `occurredAt` |
+| `message_status` | `MessageStatusUpdated` | `status` (`StatusUpdate`) | `wappMessageId`, `to`, `ack`, `status`, `occurredAt` |
 | `connection` | `ConnectionStateChanged` | `state` (`ConnectionState`) | `state`, `reason`, `kind` |
 | `message_reacted` | `MessageReacted` | `reaction` (`Reaction`) | `wappMessageId`, `chatWid`, `from`, `emoji`, `removed`, `occurredAt` |
 | `message_edited` | `MessageEdited` | `edit` (`MessageEdit`) | `wappMessageId`, `chatWid`, `fromMe`, `body`, `previousBody`, `occurredAt` |
@@ -48,7 +48,7 @@ Um `name` fora do catálogo não dispara nada novo.
 
 ```php
 use NotificationChannels\Zapmizer\Events\MessageStatusUpdated;
-use NotificationChannels\Zapmizer\Webhook\MessageStatus;
+use NotificationChannels\Zapmizer\Messages\MessageStatus;
 
 Event::listen(function (MessageStatusUpdated $event) {
     $status = $event->status;
@@ -61,14 +61,15 @@ Event::listen(function (MessageStatusUpdated $event) {
 
     if ($status->isFailed()) {
         $sent->update(['failed_at' => now()]);
-    } elseif ($status->reached(MessageStatus::ACK_READ)) {
+    } elseif ($status->isRead()) {
         $sent->update(['read_at' => $status->occurredAt ?? now()]);
     }
 });
 ```
 
-- `ack` usa a escala do acompanhamento do envio: `-1` falhou, `0` enviando, `1` enviada, `2` entregue, `3` lida, `4` reproduzida. Compare pelo número (`MessageStatus::ACK_*`). `reached($ack)` diz se a mensagem chegou pelo menos até ali, e nunca é verdade para uma que falhou.
-- `status` é o nome do `ack`, sempre derivado dele. Um evento com `status` `unknown`, ou com `ack` fora da escala, não dispara `MessageStatusUpdated`.
+- `ack` usa a mesma escala do acompanhamento do envio, `Messages\MessageStatus` (veja [envio.md](envio.md)): `-1` `FAILED`, `0` `SENDING`, `1` `SENT`, `2` `DELIVERED`, `3` `READ`, `4` `PLAYED`. Compare pelo número. No webhook só chegam de `-1` a `4`; `-2` (`QUEUED`), `-3` (`WAITING`) e `-4` (`FAILED_BEFORE_SENDING`) só aparecem no acompanhamento do envio.
+- O `StatusUpdate` tem os mesmos atalhos do `SentMessage`: `isFailed()`, `isDelivered()`, `isRead()`, `isFinal()` e `messageStatusCode()` (o `ack`). `reached(MessageStatus::DELIVERED)` diz se a mensagem chegou pelo menos até ali, e nunca é verdade para uma que falhou.
+- `status` é o nome que o webhook dá ao `ack`, sempre derivado dele: `0` chega como `pending`, os outros como `failed`, `sent`, `delivered`, `read` e `played`. Um evento com `status` `unknown`, ou com `ack` fora da escala, não dispara `MessageStatusUpdated`.
 - O webhook não traz `wid_to` nem `links.self`: eles vêm na resposta do envio. O `wappMessageId` é o mesmo `wapp_message_id` que aparece no `links.self` quando o número envia. Um status pode chegar antes de você conhecer esse id: guarde os status sem dono por alguns minutos, ou consulte o `links.self` para fazer a ligação.
 - As mensagens enviadas pelo celular também geram status. Ignore o `wappMessageId` que você não conhece.
 

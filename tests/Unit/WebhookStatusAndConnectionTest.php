@@ -13,7 +13,8 @@ use NotificationChannels\Zapmizer\Test\Fixtures\CreatesConnectionTables;
 use NotificationChannels\Zapmizer\Test\Fixtures\SignsWebhookDeliveries;
 use NotificationChannels\Zapmizer\Test\TestCase;
 use NotificationChannels\Zapmizer\Webhook\ConnectionState;
-use NotificationChannels\Zapmizer\Webhook\MessageStatus;
+use NotificationChannels\Zapmizer\Messages\MessageStatus;
+use NotificationChannels\Zapmizer\Webhook\StatusUpdate;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 class WebhookStatusAndConnectionTest extends TestCase
@@ -46,16 +47,20 @@ class WebhookStatusAndConnectionTest extends TestCase
         Event::assertDispatched(MessageStatusUpdated::class, function (MessageStatusUpdated $event) use ($connection, $envelope) {
             $status = $event->status;
 
-            return $status instanceof MessageStatus
+            return $status instanceof StatusUpdate
                 && $status->wappMessageId === '3EB0C767D82B6A6C7A2F'
                 && $status->to === '5581999998888@c.us'
-                && $status->ack === MessageStatus::ACK_DELIVERED
+                && $status->ack === MessageStatus::DELIVERED
                 && $status->status === 'delivered'
                 && $status->occurredAt?->getTimestamp() === 1760659200
                 && $status->raw === $envelope['data']
                 && !$status->isFailed()
-                && $status->reached(MessageStatus::ACK_SENT)
-                && !$status->reached(MessageStatus::ACK_READ)
+                && $status->reached(MessageStatus::SENT)
+                && !$status->reached(MessageStatus::READ)
+                && $status->isDelivered()
+                && !$status->isRead()
+                && !$status->isFinal()
+                && $status->messageStatusCode() === 2
                 && $event->envelope->id === $envelope['id']
                 && $event->envelope->name === 'message_status'
                 && $event->envelope->wid === '5581911110000@c.us'
@@ -104,7 +109,11 @@ class WebhookStatusAndConnectionTest extends TestCase
 
         Event::assertDispatched(MessageStatusUpdated::class, fn (MessageStatusUpdated $event) => $event->status->ack === $ack
             && $event->status->status === $name
-            && $event->status->isFailed() === ($ack === -1));
+            && $event->status->isFailed() === ($ack === -1)
+            && $event->status->isDelivered() === ($ack >= 2)
+            && $event->status->isRead() === ($ack >= 3)
+            && $event->status->isFinal() === in_array($ack, [-1, 3, 4], true)
+            && $event->status->reached(MessageStatus::FAILED) === false);
     }
 
     /**

@@ -3,45 +3,40 @@
 namespace NotificationChannels\Zapmizer\Webhook;
 
 use Illuminate\Support\Carbon;
+use NotificationChannels\Zapmizer\Messages\Concerns\HasMessageStatus;
+use NotificationChannels\Zapmizer\Messages\MessageStatus;
 
 /**
  * The `message_status` webhook's data: a message sent by the number changed
  * status. QR numbers only.
  *
- * `ack` follows the scale of the sent-message tracking (`-1` failed, `0`
- * pending, `1` sent, `2` delivered, `3` read, `4` played): compare by the
- * number. `status` is the name of that `ack` — a delivery whose name is
- * `unknown`, or whose `ack` is off the scale, is not read at all.
+ * `ack` is on the `Messages\MessageStatus` scale, the one of the sent-message
+ * tracking: compare by the number. The webhook only carries `-1` to `4`
+ * (`0`, `SENDING`, arrives named `pending`); `-2`, `-3` and `-4` only exist on
+ * the tracking. `status` is the name of that `ack` — a delivery named
+ * `unknown`, or whose `ack` is off that range, is not read at all.
  *
  * `wappMessageId` is the same id the sent message's `links.self` shows once
  * the number sends it; a status may arrive before you know it, and the
  * messages sent from the phone have statuses too — ignore an id you do not
  * know.
  */
-final class MessageStatus
+final class StatusUpdate
 {
-    public const ACK_FAILED = -1;
-
-    public const ACK_PENDING = 0;
-
-    public const ACK_SENT = 1;
-
-    public const ACK_DELIVERED = 2;
-
-    public const ACK_READ = 3;
-
-    public const ACK_PLAYED = 4;
+    use HasMessageStatus;
 
     /**
+     * The names the webhook gives each `ack`.
+     *
      * @var array<int, string>
      */
-    public const NAMES = [
-        self::ACK_FAILED => 'failed',
-        self::ACK_PENDING => 'pending',
-        self::ACK_SENT => 'sent',
-        self::ACK_DELIVERED => 'delivered',
-        self::ACK_READ => 'read',
-        self::ACK_PLAYED => 'played',
+    private const NAMES = [
+        MessageStatus::FAILED => 'failed',
+        MessageStatus::SENDING => 'pending',
+        MessageStatus::SENT => 'sent',
+        MessageStatus::DELIVERED => 'delivered',
+        MessageStatus::READ => 'read',
+        MessageStatus::PLAYED => 'played',
     ];
 
     /**
@@ -77,17 +72,18 @@ final class MessageStatus
         );
     }
 
-    public function isFailed(): bool
+    public function messageStatusCode(): ?int
     {
-        return $this->ack === self::ACK_FAILED;
+        return $this->ack;
     }
 
     /**
-     * Whether the message got at least this far (`reached(ACK_DELIVERED)` is
-     * true for delivered, read and played). Never true for a failed one.
+     * Whether the message got at least this far (`reached(MessageStatus::DELIVERED)`
+     * is true for delivered, read and played). Never true for a failure, nor
+     * for a failure as the target.
      */
-    public function reached(int $ack): bool
+    public function reached(int $target): bool
     {
-        return !$this->isFailed() && $this->ack >= $ack;
+        return MessageStatus::reached($this->ack, $target);
     }
 }

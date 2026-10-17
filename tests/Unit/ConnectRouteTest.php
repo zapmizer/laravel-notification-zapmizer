@@ -211,7 +211,6 @@ class ConnectRouteTest extends TestCase
     {
         return [
             'token revoked' => [new Response(401, [], '{}'), 'reauth_required'],
-            'instance gone' => [new Response(404, [], '{}'), 'instance_gone'],
             'zapmizer down' => [new Response(503, [], ''), 'zapmizer_unavailable'],
             'html instead of json' => [new Response(200, ['Content-Type' => 'text/html'], '<html></html>'), 'zapmizer_unavailable'],
         ];
@@ -237,6 +236,212 @@ class ConnectRouteTest extends TestCase
             '429' => [new Response(429, ['Content-Type' => 'application/json', 'Retry-After' => '5'], '{"message":"Too Many Attempts."}')],
             '403' => [new Response(403, ['Content-Type' => 'application/json'], '{"message":"This action is unauthorized."}')],
             '422' => [new Response(422, ['Content-Type' => 'application/json'], '{"message":"Invalid.","errors":{"id":["Invalid."]}}')],
+        ];
+    }
+
+    // --- live: the number as the API sees it (P6, official fallback) ------
+
+    /**
+     * A `/connection` answer from the contract (`ConexaoDoNumero`).
+     */
+    protected function liveAnswer(string $state, ?string $number, bool $online = false): Response
+    {
+        $body = json_encode(['data' => [
+            'id' => 9, 'state' => $state, 'state_label' => 'Conectado', 'is_online' => $online, 'is_up' => $online,
+            'qrcode' => null, 'qrcode_available_at' => null, 'qrcode_expires_at' => null, 'number' => $number,
+            'disconnect_reason' => null, 'disconnect_kind' => null, 'disconnect_kind_label' => null,
+        ]]);
+        $this->assertMatchesContract('GET', '/bot-instances/{id}/connection', 200, $body);
+
+        return new Response(200, ['Content-Type' => 'application/json'], $body);
+    }
+
+    /**
+     * A `GET /bot-instances/{id}` answer from the contract (`Numero`).
+     */
+    protected function numeroAnswer(bool $online): Response
+    {
+        $body = json_encode(['data' => InstanceClientInstanceTest::numero(['is_online' => $online, 'supports_templates' => true])]);
+        $this->assertMatchesContract('GET', '/bot-instances/{id}', 200, $body);
+
+        return new Response(200, ['Content-Type' => 'application/json'], $body);
+    }
+
+    protected function notFound(string $path): Response
+    {
+        $body = '{"message":"Não encontrado."}';
+        $this->assertMatchesContract('GET', $path, 404, $body);
+
+        return new Response(404, ['Content-Type' => 'application/json'], $body);
+    }
+
+    /**
+     * Connected through the real callback on 2026-10-16 12:00 with
+     * 5581911110000; the clock then moves an hour.
+     */
+    protected function connectedThroughTheCallback(Response ...$liveAnswers): ZapmizerConnection
+    {
+        Carbon::setTestNow('2026-10-16 12:00:00');
+        $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer(), ...$liveAnswers);
+        $this->actingAsUser();
+        $this->connect()->assertSee('status: "ok"', false);
+        Carbon::setTestNow('2026-10-16 13:00:00');
+
+        return $this->team()->zapmizerConnection;
+    }
+
+    public function testL1ANumberChangedOnWhatsappIsStoredByTheLiveQuery()
+    {
+        $this->connectedThroughTheCallback($this->liveAnswer('connected', '5581922220000', online: true));
+
+        $response = $this->getJson(route('zapmizer.connect.show', ['live' => 1]))->assertOk();
+
+        // The answer already carries the new number.
+        $response->assertJsonPath('connection.phone_number', '5581922220000');
+        $response->assertJsonPath('connection.state', 'connected');
+        $response->assertJsonPath('connection.is_active', true);
+
+        $connection = $this->team()->zapmizerConnection;
+        $this->assertSame('5581922220000', $connection->phone_number);
+        $this->assertTrue($connection->is_active);
+        $this->assertTrue($connection->connected_at->equalTo(Carbon::parse('2026-10-16 13:00:00')));
+        // Nothing else of the pairing moves.
+        $this->assertSame(9, $connection->bot_instance_id);
+        $this->assertSame('1|sanctum', $connection->api_token);
+        $this->assertSame(42, $connection->webhook_id);
+        $this->assertSame('whsec_new', $connection->webhook_secret);
+    }
+
+    public function testL1TheKeyedWebhookAcceptsTheNewNumberOnlyAfterTheLiveQuery()
+    {
+        $this->enableKeyedWebhooks();
+        $this->connectedThroughTheCallback($this->liveAnswer('connected', '5581922220000', online: true));
+        $key = $this->storedKey();
+        Event::fake([MessageReceived::class]);
+
+        $this->deliverToKey($key, 'whsec_new', '5581922220000@c.us')->assertOk();
+        Event::assertNotDispatched(MessageReceived::class);
+
+        $this->getJson(route('zapmizer.connect.show', ['live' => 1]))->assertOk();
+
+        $this->deliverToKey($key, 'whsec_new', '5581922220000@c.us')->assertOk();
+        Event::assertDispatched(MessageReceived::class, 1);
+    }
+
+    public function testL2TheSameNumberWritesNothing()
+    {
+        $before = $this->connectedThroughTheCallback($this->liveAnswer('connected', '5581911110000', online: true), $this->liveAnswer('connected', '5581911110000', online: true));
+        $queries = [];
+        DB::listen(function ($query) use (&$queries) {
+            $queries[] = $query->sql;
+        });
+
+        $this->getJson(route('zapmizer.connect.show', ['live' => 1]))->assertOk()->assertJsonPath('connection.phone_number', '5581911110000');
+        $this->getJson(route('zapmizer.connect.show', ['live' => 1]))->assertOk();
+
+        $after = $this->team()->zapmizerConnection;
+        $this->assertTrue($after->updated_at->equalTo($before->updated_at));
+        $this->assertTrue($after->connected_at->equalTo(Carbon::parse('2026-10-16 12:00:00')));
+        $this->assertSame([], array_values(array_filter($queries, fn (string $sql) => str_starts_with(strtolower($sql), 'update'))));
+    }
+
+    /** @dataProvider liveAnswersThatDoNotStore */
+    #[DataProvider('liveAnswersThatDoNotStore')]
+    public function testL3OnlyAConnectedStateWithANumberIsStored(string $state, ?string $number)
+    {
+        $before = $this->connectedThroughTheCallback($this->liveAnswer($state, $number));
+
+        $this->getJson(route('zapmizer.connect.show', ['live' => 1]))
+            ->assertOk()
+            ->assertJsonPath('connection.state', $state)
+            ->assertJsonPath('connection.phone_number', '5581911110000');
+
+        $after = $this->team()->zapmizerConnection;
+        $this->assertSame('5581911110000', $after->phone_number);
+        $this->assertTrue($after->updated_at->equalTo($before->updated_at));
+    }
+
+    public static function liveAnswersThatDoNotStore(): array
+    {
+        return [
+            // `number` comes from the cid whatever the state: only `connected` says it is paired.
+            'connected without a number' => ['connected', null],
+            'disconnected with another number' => ['disconnected', '5581922220000'],
+            'off with another number' => ['off', '5581922220000'],
+            'qr_pending with another number' => ['qr_pending', '5581922220000'],
+            'connecting with another number' => ['connecting', '5581922220000'],
+        ];
+    }
+
+    public function testL4AFailedWriteIsReportedAndTheAnswerStands()
+    {
+        $this->connectedThroughTheCallback($this->liveAnswer('connected', '5581922220000', online: true));
+        $this->recordReports();
+        ZapmizerConnection::updating(function () {
+            throw new \RuntimeException('database is gone');
+        });
+
+        $this->getJson(route('zapmizer.connect.show', ['live' => 1]))
+            ->assertOk()
+            ->assertJsonPath('connection.state', 'connected')
+            ->assertJsonPath('connection.is_online', true)
+            // Never a number that is not stored.
+            ->assertJsonPath('connection.phone_number', '5581911110000');
+
+        $this->assertCount(1, $this->reported);
+        $this->assertSame('database is gone', $this->reported[0]->getMessage());
+        ZapmizerConnection::flushEventListeners();
+        $this->assertSame('5581911110000', $this->team()->zapmizerConnection->phone_number);
+    }
+
+    /** @dataProvider officialNumbers */
+    #[DataProvider('officialNumbers')]
+    public function testL5WithoutTheQrRouteTheStateComesFromIsOnline(bool $online, string $state)
+    {
+        // A team without Zapmizer's QR feature (the official number) gets a
+        // 404 on /connection; llms.txt says to fall back to `is_online`.
+        $this->connectedThroughTheCallback($this->notFound('/bot-instances/{id}/connection'), $this->numeroAnswer($online));
+
+        $this->getJson(route('zapmizer.connect.show', ['live' => 1]))
+            ->assertOk()
+            ->assertJsonPath('connection.state', $state)
+            ->assertJsonPath('connection.is_online', $online)
+            ->assertJsonPath('connection.phone_number', '5581911110000');
+
+        $this->assertSame('http://zap.test/api/bot-instances/9/connection', (string) $this->history[2]['request']->getUri());
+        $this->assertSame('http://zap.test/api/bot-instances/9', (string) $this->history[3]['request']->getUri());
+        $this->assertSame('Bearer 1|sanctum', $this->history[3]['request']->getHeaderLine('Authorization'));
+    }
+
+    public static function officialNumbers(): array
+    {
+        return [
+            'online' => [true, 'connected'],
+            'offline' => [false, 'disconnected'],
+        ];
+    }
+
+    /** @dataProvider fallbackFailures */
+    #[DataProvider('fallbackFailures')]
+    public function testL6TheFallbackNamesItsFailureAsAState(Response $answer, string $state)
+    {
+        $this->connectedThroughTheCallback($this->notFound('/bot-instances/{id}/connection'), $answer);
+
+        $this->getJson(route('zapmizer.connect.show', ['live' => 1]))
+            ->assertOk()
+            ->assertJsonPath('connection.state', $state)
+            ->assertJsonPath('connection.is_online', false);
+        $this->assertCount(4, $this->history);
+    }
+
+    public static function fallbackFailures(): array
+    {
+        return [
+            'instance gone: 404 on both' => [new Response(404, ['Content-Type' => 'application/json'], '{"message":"Não encontrado."}'), 'instance_gone'],
+            'token revoked' => [new Response(401, ['Content-Type' => 'application/json'], '{"message":"Unauthenticated."}'), 'reauth_required'],
+            'zapmizer down' => [new Response(503, [], ''), 'zapmizer_unavailable'],
+            'rate limited' => [new Response(429, ['Content-Type' => 'application/json', 'Retry-After' => '5'], '{"message":"Too Many Attempts."}'), 'zapmizer_unavailable'],
+            'html instead of json' => [new Response(200, ['Content-Type' => 'text/html'], '<html></html>'), 'zapmizer_unavailable'],
         ];
     }
 

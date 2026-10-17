@@ -16,6 +16,7 @@ use Illuminate\Support\Str;
 use LogicException;
 use NotificationChannels\Zapmizer\Connect\ConnectToken;
 use NotificationChannels\Zapmizer\Connect\InstanceClient;
+use NotificationChannels\Zapmizer\Connect\InstanceConnection;
 use NotificationChannels\Zapmizer\Connect\PartnerClient;
 use NotificationChannels\Zapmizer\Contracts\Connectable;
 use NotificationChannels\Zapmizer\Contracts\ResolvesConnectable;
@@ -90,7 +91,9 @@ class ConnectController extends Controller
      * With `?live=1` the paired instance is queried on Zapmizer and the
      * connection carries `state` (`connected`, `disconnected`, ... or the
      * package's `reauth_required`, `instance_gone`, `zapmizer_unavailable`)
-     * and `is_online` — a panel showing whether the number is up.
+     * and `is_online` — a panel showing whether the number is up. The live
+     * query also stores a number changed on WhatsApp (syncConnectedNumber()),
+     * so it runs before the connection is serialized.
      */
     public function show(Request $request): JsonResponse
     {
@@ -104,7 +107,9 @@ class ConnectController extends Controller
             return new JsonResponse(['connection' => $connection]);
         }
 
-        return new JsonResponse(['connection' => $connection->toArray() + $this->liveState($connection)]);
+        $live = $this->liveState($connection);
+
+        return new JsonResponse(['connection' => $connection->toArray() + $live]);
     }
 
     /**
@@ -500,6 +505,11 @@ class ConnectController extends Controller
      * JSON. Every failure becomes a `state` the panel can name instead of
      * an error the screen would have to map.
      *
+     * A 404 on `/connection` is what a team without Zapmizer's QR feature
+     * (the official number) gets: then the state comes from `is_online` of
+     * GET /bot-instances/{id} — `connected` or `disconnected` — and only a
+     * 404 there too is `instance_gone`.
+     *
      * @return array{state: ?string, is_online: bool}
      */
     protected function liveState(ZapmizerConnection $connection): array
@@ -508,8 +518,20 @@ class ConnectController extends Controller
             return ['state' => null, 'is_online' => false];
         }
 
+        $id = (int) $connection->bot_instance_id;
+
         try {
-            $instance = $connection->instanceClient()->connection((int) $connection->bot_instance_id);
+            $client = $connection->instanceClient();
+
+            try {
+                $instance = $client->connection($id);
+            } catch (InstanceGoneException) {
+                $isOnline = $client->instance($id)->isOnline;
+
+                return ['state' => $isOnline ? 'connected' : 'disconnected', 'is_online' => $isOnline];
+            }
+
+            $this->syncConnectedNumber($connection, $instance);
 
             return ['state' => $instance->state, 'is_online' => $instance->isOnline];
         } catch (DecryptException) {
@@ -522,6 +544,38 @@ class ConnectController extends Controller
             return ['state' => 'instance_gone', 'is_online' => false];
         } catch (ZapmizerUnavailableException | ZapmizerConnectException) {
             return ['state' => 'zapmizer_unavailable', 'is_online' => false];
+        }
+    }
+
+    /**
+     * Store the number the live query found when WhatsApp paired another one
+     * on the same instance — without it, the webhook keeps refusing the new
+     * number's events until a new connect. Only `connected` with a number
+     * counts (the number of another state may be a stale one), and only a
+     * DIFFERENT number writes: this runs on every poll of the panel. The
+     * write follows the connect's rule — a paired number is active — and
+     * `connected_at` is the moment the change was seen, since it dates the
+     * stored number. A failed write is reported and the connection keeps
+     * the stored values, so the answer never shows a number that is not
+     * stored.
+     */
+    protected function syncConnectedNumber(ZapmizerConnection $connection, InstanceConnection $instance): void
+    {
+        if (!$instance->isConnected() || $instance->number === $connection->phone_number) {
+            return;
+        }
+
+        $stored = $connection->getAttributes();
+
+        try {
+            $connection->forceFill([
+                'phone_number' => $instance->number,
+                'connected_at' => now(),
+                'is_active' => true,
+            ])->save();
+        } catch (Throwable $exception) {
+            report($exception);
+            $connection->setRawAttributes($stored);
         }
     }
 

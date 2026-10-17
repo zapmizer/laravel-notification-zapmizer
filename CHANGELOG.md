@@ -133,7 +133,9 @@ Novo:
 - `revoke_previous_token` (desligada por padrão; recomendado ligar). Uma config publicada não tem a chave dentro de `connect` (o merge é raso): acrescente `'revoke_previous_token' => env('ZAPMIZER_CONNECT_REVOKE_PREVIOUS_TOKEN', false),` ou republique a config, senão a variável de ambiente não faz efeito. Ao ligar, tire o observer `updating` que a doc anterior ensinava, senão o token é revogado duas vezes;
 - eventos `NumberConnected` e `ReconnectRefused`;
 - `has_webhook_secret` na serialização da conexão (aditivo);
-- callback que não responde 500 com parâmetro em array.
+- callback que não responde 500 com parâmetro em array;
+- `show?live=1` grava o número trocado no WhatsApp: com `state` `connected` e um número diferente do `phone_number` gravado, grava o número novo, `is_active = true` (a regra do connect) e `connected_at` = agora (a hora em que o painel viu a troca). Número igual, número nulo e qualquer outro estado não gravam nada. Sem isso o webhook recusava os eventos do número novo até um connect novo. A resposta já traz o número novo; uma gravação que falha é reportada e a resposta segue com o número gravado. Método `protected syncConnectedNumber()` para subclasses (por exemplo, para não reativar uma conexão que o app desativou);
+- `show?live=1` no número sem a rota de QR (o número oficial: a Zapmizer responde 404 em `/connection` ao time sem o QR) passa de `instance_gone` ao `is_online` de `GET /bot-instances/{id}`: `state` `connected` ou `disconnected`. Só um 404 nas duas rotas é `instance_gone`.
 
 Stubs: republicar com `php artisan vendor:publish --tag=zapmizer-wizard --force`. Atenção: o `--force` sobrescreve as edições locais dos arquivos publicados; guarde-as antes e reaplique.
 

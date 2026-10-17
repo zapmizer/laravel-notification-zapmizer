@@ -17,7 +17,7 @@
 9. **Handler de exceções:** `ZapmizerUnavailableException`, `PartnerCredentialsException` e `NoConnectableException` não renderizam mais 503/403 fora das rotas da lib; use `renderable()`.
 10. **`base_uri` sem esquema** (`localhost:8001/api/`): ponha o esquema (`http://localhost:8001/api/`), senão nada sai.
 11. **Código que usa `PartnerClient`, `ConnectToken`, `ConnectSession` ou `InstanceClient` direto, ou estende classes da lib:** confira as seções "Parceiro", "Instância", "Connect" e "Embed", e as notas de subclasses em cada uma.
-12. **Quem usa o retorno do envio** (`sendMessage()`, `sendMessageWithFile()` ou `ZapmizerMessage::send()`): ele passa a ser um `Messages\SentMessage`. Troque `getBody()` por `$sent->raw()` ou pelos campos, e configure `ZAPMIZER_API_VERSION=2025-06-27` para acompanhar o envio. Veja "Envio tipado, acompanhamento e template" em "Envio".
+12. **Quem usa o retorno do envio** (`sendMessage()`, `sendMessageWithFile()`, `ZapmizerMessage::send()` ou um listener de `NotificationSent`): ele passa a ser um `Messages\SentMessage`. Troque `getBody()` por `$sent->raw()` ou pelos campos. Num listener, `$event->response['message'] instanceof ZapmizerMessage` falha em silêncio: troque por `instanceof SentMessage`. Uma subclasse de `ZapmizerMessage` que sobrescreve `send()` precisa declarar `: SentMessage`. Configure `ZAPMIZER_API_VERSION=2025-06-27` para acompanhar o envio. Veja "Envio tipado, acompanhamento e template" em "Envio".
 
 ## Transporte
 
@@ -104,14 +104,18 @@ Subclasses de `ZapmizerApiException` ganham `context()`.
 | `json_decode(...)['links']['self']` | `$sent->selfUrl` |
 | `json_decode(...)['wid_to']` | `$sent->widTo` |
 | `$response->getStatusCode()` | sem equivalente: um envio que volta é 2xx; 4xx/5xx já lançam exceção |
-| uma 2xx JSON que não é objeto (`[]`, `"ok"`, corpo vazio com `Content-Type` JSON) passava | `ZapmizerConnectException` (`unexpectedResponse`) |
+| uma 2xx JSON que não é objeto (`[1, 2]`, `"ok"`, `null`, corpo vazio com `Content-Type` JSON) passava | `ZapmizerConnectException` (`unexpectedResponse`). `[]` continua aceito, como objeto vazio |
+| listener de `NotificationSent`: `$event->response['message'] instanceof ZapmizerMessage` | `instanceof SentMessage`. O teste antigo **falha em silêncio**: o listener só deixa de rodar |
+| listener: `$message->to` | `$sent->widTo` (o destino conferido pela Zapmizer, que pode diferir do `to`) |
+| listener: `$message->params['metadata']['text']` | `$sent->raw()['metadata']['text']` (com `api-version`); `$sent->raw()['data']['metadata']['text']` (formato antigo) |
+| subclasse de `ZapmizerMessage` com `send()` sem tipo de retorno | `send(): SentMessage`, senão erro fatal de assinatura incompatível |
 
 - `Messages\SentMessage`: `id`, `selfUrl`, `widFrom`, `widTo`, `status`, `statusName`, `type`, `isTrackable()` e `raw()`. Todo campo pode vir `null`, porque o contrato não exige nenhum. No número oficial com fila, `id` e `selfUrl` vêm `null`. Sem `api-version` (formato antigo, número por QR), o corpo vem em `data` e é lido do mesmo jeito.
 - Numa notificação cujo `toZapmizer()` chama `->send()`, o `NotificationSent` passa a ter o `SentMessage` em `$event->response['message']`. O canal não muda.
 - Acompanhamento:
-  - `Zapmizer::track(SentMessage|string $sent)` segue o `links.self` pela `base_uri` configurada, nunca pelo host do link. Devolve `Messages\QrMessageStatus` (`GET /sent-messages/{id}`), `Messages\MetaMessageStatus` (`GET /meta-messages/{id}`) ou `null` quando não há o que seguir.
+  - `Zapmizer::track(SentMessage|string|null $sent)` segue o `links.self` pela `base_uri` configurada, nunca pelo host do link. Devolve `Messages\QrMessageStatus` (`GET /sent-messages/{id}`) ou `Messages\MetaMessageStatus` (`GET /meta-messages/{id}`). Devolve `null` quando não há o que seguir: `null`, envio oficial em fila ou `SentMessage` do formato antigo (`isTrackable()` é `false` nos dois últimos).
   - Também diretos: `sentMessage(string $id)` e `metaMessage(int|string $id)`.
-  - Um link que não é de acompanhamento ou um id vazio lança `InvalidArgumentException` antes de chamar a API.
+  - Um link em string que não é de acompanhamento, ou um id vazio, `.` ou `..`, lança `InvalidArgumentException` antes de chamar a API.
   - Uma 200 sem `data`, `id` ou `message_status` inteiro lança `unexpectedResponse`.
 - `Messages\MessageStatus`: as constantes da escala de `message_status` (`-4` a `4`) e `isFailure()`, `isFinal()` e `reached()`. Os DTOs têm `isFailed()`, `isDelivered()`, `isRead()` e `isFinal()`. Compare pelo número, não pelo `statusName`.
 - Template (número oficial): `Zapmizer::sendTemplate(string $from, string $to, string $template, ?string $language = null, array $body = [], ?string $header = null): Messages\SentTemplate` (`POST /template-messages`), com `wamid`, `widFrom`, `widTo`, `previewText` e `raw()`. A doc ensina a cair para template no `409 window_closed`.

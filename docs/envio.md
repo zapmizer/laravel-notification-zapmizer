@@ -56,7 +56,7 @@ $sent->raw();      // o corpo JSON decodificado, como veio
 
 - **Chave do contato:** guarde o `widTo`, não o `to` que você mandou. A Zapmizer pode completar o `55` ou tirar o nono dígito, e é o `widTo` que volta em `from` no webhook `message`.
 - **Número oficial com fila:** `id` e `selfUrl` vêm `null` quando o envio entra na fila. Não há como acompanhar esse envio, e isso não é erro: `$sent->isTrackable()` é `false`.
-- **`api-version`:** configure `ZAPMIZER_API_VERSION=2025-06-27`. Sem ele, o número por QR responde o formato antigo: o `SentMessage` ainda traz `id` e `widTo`, mas o `links.self` aponta para `/messages/{id}`, que `track()` não segue.
+- **`api-version`:** configure `ZAPMIZER_API_VERSION=2025-06-27`. Sem ele (o padrão da config), o número por QR responde o formato antigo. O `SentMessage` ainda traz `id` e `widTo`, mas o `links.self` aponta para `/messages/{id}`, que não é link de acompanhamento: `isTrackable()` é `false`, e `track($sent)` devolve `null`.
 
 Numa notificação, o `toZapmizer()` que chama `->send()` devolve o `SentMessage`. O Laravel o repassa ao evento `NotificationSent`, em `$event->response['message']`. Um listener pode então ligar a notificação ao envio:
 
@@ -74,7 +74,7 @@ Event::listen(function (NotificationSent $event) {
 
 ## Acompanhar o envio
 
-`Zapmizer::track()` segue o `links.self`, e aceita o `SentMessage` ou o link guardado. O link diz se o número é por QR (`sent-messages`) ou oficial (`meta-messages`). A chamada sai pela `base_uri` da config, com o token do cliente, e nunca pelo host escrito no link. Use o cliente da mesma conexão que enviou: um token vale para um número só.
+`Zapmizer::track()` segue o `links.self`, e aceita o `SentMessage` ou o link guardado. O link guardado pode ser `null` (envio oficial que entrou na fila), e `track(null)` devolve `null`. O link diz se o número é por QR (`sent-messages`) ou oficial (`meta-messages`). A chamada sai pela `base_uri` da config, com o token do cliente, e nunca pelo host escrito no link. Use o cliente da mesma conexão que enviou: um token vale para um número só.
 
 ```php
 use NotificationChannels\Zapmizer\Messages\MessageStatus;
@@ -82,14 +82,14 @@ use NotificationChannels\Zapmizer\Messages\MessageStatus;
 $status = $team->zapmizer()->track($sent->selfUrl);   // ou ->track($sent)
 
 if ($status === null) {
-    // envio oficial que entrou na fila: nada a acompanhar
+    // nada a acompanhar: envio oficial que entrou na fila, ou formato antigo
 } elseif ($status->isFailed()) {
     // -4 ou -1
+} elseif ($status->status === MessageStatus::READ) {
+    // lida
 } elseif ($status->isDelivered()) {
-    // 2 (entregue), 3 (lida) ou 4 (reproduzida)
+    // 2 (entregue) ou 4 (reproduzida)
 }
-
-$status->status === MessageStatus::READ;
 ```
 
 - Número por QR: `track()` devolve `Messages\QrMessageStatus`, com `wappMessageId` (o mesmo id do webhook `message_status`, que aparece quando o número envia), `statusLabel`, `error`, `errorMessage` e `timestamp`.
@@ -113,7 +113,13 @@ $status->status === MessageStatus::READ;
 
 `MessageStatus::isFailure()`, `isFinal()` e `reached($status, MessageStatus::DELIVERED)` funcionam com qualquer número, inclusive o `ack` do webhook. Um valor novo da API chega como `int`, sem quebrar nada.
 
-Erros: 401, 404 (id desconhecido), 429 e 5xx lançam as mesmas exceções do envio (veja [erros.md](erros.md)). Um link que não é de acompanhamento (o `/messages/{id}` do formato antigo, por exemplo) lança `InvalidArgumentException` antes de chamar a API.
+Erros: lançam as mesmas exceções do envio (veja [erros.md](erros.md)).
+- **401**: token inválido ou revogado.
+- **403** `missing_ability`: o token não tem `messages:read`; use o token do connect.
+- **404**: id desconhecido, inclusive um id de outra conexão (o token de outro número recebe 404, não 403).
+- **429** e **5xx**.
+
+Um link passado como string que não é de acompanhamento (o `/messages/{id}` do formato antigo, por exemplo), ou um id vazio, `.` ou `..`, lança `InvalidArgumentException` antes de chamar a API.
 
 ## Template (número oficial)
 
@@ -122,6 +128,7 @@ No número oficial, texto livre só vale até 24 h depois da última mensagem do
 ```php
 use NotificationChannels\Zapmizer\Exceptions\ErrorCode;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
+use NotificationChannels\Zapmizer\Support\PhoneNumber;
 
 try {
     $sent = $team->zapmizerMessage('5511999999999')->text('Seu pedido saiu para entrega.')->send();
@@ -130,8 +137,10 @@ try {
         throw $e;
     }
 
+    $closedAt = $e->payload()['window_expires_at'] ?? null;   // quando a janela fechou
+
     $template = $team->zapmizer()->sendTemplate(
-        from: $team->zapmizerConnection->phone_number,
+        from: PhoneNumber::digits($team->zapmizerConnection->phone_number),
         to: '5511999999999',
         template: 'pedido_saiu',     // o nome aprovado na Meta
         body: ['Ana', '123'],        // as variáveis do corpo, na ordem
@@ -148,4 +157,4 @@ try {
   - **422**, só com `message` em `reason()`: número sem template (número por QR), template inexistente, em mais de um idioma, não aprovado, variáveis erradas ou recusa da Meta. Não repita igual.
   - **409** `bot_offline`.
   - **401**, **403**, **404** e **429** valem como no envio.
-- `$e->payload()['window_expires_at']` diz quando a janela fechou.
+- O `window_expires_at` vem no `409 window_closed` do `POST /messages`, não na resposta do template.

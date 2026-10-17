@@ -29,8 +29,10 @@ use NotificationChannels\Zapmizer\Models\WhatsappVerified;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
 use NotificationChannels\Zapmizer\Support\PhoneNumber;
 use NotificationChannels\Zapmizer\Support\TableExists;
+use NotificationChannels\Zapmizer\Webhook\Deduplicator;
 use NotificationChannels\Zapmizer\Webhook\Envelope;
 use Symfony\Component\HttpFoundation\Response;
+use Throwable;
 
 /**
  * Class WebhookController.
@@ -74,6 +76,32 @@ class WebhookController extends Controller
 
         $this->request = $request;
 
+        $deduplicator = $this->deduplicator();
+
+        if (!$deduplicator->claim($payload)) {
+            return $this->duplicateMethod($payload);
+        }
+
+        try {
+            $response = $this->processWebhook($payload);
+        } catch (Throwable $exception) {
+            $deduplicator->release($payload);
+
+            throw $exception;
+        }
+
+        if ($response->isServerError()) {
+            $deduplicator->release($payload);
+        }
+
+        return $response;
+    }
+
+    /**
+     * Fire the events and route the delivery to its handler.
+     */
+    protected function processWebhook(array $payload): Response
+    {
         WebhookReceived::dispatch($payload, $this->connection());
 
         $this->dispatchCatalogEvent($payload);
@@ -267,6 +295,22 @@ class WebhookController extends Controller
     protected function successMethod($parameters = []): Response
     {
         return new Response('Webhook Handled', 200);
+    }
+
+    /**
+     * Answer a repeated delivery (`zapmizer.webhook.deduplicate` on): 2xx,
+     * nothing fired.
+     *
+     * @param array $parameters
+     */
+    protected function duplicateMethod($parameters = []): Response
+    {
+        return new Response('Webhook Received', 200);
+    }
+
+    protected function deduplicator(): Deduplicator
+    {
+        return app(Deduplicator::class);
     }
 
     /**

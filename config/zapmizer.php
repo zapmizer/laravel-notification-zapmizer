@@ -70,6 +70,16 @@ return [
         // URL: its deliveries would get 404. A published config/zapmizer.php must
         // get this key added by hand.
         'per_connection' => env('ZAPMIZER_WEBHOOK_PER_CONNECTION', false),
+        // Drop the repeats of a delivery by the envelope `id` (Zapmizer retries
+        // with the same one): a repeat gets 200 and fires nothing. Uses the
+        // Laravel cache (`deduplicate_store`, null = the default store) for
+        // `deduplicate_ttl` seconds; a failed delivery (exception or 5xx) frees
+        // its id for the retry. With the cache down the delivery is processed
+        // and a warning logged. A published config/zapmizer.php must get these
+        // keys added by hand.
+        'deduplicate' => env('ZAPMIZER_WEBHOOK_DEDUPLICATE', false),
+        'deduplicate_ttl' => (int) env('ZAPMIZER_WEBHOOK_DEDUPLICATE_TTL', 21600),
+        'deduplicate_store' => env('ZAPMIZER_WEBHOOK_DEDUPLICATE_STORE'),
     ],
 
     'models' => [

@@ -13,6 +13,7 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\InboundMessage;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
 use NotificationChannels\Zapmizer\Test\Fixtures\CreatesConnectionTables;
+use NotificationChannels\Zapmizer\Test\Fixtures\ExternalIdTeam;
 use NotificationChannels\Zapmizer\Test\Fixtures\Team;
 use NotificationChannels\Zapmizer\Test\Concerns\FakesZapmizerHttp;
 use NotificationChannels\Zapmizer\Test\TestCase;
@@ -37,6 +38,34 @@ class ConnectableTest extends TestCase
     protected function fakeHttp(Response ...$responses): void
     {
         $this->fakeZapmizer(new MockHandler($responses));
+    }
+
+    protected function tearDown(): void
+    {
+        ExternalIdTeam::$externalId = null;
+
+        parent::tearDown();
+    }
+
+    public function testTheExternalIdIsTheKey()
+    {
+        $team = new Team();
+        $team->id = 5;
+
+        $this->assertSame('5', $team->zapmizerExternalId());
+    }
+
+    public function testAnOverriddenExternalId()
+    {
+        $team = new ExternalIdTeam();
+        $team->id = 5;
+        ExternalIdTeam::$externalId = 'tenant-9';
+
+        $this->assertSame('tenant-9', $team->zapmizerExternalId());
+
+        ExternalIdTeam::$externalId = null;
+
+        $this->assertSame('5', $team->zapmizerExternalId());
     }
 
     public function testMigrationCreatesTableWithUniqueConnectable()
@@ -85,6 +114,20 @@ class ConnectableTest extends TestCase
         $this->assertEquals('5581911110000', $serialized['phone_number']);
         $this->assertEquals('Acme on Zapmizer', $serialized['zapmizer_team_name']);
         $this->assertTrue($serialized['is_active']);
+    }
+
+    public function testM1TheSerializationSaysWhetherASecretIsStored()
+    {
+        $with = $this->connectedTeam('whsec_abcdef')->zapmizerConnection->fresh()->toArray();
+        $without = $this->connectedTeam(number: '5581922220000', overrides: ['webhook_secret' => null])->zapmizerConnection->fresh()->toArray();
+
+        $this->assertTrue($with['has_webhook_secret']);
+        $this->assertFalse($without['has_webhook_secret']);
+
+        foreach ([$with, $without] as $serialized) {
+            $this->assertArrayNotHasKey('webhook_secret', $serialized);
+            $this->assertArrayNotHasKey('webhook_previous_secret', $serialized);
+        }
     }
 
     public function testSigningSecretsOfferThePreviousOneDuringRotation()

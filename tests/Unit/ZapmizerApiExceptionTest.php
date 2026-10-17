@@ -2,11 +2,14 @@
 
 namespace NotificationChannels\Zapmizer\Test\Unit;
 
+use Closure;
 use GuzzleHttp\Psr7\Response;
+use Illuminate\Support\Facades\Log;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerRateLimitedException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerVerificationException;
 use NotificationChannels\Zapmizer\Support\ApiError;
@@ -67,6 +70,41 @@ class ZapmizerApiExceptionTest extends TestCase
         $this->assertSame('Zapmizer rate-limited the request.', $withoutHeader->getMessage());
         $this->assertNull($withoutHeader->retryAfter());
         $this->assertSame('custom', (new ZapmizerRateLimitedException($this->error(429, '{}'), 'custom'))->getMessage());
+    }
+
+    /** @dataProvider contexts */
+    #[DataProvider('contexts')]
+    public function testH1TheContextNamesStatusAndCode(Closure $exception, array $context)
+    {
+        $this->assertSame($context, $exception($this)->context());
+    }
+
+    public static function contexts(): array
+    {
+        return [
+            '402 plan_limit' => [
+                fn (self $test) => new ZapmizerApiException($test->error(402, '{"error":"plan_limit"}')),
+                ['zapmizer_status' => 402, 'zapmizer_error' => 'plan_limit'],
+            ],
+            '429 Retry-After 5' => [
+                fn (self $test) => new ZapmizerRateLimitedException($test->error(429, '{}', ['Retry-After' => '5'])),
+                ['zapmizer_status' => 429, 'zapmizer_retry_after' => 5],
+            ],
+            '401 without error' => [
+                fn (self $test) => new ZapmizerUnauthorizedException($test->error(401, '{}')),
+                ['zapmizer_status' => 401],
+            ],
+        ];
+    }
+
+    public function testH1TheReportCarriesTheContext()
+    {
+        Log::spy();
+
+        report(new ZapmizerApiException($this->error(402, '{"error":"plan_limit"}')));
+
+        Log::shouldHaveReceived('error')->withArgs(fn (string $message, array $context) => ($context['zapmizer_status'] ?? null) === 402
+            && ($context['zapmizer_error'] ?? null) === 'plan_limit')->once();
     }
 
     public function testRootOfTheHierarchy()

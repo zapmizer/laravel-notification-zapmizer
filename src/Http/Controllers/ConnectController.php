@@ -2,6 +2,7 @@
 
 namespace NotificationChannels\Zapmizer\Http\Controllers;
 
+use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Contracts\View\View;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\QueryException;
@@ -11,18 +12,21 @@ use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Str;
 use NotificationChannels\Zapmizer\Connect\ConnectToken;
+use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Connect\PartnerClient;
 use NotificationChannels\Zapmizer\Contracts\Connectable;
 use NotificationChannels\Zapmizer\Contracts\ResolvesConnectable;
+use NotificationChannels\Zapmizer\Events\NumberConnected;
 use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;
 use NotificationChannels\Zapmizer\Exceptions\NoConnectableException;
 use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
+use NotificationChannels\Zapmizer\Http\Controllers\Concerns\HandlesPopupState;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
 use Throwable;
 
@@ -37,15 +41,24 @@ use Throwable;
  * implements Contracts\Connectable (through the Connectable trait).
  *
  * The popup reports its outcome through postMessage with a stable `status`:
- * `ok`, `denied`, `plan_limit`, `qr_unavailable`, `invalid_state`,
- * `exchange_failed`, `webhook_failed`, `team_already_connected`,
- * `no_connectable`. The JSON endpoints answer `zapmizer_unavailable` (503),
- * `partner_unauthorized` (503) and `no_connectable` (403) themselves: the
- * package's exceptions do not render.
+ * `ok`, `denied`, `plan_limit`, `subscription_required`, `invalid_state`,
+ * `exchange_failed`, `rate_limited`, `webhook_failed`,
+ * `team_already_connected`, `no_connectable`. The `state` is checked before
+ * anything the popup brings back, `?error=` included. A 429 on the exchange
+ * answers a page that refreshes after `Retry-After` and tries the same code
+ * again, up to 5 attempts within 240 seconds of the first. The JSON endpoints answer `zapmizer_unavailable`
+ * (503), `partner_unauthorized` (503) and `no_connectable` (403) themselves:
+ * the package's exceptions do not render.
  */
 class ConnectController extends Controller
 {
+    use HandlesPopupState;
+
     public const SESSION_KEY = 'zapmizer_connect';
+
+    private const EXCHANGE_ATTEMPTS = 5;
+
+    private const EXCHANGE_WINDOW = 240;
 
     /**
      * What the hosted page reports in `?error=` when it ends without a code,
@@ -54,8 +67,13 @@ class ConnectController extends Controller
     protected const POPUP_ERRORS = [
         'access_denied' => 'denied',
         'plan_limit' => 'plan_limit',
-        'qr_unavailable' => 'qr_unavailable',
+        'subscription_required' => 'subscription_required',
     ];
+
+    /**
+     * The webhook key of the pending state, read on the callback.
+     */
+    protected ?string $pendingWebhookKey = null;
 
     public function __construct(
         protected PartnerClient $partnerClient,
@@ -88,24 +106,25 @@ class ConnectController extends Controller
     /**
      * Create the authorization session and return the popup URL. The
      * webhook route goes along: Zapmizer registers it on the team once the
-     * number pairs, and the id/secret come back with the token.
+     * number pairs, and the id/secret come back with the token. So do the
+     * model's `external_id` (zapmizerExternalId(), which keys the
+     * subscription and the checkout) and the state's TTL as `expires_in`.
+     * An invalid `external_id` is a programming error: its
+     * InvalidArgumentException is not caught.
      */
     public function start(Request $request): JsonResponse
     {
         try {
             $connectable = $this->connectable($request);
-            $state = Str::random(40);
-
-            $request->session()->put(self::SESSION_KEY, [
-                'state' => $state,
-                'connectable' => $this->connectableKey($connectable),
-                'expires_at' => now()->addMinutes((int) config('zapmizer.connect.state_ttl_minutes', 10))->toIso8601String(),
-            ]);
+            $key = $this->webhookKeyFor($connectable);
+            $pending = $this->issueState($request, self::SESSION_KEY, $connectable, $key === null ? [] : ['webhook_key' => $key]);
 
             $session = $this->partnerClient->createSession(
                 redirectUri: route('zapmizer.connect.callback'),
-                state: $state,
-                webhookUrl: route('zapmizer.webhook'),
+                state: $pending['state'],
+                webhookUrl: $this->webhookUrl($key),
+                expiresIn: $this->stateTtlMinutes() * 60,
+                externalId: $connectable->zapmizerExternalId(),
             );
         } catch (PartnerCredentialsException $exception) {
             report($exception);
@@ -134,12 +153,7 @@ class ConnectController extends Controller
      */
     public function callback(Request $request): View
     {
-        // pull() guarantees the single use of the state, on error paths too.
-        $pending = $request->session()->pull(self::SESSION_KEY);
-
-        if (($error = $request->query('error')) !== null) {
-            return $this->result(static::POPUP_ERRORS[$error] ?? 'exchange_failed');
-        }
+        $pending = $this->takePending($request, self::SESSION_KEY);
 
         try {
             $connectable = $this->connectable($request);
@@ -147,18 +161,41 @@ class ConnectController extends Controller
             return $this->result('no_connectable');
         }
 
-        if (!$this->validState($pending, (string) $request->query('state', ''), $connectable)) {
+        if (!$this->validState($pending, $this->queryString($request, 'state'), $connectable)) {
             return $this->result('invalid_state');
         }
 
+        if (isset($pending['code_hash']) && !hash_equals((string) $pending['code_hash'], hash('sha256', $this->queryString($request, 'code')))) {
+            return $this->result('invalid_state');
+        }
+
+        $this->pendingWebhookKey = is_string($pending['webhook_key'] ?? null) ? $pending['webhook_key'] : null;
+
+        if (($error = $this->errorParam($request)) !== null) {
+            return $this->result($this->popupStatus($error));
+        }
+
+        if (($code = $this->queryString($request, 'code')) === '') {
+            return $this->result('exchange_failed');
+        }
+
         try {
-            $token = $this->partnerClient->exchangeCode((string) $request->query('code', ''));
+            $token = $this->partnerClient->exchangeCode($code);
 
             if ($token === null) {
                 return $this->result('exchange_failed');
             }
 
+            if (!$token->hasNumber()) {
+                Log::warning('zapmizer: the token came without a number.', ['team_id' => $token->teamId]);
+                $this->revokeOrphanToken($token);
+
+                return $this->result('exchange_failed');
+            }
+
             return $this->storeToken($connectable, $token);
+        } catch (ZapmizerRateLimitedException $exception) {
+            return $this->waitForExchange($request, $pending, $exception);
         } catch (ZapmizerConnectException $exception) {
             // Partner key refused, Zapmizer down, non-JSON answer: all of
             // them are "try again" for the user, with the detail in the log.
@@ -173,16 +210,54 @@ class ConnectController extends Controller
     }
 
     /**
+     * A 429 does not spend the code: the popup waits `Retry-After` (10
+     * seconds without a usable one) and comes back with the same code and
+     * state, which go back into the session with the attempt count. It
+     * gives up with `rate_limited` after 5 attempts, or when the wait would
+     * pass 240 seconds from the first attempt or the state's expiry.
+     */
+    private function waitForExchange(Request $request, array $pending, ZapmizerRateLimitedException $exception): View
+    {
+        $now = now()->getTimestamp();
+        $seenAt = (int) ($pending['code_seen_at'] ?? $now);
+        $attempt = (int) ($pending['exchange_attempts'] ?? 0) + 1;
+        $wait = ($exception->retryAfter() ?? 9) + 1;
+        $deadline = min($seenAt + self::EXCHANGE_WINDOW, Carbon::parse($pending['expires_at'])->getTimestamp());
+
+        if ($attempt > self::EXCHANGE_ATTEMPTS || $now + $wait > $deadline) {
+            return $this->result('rate_limited');
+        }
+
+        $request->session()->put(self::SESSION_KEY, array_merge($pending, [
+            'code_seen_at' => $seenAt,
+            'exchange_attempts' => $attempt,
+            'code_hash' => hash('sha256', $this->queryString($request, 'code')),
+        ]));
+
+        return view('zapmizer::connect-wait', [
+            'seconds' => $wait,
+            'message' => "Zapmizer is busy. This window tries again in {$wait} seconds.",
+        ]);
+    }
+
+    /**
      * Store everything the exchange brought on the model's connection. The
      * hosted page paired the number before handing out the code, so the
-     * connection is born ACTIVE — as long as a number came.
+     * connection is born ACTIVE. Nothing here calls `/webhooks`: the connect
+     * token cannot (403 `missing_ability`).
      *
      * A DIFFERENT team than the one stored gets a clean slate first: the old
-     * number, instance and webhook belong to the old token, and the old
-     * webhook is deleted over there (best-effort). The SAME team keeps its
-     * stored webhook secret when Zapmizer reused the webhook (same id, no
-     * secret in the answer); any other missing secret is obtained by
-     * rotating — without one, no delivery can be verified.
+     * number, instance and webhook belong to the old token. The SAME team
+     * keeps its stored webhook secret when Zapmizer reused the webhook (same
+     * id, no secret in the answer). Without any secret the connection stays
+     * active — it sends — and the popup says `webhook_failed`: it cannot
+     * verify what it receives until it disconnects and connects again.
+     *
+     * A stored value that no longer decrypts (APP_KEY changed) counts as
+     * absent, with a warning, and is overwritten. With
+     * `zapmizer.connect.revoke_previous_token` on, the token the row held
+     * before is revoked once the new one is saved. Then NumberConnected
+     * fires; a listener that throws is reported and the status stays.
      */
     protected function storeToken(Model&Connectable $connectable, ConnectToken $token): View
     {
@@ -191,23 +266,18 @@ class ConnectController extends Controller
         // One connectable per Zapmizer team: two of them would register two
         // webhooks and every message would fire on both tenants.
         if ($this->teamConnectedElsewhere($connection, $token->teamId)) {
+            $this->revokeOrphanToken($token);
+
             return $this->result('team_already_connected');
         }
+
+        $previousToken = $this->shouldRevokePreviousToken() && $connection->exists && $connection->hasApiToken()
+            ? $this->readEncrypted($connection, 'api_token', 'zapmizer: could not read the previous token to revoke it.')
+            : null;
 
         $switchingTeam = $connection->exists
             && $connection->zapmizer_team_id !== null
             && $connection->zapmizer_team_id !== $token->teamId;
-
-        // A webhook replaced on the same team (new id): the old one would keep
-        // delivering with a secret this row is about to forget.
-        $replacingWebhook = !$switchingTeam
-            && $connection->webhook_id !== null
-            && $token->webhookId !== null
-            && $connection->webhook_id !== $token->webhookId;
-
-        if ($switchingTeam || $replacingWebhook) {
-            $this->forgetRemoteWebhook($connection);
-        }
 
         if ($switchingTeam) {
             $connection->forgetPairing();
@@ -215,7 +285,13 @@ class ConnectController extends Controller
 
         $reusedWebhook = $token->needsWebhookSecret()
             && $connection->webhook_id === $token->webhookId
-            && filled($connection->webhook_secret);
+            && filled($this->readEncrypted($connection, 'webhook_secret', 'zapmizer: unreadable webhook secret.'));
+
+        $this->ensureWritable($connection, 'api_token');
+
+        if (!$reusedWebhook && $token->webhookSecret !== null) {
+            $this->ensureWritable($connection, 'webhook_secret');
+        }
 
         $connection->forceFill([
             'api_token' => $token->token,
@@ -223,12 +299,17 @@ class ConnectController extends Controller
             'zapmizer_team_name' => $token->teamName,
             'phone_number' => $token->phoneNumber,
             'bot_instance_id' => $token->botInstanceId,
-            'connected_at' => $token->phoneNumber === null ? null : now(),
+            'connected_at' => now(),
             'webhook_id' => $token->webhookId,
-            'webhook_secret' => $reusedWebhook ? $connection->webhook_secret : $token->webhookSecret,
-            'webhook_previous_secret' => $reusedWebhook ? $connection->webhook_previous_secret : null,
-            'is_active' => $token->phoneNumber !== null,
+            'is_active' => true,
         ]);
+
+        if (!$reusedWebhook) {
+            $connection->forceFill([
+                'webhook_secret' => $token->webhookSecret,
+                'webhook_previous_secret' => null,
+            ]);
+        }
 
         try {
             $connection->save();
@@ -239,21 +320,95 @@ class ConnectController extends Controller
 
             // Lost the race with another connectable authorizing the same
             // team between the check above and this insert.
+            $this->revokeOrphanToken($token);
+
             return $this->result('team_already_connected');
         }
 
-        if ($token->needsWebhookSecret() && !$reusedWebhook && !$this->obtainWebhookSecret($connection)) {
-            return $this->result('webhook_failed');
+        $status = $token->needsWebhookSecret() && !$reusedWebhook ? 'webhook_failed' : 'ok';
+
+        if ($status === 'webhook_failed') {
+            Log::warning('zapmizer: connected without a webhook secret.', [
+                'connection_id' => $connection->getKey(),
+                'webhook_id' => $connection->webhook_id,
+            ]);
         }
 
-        return $this->result('ok');
+        if ($previousToken !== null && !hash_equals($previousToken, $token->token)) {
+            $this->revokePreviousToken($connection, $previousToken);
+        }
+
+        rescue(fn () => event(new NumberConnected($connectable, $connection)), report: true);
+
+        return $this->result($status);
+    }
+
+    private function shouldRevokePreviousToken(): bool
+    {
+        return filter_var(config('zapmizer.connect.revoke_previous_token', false), FILTER_VALIDATE_BOOLEAN);
     }
 
     /**
-     * Disconnect the model from Zapmizer: the webhook over there is deleted
-     * (best-effort — a failure is logged and the local row goes anyway),
-     * the local row with its credentials dies. The team token itself cannot
-     * be revoked through the API; it is simply forgotten here.
+     * The decrypted `$column`; `null` when it does not decrypt (APP_KEY
+     * changed), with `$warning` in the log.
+     */
+    private function readEncrypted(ZapmizerConnection $connection, string $column, string $warning): ?string
+    {
+        try {
+            $value = $connection->{$column};
+        } catch (DecryptException) {
+            Log::warning($warning, ['connection_id' => $connection->getKey()]);
+
+            return null;
+        }
+
+        return $value === null ? null : (string) $value;
+    }
+
+    /**
+     * Before a new value is written to an encrypted `$column`: Eloquent's
+     * dirty check decrypts the ORIGINAL value, and one that no longer
+     * decrypts would throw on save. Such a column is reset to `null` — the
+     * attribute and its original — and the new value written over it. The
+     * raw original decides, not the current attribute: forgetPairing()
+     * nulls the attribute but not the original.
+     */
+    private function ensureWritable(ZapmizerConnection $connection, string $column): void
+    {
+        $raw = $connection->getRawOriginal($column);
+
+        if ($raw === null) {
+            return;
+        }
+
+        try {
+            $connection->fromEncryptedString($raw);
+        } catch (DecryptException) {
+            $connection->forceFill([$column => null]);
+            $connection->syncOriginalAttribute($column);
+
+            Log::warning('zapmizer: unreadable stored value, overwritten.', [
+                'connection_id' => $connection->getKey(),
+                'column' => $column,
+            ]);
+        }
+    }
+
+    private function revokePreviousToken(ZapmizerConnection $connection, string $previous): void
+    {
+        $exception = $this->tryRevoke($previous);
+
+        if ($exception !== null) {
+            Log::warning('zapmizer: the previous token was not revoked.', ['connection_id' => $connection->getKey()] + $this->failureContext($exception));
+        }
+    }
+
+    /**
+     * Disconnect the model from Zapmizer: the token is revoked
+     * (`DELETE /connect/token`, best-effort — a failure is a warning and the
+     * local row goes anyway) and the local row with its credentials dies.
+     * Zapmizer drops the webhook the connect created once no other live
+     * grant uses the same URL.
      */
     public function destroy(Request $request): JsonResponse
     {
@@ -264,36 +419,76 @@ class ConnectController extends Controller
         }
 
         if ($connection !== null) {
-            $this->forgetRemoteWebhook($connection);
+            $token = $connection->hasApiToken()
+                ? $this->readEncrypted($connection, 'api_token', 'zapmizer: could not read the token to revoke it.')
+                : null;
+
+            if ($token !== null) {
+                $this->revokeOnDestroy($connection, $token);
+            }
+
             $connection->delete();
         }
 
         return new JsonResponse(['status' => 'disconnected']);
     }
 
+    private function revokeOnDestroy(ZapmizerConnection $connection, string $token): void
+    {
+        $exception = $this->tryRevoke($token);
+
+        if ($exception === null) {
+            return;
+        }
+
+        $stillValid = $exception instanceof ZapmizerApiException && $exception->status() === 404;
+
+        Log::warning(
+            $stillValid ? 'zapmizer: the token was not revoked and is still valid.' : 'zapmizer: the token was not revoked.',
+            ['connection_id' => $connection->getKey()] + $this->failureContext($exception),
+        );
+    }
+
     /**
-     * Zapmizer reused a webhook the team already had for our URL and kept
-     * its secret to itself. Rotating is the only way to get one; a
-     * connection without it would accept nothing, so it is deactivated when
-     * the rotation fails — the log says why, the popup says `webhook_failed`.
+     * Revoke a token the exchange handed out but nothing stored (another
+     * connectable holds the team, or no number came with it): kept, it
+     * would stay valid with no one holding it. One attempt; a failure is a
+     * warning and never changes the popup's status.
      */
-    protected function obtainWebhookSecret(ZapmizerConnection $connection): bool
+    protected function revokeOrphanToken(ConnectToken $token): void
+    {
+        $exception = $this->tryRevoke($token->token);
+
+        if ($exception !== null) {
+            Log::warning('zapmizer: the orphan token was not revoked.', ['team_id' => $token->teamId] + $this->failureContext($exception));
+        }
+    }
+
+    /**
+     * One `DELETE /connect/token` with `$token`; the failure, if any.
+     */
+    private function tryRevoke(string $token): ?Throwable
     {
         try {
-            $connection->rotateWebhookSecret();
+            app(InstanceClient::class, [
+                'api_token' => $token,
+                'api_version' => config('zapmizer.api_version'),
+            ])->revokeToken();
 
-            return true;
+            return null;
         } catch (Throwable $exception) {
-            Log::warning('zapmizer: could not obtain the webhook secret after connecting.', [
-                'connection_id' => $connection->getKey(),
-                'webhook_id' => $connection->webhook_id,
-                'exception' => $exception->getMessage(),
-            ]);
-
-            $connection->forceFill(['is_active' => false])->save();
-
-            return false;
+            return $exception;
         }
+    }
+
+    /**
+     * @return array{status?: int, exception: string}
+     */
+    private function failureContext(Throwable $exception): array
+    {
+        $context = $exception instanceof ZapmizerApiException ? ['status' => $exception->status()] : [];
+
+        return $context + ['exception' => $exception->getMessage()];
     }
 
     /**
@@ -313,6 +508,10 @@ class ConnectController extends Controller
             $instance = $connection->instanceClient()->connection((int) $connection->bot_instance_id);
 
             return ['state' => $instance->state, 'is_online' => $instance->isOnline];
+        } catch (DecryptException) {
+            Log::warning('zapmizer: could not read the token to query the instance.', ['connection_id' => $connection->getKey()]);
+
+            return ['state' => 'reauth_required', 'is_online' => false];
         } catch (ZapmizerUnauthorizedException) {
             return ['state' => 'reauth_required', 'is_online' => false];
         } catch (InstanceGoneException) {
@@ -323,21 +522,20 @@ class ConnectController extends Controller
     }
 
     /**
-     * Best-effort deletion of the webhook on Zapmizer. Whatever the reason
-     * it fails (token revoked, Zapmizer down), the local decision stands;
-     * the log is what tells an operator to clean it up by hand.
+     * The key of the webhook this connectable's session registers; `null`
+     * is the package's single webhook route.
      */
-    protected function forgetRemoteWebhook(ZapmizerConnection $connection): void
+    protected function webhookKeyFor(Model&Connectable $connectable): ?string
     {
-        try {
-            $connection->deleteRemoteWebhook();
-        } catch (Throwable $exception) {
-            Log::warning('zapmizer: could not delete the webhook on Zapmizer.', [
-                'connection_id' => $connection->getKey(),
-                'webhook_id' => $connection->webhook_id,
-                'exception' => $exception->getMessage(),
-            ]);
-        }
+        return null;
+    }
+
+    /**
+     * The webhook URL sent with the session for `$key`.
+     */
+    protected function webhookUrl(?string $key): string
+    {
+        return route('zapmizer.webhook');
     }
 
     protected function teamConnectedElsewhere(ZapmizerConnection $connection, int $teamId): bool
@@ -357,43 +555,19 @@ class ConnectController extends Controller
             || preg_match('#Integrity constraint violation: 1062|UNIQUE constraint failed: |column(s)? .* (is|are) not unique|Cannot insert duplicate key(?: row)? in object#i', $message) === 1;
     }
 
-    protected function validState(mixed $pending, string $state, Model $connectable): bool
-    {
-        if (!is_array($pending) || !is_string($pending['state'] ?? null) || $state === '') {
-            return false;
-        }
-
-        try {
-            $expiresAt = Carbon::parse($pending['expires_at'] ?? now()->subMinute()->toIso8601String());
-        } catch (Throwable) {
-            return false;
-        }
-
-        return hash_equals($pending['state'], $state)
-            && ($pending['connectable'] ?? null) === $this->connectableKey($connectable)
-            && $expiresAt->isFuture();
-    }
-
     /**
-     * The model being connected on this request. The resolver's return type
-     * (`Model&Connectable`) is the contract: a resolver handing back a model
-     * without it fails right there, with a TypeError naming the class. A
-     * resolver with nothing to connect throws NoConnectableException, which
-     * the JSON endpoints answer with 403 `no_connectable`.
+     * The status for the hosted page's `?error=`. An unknown one (or a
+     * value that is not a string) is logged and becomes `exchange_failed`.
      */
-    protected function connectable(Request $request): Model&Connectable
+    protected function popupStatus(string $error): string
     {
-        return $this->resolver->resolve($request);
-    }
+        if (isset(static::POPUP_ERRORS[$error])) {
+            return static::POPUP_ERRORS[$error];
+        }
 
-    protected function code(string $code, int $status): JsonResponse
-    {
-        return new JsonResponse(['code' => $code], $status);
-    }
+        Log::warning('zapmizer: unknown connect error.', ['error' => mb_substr($error, 0, 100)]);
 
-    protected function connectableKey(Model $connectable): string
-    {
-        return $connectable->getMorphClass() . ':' . $connectable->getKey();
+        return 'exchange_failed';
     }
 
     protected function result(string $status): View
@@ -402,10 +576,11 @@ class ConnectController extends Controller
             'ok' => 'WhatsApp number connected.',
             'denied' => 'Authorization cancelled.',
             'plan_limit' => 'The Zapmizer plan has no room for another WhatsApp number. Free one up on Zapmizer, or upgrade the plan, and try again.',
-            'qr_unavailable' => 'The Zapmizer team cannot pair a number by QR code. Check the team settings on Zapmizer and try again.',
+            'subscription_required' => 'Your Zapmizer account was linked, but it has no active subscription. Connect again to subscribe.',
             'invalid_state' => 'This connection session is invalid or has expired. Close this window and try again.',
             'exchange_failed' => 'The connection could not be completed. Close this window and try again.',
-            'webhook_failed' => 'The number was paired, but the receiver could not be set up. Close this window and try again.',
+            'rate_limited' => 'Zapmizer is busy right now. Close this window and connect again in a minute.',
+            'webhook_failed' => "Connected and sending, but incoming messages can't be verified. Disconnect and connect again to receive.",
             'team_already_connected' => 'This Zapmizer account is already connected to another account here. Disconnect it there first, or authorize a different Zapmizer team.',
             'no_connectable' => 'There is nothing to connect on this account. Close this window, sign in again and retry.',
         ];

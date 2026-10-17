@@ -13,12 +13,13 @@ use NotificationChannels\Zapmizer\Support\Payload;
  * page pairs the number before handing out the code — the paired number,
  * its instance and the webhook Zapmizer registered for the session's
  * `webhook_url`. `hasNumber()` is false when the number ceased to exist
- * between the approval and the exchange.
+ * between the approval and the exchange; the callback answers that with
+ * `exchange_failed`, stores nothing and revokes the token.
  *
  * `webhookSecret` is null when no webhook was requested AND when Zapmizer
  * reused a webhook the team already had for that URL (the secret is only
- * ever handed out once, on creation): a null secret with a non-null id
- * means "rotate to get one".
+ * ever handed out once, on creation): a null secret with a non-null id is
+ * a reused webhook, whose secret is the one stored on the first connect.
  */
 final class ConnectToken
 {
@@ -57,22 +58,40 @@ final class ConnectToken
             throw ZapmizerConnectException::unexpectedResponse('invalid team_id');
         }
 
+        $botInstanceId = self::optionalId($data, 'bot_instance_id');
+        $webhookId = self::optionalId($data, 'webhook_id');
+
         return new self(
             token: (string) $data['token'],
             userId: $userId,
             teamId: $teamId,
             teamName: isset($data['team_name']) ? (string) $data['team_name'] : null,
             phoneNumber: filled($data['phone_number'] ?? null) ? (string) $data['phone_number'] : null,
-            botInstanceId: isset($data['bot_instance_id']) ? (int) $data['bot_instance_id'] : null,
-            webhookId: isset($data['webhook_id']) ? (int) $data['webhook_id'] : null,
+            botInstanceId: $botInstanceId,
+            webhookId: $webhookId,
             webhookSecret: filled($data['webhook_secret'] ?? null) ? (string) $data['webhook_secret'] : null,
         );
     }
 
     /**
-     * Zapmizer registered (or reused) a webhook but did not hand the secret
-     * out: the caller must rotate to obtain one before any delivery can be
-     * verified.
+     * An id that may be absent or `null`; present, it must be a positive id.
+     *
+     * @throws ZapmizerConnectException
+     */
+    private static function optionalId(array $data, string $field): ?int
+    {
+        if (($data[$field] ?? null) === null) {
+            return null;
+        }
+
+        return Payload::positiveId($data[$field])
+            ?? throw ZapmizerConnectException::unexpectedResponse("invalid {$field}");
+    }
+
+    /**
+     * Zapmizer reused a webhook and did not hand the secret out (it only
+     * comes on creation): only a secret already stored for the same webhook
+     * can verify its deliveries.
      */
     public function needsWebhookSecret(): bool
     {

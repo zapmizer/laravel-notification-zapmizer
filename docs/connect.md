@@ -197,7 +197,7 @@ Without `live` no request leaves your server and `state`/`is_online` are absent.
 - `is_active`: `true`, as the connect does for a paired number;
 - `connected_at`: now. It dates the stored number, so it is the moment the panel saw the change, not the moment WhatsApp made it.
 
-The same number, a `null` number and any other state write nothing: the panel polls this route, and the number of a state other than `connected` may be a stale one. A failed write is reported, and the answer keeps the stored number. To change the rule (for example, to keep a connection your app deactivated inactive), override `syncConnectedNumber(ZapmizerConnection $connection, InstanceConnection $instance)` in a subclass of the controller.
+The same number, a `null` number and any other state write nothing: the panel polls this route, and the number of a state other than `connected` may be a stale one. The write runs in a transaction on the row locked for update, and only while `phone_number` and `bot_instance_id` are still the ones the request read: a connect that stored another pairing meanwhile wins. It goes through `save()`, so the model's events fire. A failed write is reported and normally leaves the stored number in the answer; a listener deferred until after the commit that fails may leave the new number stored and this answer showing the old one until the next poll. To change the rule (for example, to keep a connection your app deactivated inactive), override `syncConnectedNumber(ZapmizerConnection $connection, InstanceConnection $instance)` in a subclass of the controller.
 
 ### Reconnecting a number from the panel
 

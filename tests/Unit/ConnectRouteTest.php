@@ -4,6 +4,7 @@ namespace NotificationChannels\Zapmizer\Test\Unit;
 
 use Closure;
 use GuzzleHttp\Exception\ConnectException;
+use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
@@ -391,6 +392,82 @@ class ConnectRouteTest extends TestCase
         $this->assertCount(1, $this->reported);
         $this->assertSame('database is gone', $this->reported[0]->getMessage());
         ZapmizerConnection::flushEventListeners();
+        $this->assertSame('5581911110000', $this->team()->zapmizerConnection->phone_number);
+    }
+
+    /**
+     * A connect callback stored another pairing between the live read and
+     * the write (simulated inside the `/connection` answer): the live query
+     * must not overwrite it with the number of the instance it read.
+     *
+     * @dataProvider pairingsStoredMeanwhile
+     */
+    #[DataProvider('pairingsStoredMeanwhile')]
+    public function testL7AConnectThatLandedMeanwhileWins(array $meanwhile)
+    {
+        $live = $this->liveAnswer('connected', '5581922220000', online: true);
+        Carbon::setTestNow('2026-10-16 12:00:00');
+        $this->fakeZapmizer(new MockHandler([
+            $this->sessionCreated(),
+            $this->tokenAnswer(),
+            function () use ($live, $meanwhile) {
+                DB::table('zapmizer_connections')->update($meanwhile);
+
+                return $live;
+            },
+        ]));
+        $this->actingAsUser();
+        $this->connect()->assertSee('status: "ok"', false);
+        Carbon::setTestNow('2026-10-16 13:00:00');
+
+        $this->getJson(route('zapmizer.connect.show', ['live' => 1]))->assertOk();
+
+        $stored = DB::table('zapmizer_connections')->first();
+        $this->assertSame($meanwhile['phone_number'], $stored->phone_number);
+        $this->assertSame($meanwhile['bot_instance_id'], (int) $stored->bot_instance_id);
+        $this->assertTrue(Carbon::parse($stored->connected_at)->equalTo(Carbon::parse('2026-10-16 12:00:00')));
+    }
+
+    public static function pairingsStoredMeanwhile(): array
+    {
+        return [
+            'another number on the same instance' => [['phone_number' => '5581933330000', 'bot_instance_id' => 9]],
+            'another instance with the same number' => [['phone_number' => '5581911110000', 'bot_instance_id' => 10]],
+            'another instance and number' => [['phone_number' => '5581933330000', 'bot_instance_id' => 10]],
+        ];
+    }
+
+    public function testL8TheWriteGoesThroughTheModelEvents()
+    {
+        $this->connectedThroughTheCallback($this->liveAnswer('connected', '5581922220000', online: true));
+        $seen = [];
+        ZapmizerConnection::updating(function (ZapmizerConnection $connection) use (&$seen) {
+            $seen[] = 'updating:' . $connection->phone_number;
+        });
+        ZapmizerConnection::saved(function (ZapmizerConnection $connection) use (&$seen) {
+            $seen[] = 'saved:' . $connection->phone_number;
+        });
+
+        $this->getJson(route('zapmizer.connect.show', ['live' => 1]))->assertOk();
+
+        ZapmizerConnection::flushEventListeners();
+        $this->assertSame(['updating:5581922220000', 'saved:5581922220000'], $seen);
+    }
+
+    public function testL9AListenerThatThrowsUndoesTheWrite()
+    {
+        $this->connectedThroughTheCallback($this->liveAnswer('connected', '5581922220000', online: true));
+        $this->recordReports();
+        ZapmizerConnection::saved(function () {
+            throw new \RuntimeException('listener failed');
+        });
+
+        $this->getJson(route('zapmizer.connect.show', ['live' => 1]))
+            ->assertOk()
+            ->assertJsonPath('connection.phone_number', '5581911110000');
+
+        ZapmizerConnection::flushEventListeners();
+        $this->assertCount(1, $this->reported);
         $this->assertSame('5581911110000', $this->team()->zapmizerConnection->phone_number);
     }
 

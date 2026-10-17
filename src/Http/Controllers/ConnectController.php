@@ -577,9 +577,20 @@ class ConnectController extends Controller
      * DIFFERENT number writes: this runs on every poll of the panel. The
      * write follows the connect's rule — a paired number is active — and
      * `connected_at` is the moment the change was seen, since it dates the
-     * stored number. A failed write is reported and the connection keeps
-     * the stored values, so the answer never shows a number that is not
-     * stored.
+     * stored number.
+     *
+     * The write is conditional: inside a transaction, on the row locked for
+     * update, and only while `phone_number` and `bot_instance_id` are still
+     * the ones this request read — a connect callback that stored another
+     * pairing meanwhile wins. It goes through `save()`, so the model's
+     * events (`saving`, `updating`, `updated`, `saved`) fire as usual.
+     *
+     * A failed write is reported and the connection keeps the values it
+     * had, so the answer normally shows the stored number. A listener that
+     * throws rolls the transaction back, but whatever it did outside the
+     * database stays; and a listener deferred until after the commit may
+     * still fail after the number is stored, with this answer showing the
+     * old one until the next poll.
      */
     protected function syncConnectedNumber(ZapmizerConnection $connection, InstanceConnection $instance): void
     {
@@ -587,18 +598,42 @@ class ConnectController extends Controller
             return;
         }
 
-        $stored = $connection->getAttributes();
+        $read = $connection->getAttributes();
 
         try {
-            $connection->forceFill([
-                'phone_number' => $instance->number,
-                'connected_at' => now(),
-                'is_active' => true,
-            ])->save();
+            $connection->getConnection()->transaction(function () use ($connection, $instance, $read) {
+                $current = $connection->newQuery()->whereKey($connection->getKey())->lockForUpdate()->first();
+
+                if ($current === null || !$this->samePairing($current->getAttributes(), $read)) {
+                    return;
+                }
+
+                $connection->forceFill([
+                    'phone_number' => $instance->number,
+                    'connected_at' => now(),
+                    'is_active' => true,
+                ])->save();
+            });
         } catch (Throwable $exception) {
             report($exception);
-            $connection->setRawAttributes($stored);
+            $connection->setRawAttributes($read);
         }
+    }
+
+    /**
+     * Whether the row still holds the pairing (`phone_number`,
+     * `bot_instance_id`) this request read. Compared as strings: the driver
+     * may hand the id back as an int or as text.
+     */
+    private function samePairing(array $current, array $read): bool
+    {
+        foreach (['phone_number', 'bot_instance_id'] as $column) {
+            if ((string) ($current[$column] ?? '') !== (string) ($read[$column] ?? '')) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**

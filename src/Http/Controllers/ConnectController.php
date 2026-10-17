@@ -9,6 +9,7 @@ use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 use NotificationChannels\Zapmizer\Connect\ConnectToken;
 use NotificationChannels\Zapmizer\Connect\PartnerClient;
@@ -19,6 +20,7 @@ use NotificationChannels\Zapmizer\Exceptions\NoConnectableException;
 use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
 use NotificationChannels\Zapmizer\Http\Controllers\Concerns\HandlesPopupState;
@@ -37,9 +39,11 @@ use Throwable;
  *
  * The popup reports its outcome through postMessage with a stable `status`:
  * `ok`, `denied`, `plan_limit`, `subscription_required`, `invalid_state`,
- * `exchange_failed`, `webhook_failed`, `team_already_connected`,
- * `no_connectable`. The `state` is checked before anything the popup brings
- * back, `?error=` included. The JSON endpoints answer `zapmizer_unavailable`
+ * `exchange_failed`, `rate_limited`, `webhook_failed`,
+ * `team_already_connected`, `no_connectable`. The `state` is checked before
+ * anything the popup brings back, `?error=` included. A 429 on the exchange
+ * answers a page that refreshes after `Retry-After` and tries the same code
+ * again, up to 5 attempts within 240 seconds of the first. The JSON endpoints answer `zapmizer_unavailable`
  * (503), `partner_unauthorized` (503) and `no_connectable` (403) themselves:
  * the package's exceptions do not render.
  */
@@ -48,6 +52,10 @@ class ConnectController extends Controller
     use HandlesPopupState;
 
     public const SESSION_KEY = 'zapmizer_connect';
+
+    private const EXCHANGE_ATTEMPTS = 5;
+
+    private const EXCHANGE_WINDOW = 240;
 
     /**
      * What the hosted page reports in `?error=` when it ends without a code,
@@ -176,6 +184,8 @@ class ConnectController extends Controller
             }
 
             return $this->storeToken($connectable, $token);
+        } catch (ZapmizerRateLimitedException $exception) {
+            return $this->waitForExchange($request, $pending, $exception);
         } catch (ZapmizerConnectException $exception) {
             // Partner key refused, Zapmizer down, non-JSON answer: all of
             // them are "try again" for the user, with the detail in the log.
@@ -187,6 +197,37 @@ class ConnectController extends Controller
 
             return $this->result('exchange_failed');
         }
+    }
+
+    /**
+     * A 429 does not spend the code: the popup waits `Retry-After` (10
+     * seconds without a usable one) and comes back with the same code and
+     * state, which go back into the session with the attempt count. It
+     * gives up with `rate_limited` after 5 attempts, or when the wait would
+     * pass 240 seconds from the first attempt or the state's expiry.
+     */
+    private function waitForExchange(Request $request, array $pending, ZapmizerRateLimitedException $exception): View
+    {
+        $now = now()->getTimestamp();
+        $seenAt = (int) ($pending['code_seen_at'] ?? $now);
+        $attempt = (int) ($pending['exchange_attempts'] ?? 0) + 1;
+        $wait = ($exception->retryAfter() ?? 9) + 1;
+        $deadline = min($seenAt + self::EXCHANGE_WINDOW, Carbon::parse($pending['expires_at'])->getTimestamp());
+
+        if ($attempt > self::EXCHANGE_ATTEMPTS || $now + $wait > $deadline) {
+            return $this->result('rate_limited');
+        }
+
+        $request->session()->put(self::SESSION_KEY, array_merge($pending, [
+            'code_seen_at' => $seenAt,
+            'exchange_attempts' => $attempt,
+            'code_hash' => hash('sha256', $this->queryString($request, 'code')),
+        ]));
+
+        return view('zapmizer::connect-wait', [
+            'seconds' => $wait,
+            'message' => "Zapmizer is busy. This window tries again in {$wait} seconds.",
+        ]);
     }
 
     /**
@@ -415,6 +456,7 @@ class ConnectController extends Controller
             'subscription_required' => 'Your Zapmizer account was linked, but it has no active subscription. Connect again to subscribe.',
             'invalid_state' => 'This connection session is invalid or has expired. Close this window and try again.',
             'exchange_failed' => 'The connection could not be completed. Close this window and try again.',
+            'rate_limited' => 'Zapmizer is busy right now. Close this window and connect again in a minute.',
             'webhook_failed' => 'The number was paired, but the receiver could not be set up. Close this window and try again.',
             'team_already_connected' => 'This Zapmizer account is already connected to another account here. Disconnect it there first, or authorize a different Zapmizer team.',
             'no_connectable' => 'There is nothing to connect on this account. Close this window, sign in again and retry.',

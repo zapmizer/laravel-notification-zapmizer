@@ -50,6 +50,7 @@ class ConnectRouteTest extends TestCase
     protected function tearDown(): void
     {
         ExternalIdTeam::$externalId = null;
+        KeyedConnectController::$storedWith = null;
 
         parent::tearDown();
     }
@@ -646,7 +647,6 @@ class ConnectRouteTest extends TestCase
     {
         return [
             '422' => [422, '{"message":"The code field is required.","errors":{"code":["The code field is required."]}}', []],
-            '429' => [429, '{"message":"Too Many Attempts."}', ['Retry-After' => '30']],
         ];
     }
 
@@ -1311,6 +1311,221 @@ class ConnectRouteTest extends TestCase
             ->assertSee('status: "exchange_failed"', false);
 
         $this->assertNull($this->team()->zapmizerConnection);
+    }
+
+    // --- 429 on the exchange ---------------------------------------------
+
+    private const TOO_MANY = '{"message":"Too Many Attempts."}';
+
+    protected function tooMany(array $headers = ['Retry-After' => '20']): Response
+    {
+        return new Response(429, ['Content-Type' => 'application/json'] + $headers, self::TOO_MANY);
+    }
+
+    protected function callbackWith(array $query = ['code' => 'c', 'state' => 's']): \Illuminate\Testing\TestResponse
+    {
+        return $this->get(route('zapmizer.connect.callback', $query));
+    }
+
+    public function testR1A429OnTheExchangeWaits()
+    {
+        Carbon::setTestNow('2026-10-16 12:00:00');
+        $this->assertMatchesContract('POST', '/connect/token', 429, self::TOO_MANY, ['Retry-After' => '20']);
+        Log::spy();
+        $this->fakeHttp($this->tooMany());
+        $this->actingAsUser();
+        $pending = $this->pendingSession();
+
+        $this->withSession($pending)->callbackWith()
+            ->assertOk()
+            ->assertSee('<meta http-equiv="refresh" content="21">', false)
+            ->assertSee('Zapmizer is busy. This window tries again in 21 seconds.')
+            ->assertDontSee('postMessage', false);
+
+        $this->assertSame($pending[ConnectController::SESSION_KEY] + [
+            'code_seen_at' => now()->getTimestamp(),
+            'exchange_attempts' => 1,
+            'code_hash' => hash('sha256', 'c'),
+        ], session(ConnectController::SESSION_KEY));
+        $this->assertNull($this->team()->zapmizerConnection);
+        $this->assertCount(1, $this->history);
+        Log::shouldNotHaveReceived('error');
+    }
+
+    public function testR2TheRetryAfterTheWaitConnectsAndKeepsTheWebhookKey()
+    {
+        Carbon::setTestNow('2026-10-16 12:00:00');
+        $this->app->bind(ConnectController::class, KeyedConnectController::class);
+        $this->fakeHttp($this->sessionCreated(), $this->tooMany(), $this->tokenAnswer());
+        $this->actingAsUser();
+
+        $this->startConnect()->assertOk();
+        $url = route('zapmizer.connect.callback', ['code' => 'c', 'state' => session(ConnectController::SESSION_KEY)['state']]);
+
+        $this->get($url)->assertOk()->assertSee('content="21"', false);
+        $this->assertSame('fixed-key', session(ConnectController::SESSION_KEY)['webhook_key']);
+
+        $this->travel(21)->seconds();
+        $this->get($url)->assertOk()->assertSee('status: "ok"', false);
+
+        $this->assertSame('fixed-key', KeyedConnectController::$storedWith);
+        $this->assertNull(session(ConnectController::SESSION_KEY));
+        $this->assertNotNull($this->team()->zapmizerConnection);
+        $this->assertCount(3, $this->history);
+    }
+
+    /** @dataProvider unusableRetryAfters */
+    #[DataProvider('unusableRetryAfters')]
+    public function testR3WithoutAUsableRetryAfterWaitsTen(array $headers)
+    {
+        Carbon::setTestNow('2026-10-16 12:00:00');
+        $this->fakeHttp($this->tooMany($headers));
+        $this->actingAsUser();
+
+        $this->withSession($this->pendingSession())->callbackWith()
+            ->assertOk()
+            ->assertSee('<meta http-equiv="refresh" content="10">', false);
+    }
+
+    public static function unusableRetryAfters(): array
+    {
+        return [
+            'without the header' => [[]],
+            'an HTTP date' => [['Retry-After' => 'Wed, 21 Oct 2026 07:28:00 GMT']],
+        ];
+    }
+
+    public function testR4AWaitPastTheWindowIsRateLimited()
+    {
+        Carbon::setTestNow('2026-10-16 12:00:00');
+        $this->fakeHttp($this->tooMany(['Retry-After' => '300']));
+        $this->actingAsUser();
+
+        $this->withSession($this->pendingSession())->callbackWith()
+            ->assertOk()
+            ->assertSee('status: "rate_limited"', false)
+            ->assertSee('Zapmizer is busy right now. Close this window and connect again in a minute.');
+
+        $this->assertNull(session(ConnectController::SESSION_KEY));
+        $this->assertNull($this->team()->zapmizerConnection);
+    }
+
+    public function testR5TheSixthAttemptIsRateLimited()
+    {
+        Carbon::setTestNow('2026-10-16 12:00:00');
+        $this->fakeHttp(...array_fill(0, 6, $this->tooMany(['Retry-After' => '1'])));
+        $this->actingAsUser();
+        $this->withSession($this->pendingSession());
+
+        for ($attempt = 1; $attempt <= 5; $attempt++) {
+            $this->callbackWith()->assertOk()->assertSee('<meta http-equiv="refresh" content="2">', false);
+            $this->assertSame($attempt, session(ConnectController::SESSION_KEY)['exchange_attempts']);
+            $this->travel(2)->seconds();
+        }
+
+        $this->callbackWith()->assertOk()->assertSee('status: "rate_limited"', false);
+
+        $this->assertNull(session(ConnectController::SESSION_KEY));
+        $this->assertCount(6, $this->history);
+    }
+
+    public function testR6AWaitPastTheStateIsRateLimited()
+    {
+        Carbon::setTestNow('2026-10-16 12:00:00');
+        config()->set('zapmizer.connect.state_ttl_minutes', 1);
+        $this->fakeHttp($this->sessionCreated(), $this->tooMany(['Retry-After' => '60']));
+        $this->actingAsUser();
+
+        $this->startConnect()->assertOk();
+
+        $this->callbackWith(['code' => 'c', 'state' => session(ConnectController::SESSION_KEY)['state']])
+            ->assertOk()
+            ->assertSee('status: "rate_limited"', false);
+
+        $this->assertNull(session(ConnectController::SESSION_KEY));
+        $this->assertCount(2, $this->history);
+    }
+
+    public function testR7AnErrorNeverReachesTheExchange()
+    {
+        Carbon::setTestNow('2026-10-16 12:00:00');
+        $this->fakeHttp($this->tooMany());
+        $this->actingAsUser();
+
+        $this->withSession($this->pendingSession())
+            ->callbackWith(['error' => 'access_denied', 'code' => 'c', 'state' => 's'])
+            ->assertOk()
+            ->assertSee('status: "denied"', false);
+        $this->assertCount(0, $this->history);
+
+        // After a wait, the code_hash is checked before the error (D3): an
+        // `?error=` without the code is not the popup that waited.
+        $this->withSession($this->pendingSession())->callbackWith()->assertOk()->assertSee('content="21"', false);
+        $this->callbackWith(['error' => 'access_denied', 'state' => 's'])
+            ->assertOk()
+            ->assertSee('status: "invalid_state"', false);
+
+        $this->assertCount(1, $this->history);
+    }
+
+    public function testR9AnotherCodeAfterAWaitIsInvalidState()
+    {
+        Carbon::setTestNow('2026-10-16 12:00:00');
+        $this->fakeHttp($this->tooMany());
+        $this->actingAsUser();
+
+        $this->withSession($this->pendingSession())->callbackWith()->assertOk()->assertSee('content="21"', false);
+        $this->callbackWith(['code' => 'other', 'state' => 's'])
+            ->assertOk()
+            ->assertSee('status: "invalid_state"', false);
+
+        $this->assertCount(1, $this->history);
+        $this->assertNull($this->team()->zapmizerConnection);
+    }
+
+    public function testR10ARetryAnswered404IsAnExchangeFailure()
+    {
+        Carbon::setTestNow('2026-10-16 12:00:00');
+        $this->fakeHttp($this->tooMany(['Retry-After' => '1']), new Response(404, ['Content-Type' => 'application/json'], '{"message":"Record not found."}'));
+        $this->actingAsUser();
+
+        $this->withSession($this->pendingSession())->callbackWith()->assertOk()->assertSee('content="2"', false);
+        $this->travel(2)->seconds();
+        $this->callbackWith()->assertOk()->assertSee('status: "exchange_failed"', false);
+
+        $this->assertNull($this->team()->zapmizerConnection);
+        $this->assertCount(2, $this->history);
+    }
+
+    public function testARetryAfterOfZeroWaitsOneSecond()
+    {
+        Carbon::setTestNow('2026-10-16 12:00:00');
+        $this->fakeHttp($this->tooMany(['Retry-After' => '0']));
+        $this->actingAsUser();
+
+        $this->withSession($this->pendingSession())->callbackWith()
+            ->assertOk()
+            ->assertSee('<meta http-equiv="refresh" content="1">', false);
+    }
+
+    public function testAWaitingPopupLosesToANewStart()
+    {
+        Carbon::setTestNow('2026-10-16 12:00:00');
+        $this->fakeHttp($this->sessionCreated(), $this->tooMany(), $this->sessionCreated());
+        $this->actingAsUser();
+
+        $this->startConnect()->assertOk();
+        $a = route('zapmizer.connect.callback', ['code' => 'c', 'state' => session(ConnectController::SESSION_KEY)['state']]);
+        $this->get($a)->assertOk()->assertSee('content="21"', false);
+
+        $this->startConnect()->assertOk();
+        $b = session(ConnectController::SESSION_KEY);
+
+        $this->get($a)->assertOk()->assertSee('status: "invalid_state"', false);
+
+        $this->assertSame($b, session(ConnectController::SESSION_KEY));
+        $this->assertArrayNotHasKey('code_seen_at', $b);
+        $this->assertCount(3, $this->history);
     }
 
     // --- destroy --------------------------------------------------------

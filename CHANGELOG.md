@@ -227,6 +227,7 @@ Veja "Per-connection webhook URL (opt-in)" em `docs/connect.md`.
   - na mesma rota, sem `zapmizer.partner.id`/`secret` (`partnerCredentialsNotProvided()`): de 500 a 503 `zapmizer_unavailable` com `report()`;
   - na mesma rota, com um usuário autenticado sem `Connectable` no resolvedor padrão (`notConnectable()`): de 500 a 503 `zapmizer_unavailable` com `report()`;
   - o `VerificationClient` não muda.
+- Host com rótulo punycode (`xn--`) que não decodifica, como `xn--ao-bia.com`, deixa de passar: o `new URL()` do navegador o recusa. Vale para o `base_uri` e para as URLs que a Zapmizer devolve (embed, `resume_url`, reconnect, checkout); uma URL dessas vira `unexpectedResponse`, como as outras inseguras. A decodificação usa `idn_to_utf8` (UTS #46): da `ext-intl` ou, sem ela, do `symfony/polyfill-intl-idn`, agora declarado como dependência (já vem em todo app Laravel). Não é preciso instalar a `ext-intl`.
 
 # 0.3.1
 

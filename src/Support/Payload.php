@@ -95,7 +95,35 @@ final class Payload
             return filter_var(substr($host, 1, -1), FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false;
         }
 
-        return preg_match($underscoreInHost ? '/^[A-Za-z0-9._-]+\z/' : '/^[A-Za-z0-9.-]+\z/', $host) === 1;
+        return preg_match($underscoreInHost ? '/^[A-Za-z0-9._-]+\z/' : '/^[A-Za-z0-9.-]+\z/', $host) === 1
+            && self::hasValidPunycode($host);
+    }
+
+    /**
+     * Every `xn--` label must decode the way the browser's `new URL()`
+     * decodes it (UTS #46, non-transitional, with the bidi and joiner
+     * checks): `xn--ao-bia.com` passes the character check above and the
+     * browser refuses it. Only those labels go through IDNA — the rest of
+     * the host keeps the rules above (an underscore, a hyphen at the edge),
+     * which IDNA would refuse. `idn_to_utf8` comes from `ext-intl` or, without
+     * it, from `symfony/polyfill-intl-idn`.
+     */
+    private static function hasValidPunycode(string $host): bool
+    {
+        foreach (explode('.', strtolower($host)) as $label) {
+            if (!str_starts_with($label, 'xn--')) {
+                continue;
+            }
+
+            $info = [];
+            $decoded = idn_to_utf8($label, IDNA_CHECK_BIDI | IDNA_CHECK_CONTEXTJ | IDNA_NONTRANSITIONAL_TO_UNICODE, INTL_IDNA_VARIANT_UTS46, $info);
+
+            if ($decoded === false || ($info['errors'] ?? 1) !== 0) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static function hasPort(string $url, int $port): bool

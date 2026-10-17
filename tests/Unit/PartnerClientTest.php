@@ -27,6 +27,7 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
 use NotificationChannels\Zapmizer\Test\Concerns\AssertsContract;
 use NotificationChannels\Zapmizer\Test\Concerns\FakesZapmizerHttp;
+use NotificationChannels\Zapmizer\Test\Concerns\InvalidBaseUris;
 use NotificationChannels\Zapmizer\Test\Fixtures\RecordingTransport;
 use NotificationChannels\Zapmizer\Test\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -35,6 +36,7 @@ class PartnerClientTest extends TestCase
 {
     use AssertsContract;
     use FakesZapmizerHttp;
+    use InvalidBaseUris;
 
     /** @var array<int, array{request: Request}> */
     protected array $history = [];
@@ -926,5 +928,35 @@ class PartnerClientTest extends TestCase
             $this->assertSame(409, $exception->status());
             $this->assertSame(ErrorCode::ALREADY_SUBSCRIBED, $exception->error());
         }
+    }
+
+    /** @dataProvider invalidBaseUris */
+    #[DataProvider('invalidBaseUris')]
+    public function testX18bAnInvalidBaseSendsNothing(string $base)
+    {
+        Http::fake();
+
+        try {
+            (new PartnerClient('partner-id', 'partner-secret', new LaravelHttpTransport(), $base))->createSession('https://app.test/cb', 'state-1');
+            $this->fail('Expected the invalid base URI.');
+        } catch (ZapmizerConnectException $e) {
+            $this->assertIsTheInvalidBaseUri($e);
+        }
+
+        Http::assertNothingSent();
+    }
+
+    public function testMissingCredentialsComeBeforeTheBaseCheck()
+    {
+        Http::fake();
+
+        try {
+            (new PartnerClient(null, null, new LaravelHttpTransport(), 'localhost/api/'))->createSession('https://app.test/cb', 'state-1');
+            $this->fail('Expected the missing credentials.');
+        } catch (ZapmizerConnectException $e) {
+            $this->assertSame(ZapmizerConnectException::partnerCredentialsNotProvided()->getMessage(), $e->getMessage());
+        }
+
+        Http::assertNothingSent();
     }
 }

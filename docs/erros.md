@@ -17,6 +17,8 @@ ZapmizerException
 └─ ZapmizerVerificationException         verify-number
 ```
 
+`ZapmizerConnectException::invalidBaseUri()` é a `ZapmizerConnectException` lançada antes de qualquer envio quando a URL da API não é http(s) absoluta, com host e sem `user:pass`: nada sai, e a mensagem não traz a URL.
+
 A `ZapmizerApiException` carrega o que a Zapmizer respondeu:
 
 ```php
@@ -54,7 +56,7 @@ try {
 
 Falha que não é resposta da Zapmizer mantém a própria classe e **não é uma `ZapmizerException`**, então o `catch (ZapmizerException)` não a pega:
 
-- `base_uri` malformada;
+- `base_uri` malformada no `VerificationClient`;
 - campo multipart inválido;
 - `Http::preventStrayRequests()` num teste;
 - exceção lançada pelo seu transporte próprio;

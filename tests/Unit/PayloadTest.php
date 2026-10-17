@@ -228,6 +228,19 @@ class PayloadTest extends TestCase
         ];
     }
 
+    public function testX18eAnUnderscoreInTheHostIsOnlyAcceptedWhenAsked()
+    {
+        $this->assertNull(Payload::url('https://app_x.parlichat.com/e'));
+        $this->assertSame('http://zapbot_app/api/x', Payload::url('http://zapbot_app/api/x', underscoreInHost: true));
+    }
+
+    /** @dataProvider unsafeUrls */
+    #[DataProvider('unsafeUrls')]
+    public function testAnUnsafeUrlIsNullEvenWithTheUnderscoreAllowed(mixed $value)
+    {
+        $this->assertNull(Payload::url($value, underscoreInHost: true));
+    }
+
     /** @dataProvider safeUrls */
     #[DataProvider('safeUrls')]
     public function testE4ASafeUrlIsKeptAndItsOriginIsTheOneTheBrowserShows(string $url, string $origin)

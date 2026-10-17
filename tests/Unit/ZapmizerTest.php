@@ -4,7 +4,6 @@ namespace NotificationChannels\Zapmizer\Test\Unit;
 
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
-use GuzzleHttp\Psr7\Exception\MalformedUriException;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Contracts\Debug\ExceptionHandler;
@@ -20,6 +19,7 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
 use NotificationChannels\Zapmizer\Test\Concerns\AssertsContract;
 use NotificationChannels\Zapmizer\Test\Concerns\FakesZapmizerHttp;
+use NotificationChannels\Zapmizer\Test\Concerns\InvalidBaseUris;
 use NotificationChannels\Zapmizer\Test\Fixtures\RecordingTransport;
 use NotificationChannels\Zapmizer\Test\TestCase;
 use NotificationChannels\Zapmizer\Zapmizer;
@@ -30,6 +30,7 @@ class ZapmizerTest extends TestCase
 {
     use AssertsContract;
     use FakesZapmizerHttp;
+    use InvalidBaseUris;
 
     /** @var array<int, array{request: Request, options: array}> */
     protected array $history = [];
@@ -319,14 +320,19 @@ class ZapmizerTest extends TestCase
         $this->assertSame(600, ZapmizerApi::TRANSFER_TIMEOUT);
     }
 
-    public function testM46AMalformedBaseUriEscapesUnwrapped()
+    public function testM46AMalformedBaseUriIsTheInvalidBaseUri()
     {
         $this->fakeZapmizer(new MockHandler([new Response(200)]));
         $client = new Zapmizer('bot-token', new LaravelHttpTransport(), 'http://:80/api');
 
-        $this->expectException(MalformedUriException::class);
+        try {
+            $client->sendMessage($this->params());
+            $this->fail('Expected the invalid base URI.');
+        } catch (ZapmizerConnectException $e) {
+            $this->assertIsTheInvalidBaseUri($e);
+        }
 
-        $client->sendMessage($this->params());
+        $this->assertCount(0, $this->history);
     }
 
     /** @dataProvider withAndWithoutJson */
@@ -352,5 +358,35 @@ class ZapmizerTest extends TestCase
             'Accept: application/json' => [['Accept' => 'application/json']],
             'browser Accept' => [['Accept' => 'text/html']],
         ];
+    }
+
+    /** @dataProvider invalidBaseUris */
+    #[DataProvider('invalidBaseUris')]
+    public function testX18bAnInvalidBaseSendsNothing(string $base)
+    {
+        Http::fake();
+
+        try {
+            (new Zapmizer('bot-token', new LaravelHttpTransport(), $base))->sendMessage($this->params());
+            $this->fail('Expected the invalid base URI.');
+        } catch (ZapmizerConnectException $e) {
+            $this->assertIsTheInvalidBaseUri($e);
+        }
+
+        Http::assertNothingSent();
+    }
+
+    public function testAMissingTokenComesBeforeTheBaseCheck()
+    {
+        Http::fake();
+
+        try {
+            (new Zapmizer(null, new LaravelHttpTransport(), 'localhost/api/'))->sendMessage($this->params());
+            $this->fail('Expected ZapmizerUnauthorizedException.');
+        } catch (ZapmizerUnauthorizedException $e) {
+            $this->assertSame('You must provide your zapmizer bot token to make any API requests.', $e->getMessage());
+        }
+
+        Http::assertNothingSent();
     }
 }

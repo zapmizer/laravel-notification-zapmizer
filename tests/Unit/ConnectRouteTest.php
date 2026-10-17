@@ -13,6 +13,7 @@ use NotificationChannels\Zapmizer\Http\Controllers\ConnectController;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
 use NotificationChannels\Zapmizer\Exceptions\NoConnectableException;
 use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Test\Concerns\AssertsContract;
 use NotificationChannels\Zapmizer\Test\Fixtures\CreatesConnectionTables;
@@ -24,6 +25,7 @@ use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesPlainModel;
 use NotificationChannels\Zapmizer\Test\Fixtures\Team;
 use NotificationChannels\Zapmizer\Test\Fixtures\User;
 use NotificationChannels\Zapmizer\Test\Concerns\FakesZapmizerHttp;
+use NotificationChannels\Zapmizer\Test\Concerns\InvalidBaseUris;
 use NotificationChannels\Zapmizer\Test\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 
@@ -32,6 +34,7 @@ class ConnectRouteTest extends TestCase
     use AssertsContract;
     use CreatesConnectionTables;
     use FakesZapmizerHttp;
+    use InvalidBaseUris;
 
     /** @var array<int, array{request: \GuzzleHttp\Psr7\Request}> */
     protected array $history = [];
@@ -315,6 +318,103 @@ class ConnectRouteTest extends TestCase
         $this->app->make(ExceptionHandler::class)->reportable(function (\Throwable $exception) {
             $this->reported[] = $exception;
         });
+    }
+
+    /** @dataProvider invalidBaseUris */
+    #[DataProvider('invalidBaseUris')]
+    public function testX18dStartWithAnInvalidBaseAnswersUnavailableAndSendsNothing(string $base)
+    {
+        Log::spy();
+        config()->set('zapmizer.base_uri', $base);
+        $this->fakeHttp();
+        $this->actingAsUser();
+        $this->recordReports();
+
+        $this->postJson(route('zapmizer.connect.start'))
+            ->assertStatus(503)
+            ->assertExactJson(['code' => 'zapmizer_unavailable']);
+
+        $this->assertCount(1, $this->reported);
+        $this->assertIsTheInvalidBaseUri($this->reported[0]);
+        $this->assertCount(0, $this->history);
+    }
+
+    /** @dataProvider unexpectedStartAnswers */
+    #[DataProvider('unexpectedStartAnswers')]
+    public function testX18dStartWithAnUnexpectedAnswerAnswersUnavailableAndReports(Response $response)
+    {
+        Log::spy();
+        $this->fakeHttp($response);
+        $this->actingAsUser();
+        $this->recordReports();
+
+        $this->postJson(route('zapmizer.connect.start'))
+            ->assertStatus(503)
+            ->assertExactJson(['code' => 'zapmizer_unavailable']);
+
+        $this->assertCount(1, $this->reported);
+        $this->assertInstanceOf(ZapmizerConnectException::class, $this->reported[0]);
+        $this->assertNotInstanceOf(ZapmizerApiException::class, $this->reported[0]);
+    }
+
+    public static function unexpectedStartAnswers(): array
+    {
+        return [
+            'redirect' => [new Response(302, ['Location' => 'http://zap.test/login'])],
+            'html' => [new Response(200, ['Content-Type' => 'text/html'], '<html></html>')],
+        ];
+    }
+
+    public function testX18gStartWithoutPartnerCredentialsAnswersUnavailableAndReports()
+    {
+        Log::spy();
+        config()->set('zapmizer.partner.secret', null);
+        $this->fakeHttp();
+        $this->actingAsUser();
+        $this->recordReports();
+
+        $this->postJson(route('zapmizer.connect.start'))
+            ->assertStatus(503)
+            ->assertExactJson(['code' => 'zapmizer_unavailable']);
+
+        $this->assertCount(1, $this->reported);
+        $this->assertSame(ZapmizerConnectException::partnerCredentialsNotProvided()->getMessage(), $this->reported[0]->getMessage());
+        $this->assertCount(0, $this->history);
+    }
+
+    public function testX18iStartWithAUserThatIsNotConnectableAnswersUnavailableAndReports()
+    {
+        Log::spy();
+        config()->set('zapmizer.connect.resolver', ResolvesAuthenticatedUser::class);
+        $this->actingAs(PlainUser::create(['name' => 'Plain']));
+        $this->fakeHttp();
+        $this->recordReports();
+
+        $this->postJson(route('zapmizer.connect.start'))
+            ->assertStatus(503)
+            ->assertExactJson(['code' => 'zapmizer_unavailable']);
+
+        $this->assertCount(1, $this->reported);
+        $this->assertStringContainsString(PlainUser::class, $this->reported[0]->getMessage());
+        $this->assertCount(0, $this->history);
+    }
+
+    public function testX18hTheCallbackWithAnInvalidBaseIsAnExchangeFailureWithoutTheUrl()
+    {
+        Log::spy();
+        config()->set('zapmizer.base_uri', 'https://u:p@h/api');
+        $this->fakeHttp();
+        $this->actingAsUser();
+        $this->recordReports();
+
+        $this->withSession($this->pendingSession())
+            ->get(route('zapmizer.connect.callback', ['code' => 'c', 'state' => 's']))
+            ->assertSee('status: "exchange_failed"', false);
+
+        Log::shouldHaveReceived('warning')
+            ->with('zapmizer: connect callback failed.', ['exception' => ZapmizerConnectException::invalidBaseUri()->getMessage()])
+            ->once();
+        $this->assertCount(0, $this->history);
     }
 
     /** @dataProvider partnerRefusalsFromTheContract */

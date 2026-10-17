@@ -95,11 +95,36 @@ Quebras:
 - `InstanceClient::reconnect(int $botInstanceId, string $redirectUri, ?string $state = null, ?int $expiresIn = null): ReconnectResult` religa o número (`POST /bot-instances/{id}/reconnect`). `Connect\ReconnectResult` tem `status` (`ReconnectResult::ONLINE`, `STARTING` ou `NEEDS_CLIENT`), `url`, `expiresAt` (`?CarbonImmutable`), `isOnline()`, `isStarting()` e `needsClient()`: 200 → online, 202 → starting, 409 `needs_reconnect` → `needsClient()` com a `url` para onde mandar o cliente. 404 → `InstanceGoneException` (número inexistente ou fora desta conexão); 402, 403, 422 e outro 409 → `ZapmizerApiException` com `status()` e `error()`; 429 → `ZapmizerRateLimitedException`. `state` e `expires_in` seguem as regras do `createSession()`.
 - `InstanceClient::revokeToken(): void` revoga o token da conexão (`DELETE /connect/token`). 204 e 401 voltam normalmente (revogado agora; o token já não valia); 404 → `ZapmizerApiException` com `status()` 404 (o token não veio de um connect e continua valendo).
 - `InstanceClient::conversationSession(string $phone, string $parentOrigin, array $appearance = [], ?string $userId = null, ?string $userName = null)` e `inboxSession(string $parentOrigin, array $appearance = [], ?string $userId = null, ?string $userName = null)` criam a sessão do iframe (`POST /embed/sessions`) e devolvem `Connect\EmbedSession`, com `url`, `origin` (a origem do iframe como o navegador mostra), `expiresAt`, `resumeUrl` e `resumeUntil`; `resumeUntil` é `null` sempre que `resumeUrl` for `null`. Uma `url` que não seja http(s) segura lança `unexpectedResponse`; um `resume_url` inseguro ou de outra origem vira `null` e loga `zapmizer: unexpected resume url.` (warning) só com as origens.
-- Veja "9. Reconnect, revoke and embed" em `docs/connect.md`, com a ordem dos `catch`.
+- Veja "9. Reconnect and revoke" em `docs/connect.md`, com a ordem dos `catch`, e o embed em `docs/embed.md`.
 
 Quebras: nenhuma de comportamento. Só métodos e classes novos, e o `PartnerClient` passa a usar o trait `Connect\Concerns\BuildsZapmizerRequests`, com os mesmos métodos `protected`.
 
 - Subclasses: subclasses de `InstanceClient` ganham `reconnect()`, `revokeToken()`, `conversationSession()`, `inboxSession()`, `guardState()`, `withoutNulls()` e `clampExpiresIn()`; subclasses de `PartnerClient` ganham `clampExpiresIn()`. Esses nomes podem colidir com métodos já existentes nelas.
+
+**Embed:**
+
+- Novo `Http\Responses\EmbedSessionResponse` (`Responsable`): `open(fn () => $client->inboxSession(...), onRefusal: fn (ZapmizerApiException $e) => ...)` devolve 200 `{url, origin, resume_url, resume_until}` ou `{code}`:
+  - 401/419 → 422 `reauth_required`;
+  - 429 → 429 `rate_limited` + `Retry-After`;
+  - outro 4xx → o mesmo status com `code` = `error()`;
+  - 5xx, rede ou resposta inesperada → 503 `unavailable`.
+
+  `code('customer_without_phone')` responde o código do app. A política se troca por subclasse (`refusalStatus()`, `refusalCode()`, `sessionPayload()`).
+- `conversationSession()` e `inboxSession()` ganham `?string $userEmail = null` como último parâmetro. Um e-mail que não passa no `FILTER_VALIDATE_EMAIL` (inclusive acima de 254 bytes) sai do corpo, sem erro.
+- **De/para:** a resposta montada à mão (o exemplo antigo de `docs/connect.md` §9 ou o de `docs/backend.md` do `@zapmizer/embed`) → `EmbedSessionResponse::open(...)`. Diferenças: o 429 sai com `code: rate_limited`, e não com o `error` da Parli; uma resposta inesperada vira 503 `unavailable` e é reportada.
+
+**Base da API:**
+
+- `ZapmizerApi::send()`, e com ele `PartnerClient`, `InstanceClient` e `Zapmizer`, recusa antes de enviar uma URL que não seja http(s) absoluta com host e sem `user:pass` (inclusive host não ASCII ou com espaço). A exceção é `ZapmizerConnectException::invalidBaseUri()`.
+- **De/para:**
+  - uma `base_uri` como `app.zapmizer.com/api/`, `''` ou `/api/`: antes, o resultado dependia da versão do Guzzle (`ZapmizerUnavailableException` no 7.15+; no 7.10, a chamada ia para `http://localhost/...` ou para um host resolvido por DNS, com o token); agora é `invalidBaseUri()`, e nada sai;
+  - `localhost:8001/api/` (ou qualquer `host:porta` sem esquema): antes, a chamada ia para `http://localhost:8001/...`, com o token, no 7.10 e no 7.15, porque o Guzzle põe `http` quando a URI tem host e não tem esquema (`Client.php:305-306`); agora é `invalidBaseUri()`, e nada sai. Para usar essa base, ponha o esquema: `http://localhost:8001/api/`;
+  - `http://:80/api`: antes, `MalformedUriException` sem embrulho; agora `invalidBaseUri()`;
+  - na rota `zapmizer.connect.start`, a base inválida continua 503 `zapmizer_unavailable` (agora em qualquer Guzzle, com `report()`), e um `unexpectedResponse` (redirect, não-JSON) passa de 500 a 503 `zapmizer_unavailable` com `report()`;
+  - na mesma rota, sem `zapmizer.partner.id`/`secret` (`partnerCredentialsNotProvided()`): de 500 a 503 `zapmizer_unavailable` com `report()`;
+  - na mesma rota, com um usuário autenticado sem `Connectable` no resolvedor padrão (`notConnectable()`): de 500 a 503 `zapmizer_unavailable` com `report()`;
+  - o `VerificationClient` não muda.
+- **Subclasses:** uma subclasse de `InstanceClient` que sobrescreve `conversationSession()` ou `inboxSession()` precisa aceitar o parâmetro novo, senão dá erro fatal de assinatura.
 
 **Upgrade da 0.3:**
 

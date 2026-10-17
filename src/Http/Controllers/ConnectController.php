@@ -12,6 +12,7 @@ use Illuminate\Routing\Controller;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 use NotificationChannels\Zapmizer\Connect\ConnectToken;
+use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Connect\PartnerClient;
 use NotificationChannels\Zapmizer\Contracts\Connectable;
 use NotificationChannels\Zapmizer\Contracts\ResolvesConnectable;
@@ -183,6 +184,13 @@ class ConnectController extends Controller
                 return $this->result('exchange_failed');
             }
 
+            if (!$token->hasNumber()) {
+                Log::warning('zapmizer: the token came without a number.', ['team_id' => $token->teamId]);
+                $this->revokeOrphanToken($token);
+
+                return $this->result('exchange_failed');
+            }
+
             return $this->storeToken($connectable, $token);
         } catch (ZapmizerRateLimitedException $exception) {
             return $this->waitForExchange($request, $pending, $exception);
@@ -249,6 +257,8 @@ class ConnectController extends Controller
         // One connectable per Zapmizer team: two of them would register two
         // webhooks and every message would fire on both tenants.
         if ($this->teamConnectedElsewhere($connection, $token->teamId)) {
+            $this->revokeOrphanToken($token);
+
             return $this->result('team_already_connected');
         }
 
@@ -297,6 +307,8 @@ class ConnectController extends Controller
 
             // Lost the race with another connectable authorizing the same
             // team between the check above and this insert.
+            $this->revokeOrphanToken($token);
+
             return $this->result('team_already_connected');
         }
 
@@ -352,6 +364,48 @@ class ConnectController extends Controller
 
             return false;
         }
+    }
+
+    /**
+     * Revoke a token the exchange handed out but nothing stored (another
+     * connectable holds the team, or no number came with it): kept, it
+     * would stay valid with no one holding it. One attempt; a failure is a
+     * warning and never changes the popup's status.
+     */
+    protected function revokeOrphanToken(ConnectToken $token): void
+    {
+        $exception = $this->tryRevoke($token->token);
+
+        if ($exception !== null) {
+            Log::warning('zapmizer: the orphan token was not revoked.', ['team_id' => $token->teamId] + $this->failureContext($exception));
+        }
+    }
+
+    /**
+     * One `DELETE /connect/token` with `$token`; the failure, if any.
+     */
+    private function tryRevoke(string $token): ?Throwable
+    {
+        try {
+            app(InstanceClient::class, [
+                'api_token' => $token,
+                'api_version' => config('zapmizer.api_version'),
+            ])->revokeToken();
+
+            return null;
+        } catch (Throwable $exception) {
+            return $exception;
+        }
+    }
+
+    /**
+     * @return array{status?: int, exception: string}
+     */
+    private function failureContext(Throwable $exception): array
+    {
+        $context = $exception instanceof ZapmizerApiException ? ['status' => $exception->status()] : [];
+
+        return $context + ['exception' => $exception->getMessage()];
     }
 
     /**

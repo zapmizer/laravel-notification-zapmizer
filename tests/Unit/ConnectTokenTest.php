@@ -128,6 +128,31 @@ class ConnectTokenTest extends TestCase
         ];
     }
 
+    /** @dataProvider invalidInstanceOrWebhookIds */
+    #[DataProvider('invalidInstanceOrWebhookIds')]
+    public function testX6AnInvalidInstanceOrWebhookId(string $field, mixed $value)
+    {
+        $this->expectException(ZapmizerConnectException::class);
+        $this->expectExceptionMessage(ZapmizerConnectException::unexpectedResponse("invalid {$field}")->getMessage());
+
+        ConnectToken::fromArray($this->payload([$field => $value]));
+    }
+
+    public static function invalidInstanceOrWebhookIds(): array
+    {
+        return [
+            'bot_instance_id "abc"' => ['bot_instance_id', 'abc'],
+            'bot_instance_id 0' => ['bot_instance_id', 0],
+            'bot_instance_id -1' => ['bot_instance_id', -1],
+            'webhook_id "x"' => ['webhook_id', 'x'],
+        ];
+    }
+
+    public function testX6AnIdInDigitsIsRead()
+    {
+        $this->assertSame(12, ConnectToken::fromArray($this->payload(['bot_instance_id' => '12']))->botInstanceId);
+    }
+
     public function testAMissingTokenIsStillAnUnexpectedResponse()
     {
         $this->expectException(ZapmizerConnectException::class);

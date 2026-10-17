@@ -26,13 +26,13 @@ class MessageTrackingTest extends TestCase
 {
     use AssertsContract;
 
-    public const QR = '{"data":{"id":"9d3c1e2a-5b7f-4c1e-9a8b-1f2e3d4c5b6a","wapp_message_id":"true_551199999999@c.us_3EB0A1B2C3","wid_from":"5581999990000@c.us","wid_to":"551199999999@c.us","message_status":2,"message_status_name":"DELIVERED","message_status_label":"Entregue","error":null,"error_message":null,"timestamp":1760700000,"links":{"self":"https://app.zapmizer.com/api/sent-messages/9d3c1e2a-5b7f-4c1e-9a8b-1f2e3d4c5b6a"}}}';
+    public const QR = '{"data":{"id":"9d3c1e2a-5b7f-4c1e-9a8b-1f2e3d4c5b6a","wapp_message_id":"true_551199999999@c.us_3EB0A1B2C3","wid_from":"5581999990000@c.us","wid_to":"551199999999@c.us","message_status":2,"message_status_name":"ACK_DEVICE","message_status_label":"Mensagem recebida no dispositivo","error":null,"error_message":null,"timestamp":1760700000,"links":{"self":"https://app.zapmizer.com/api/sent-messages/9d3c1e2a-5b7f-4c1e-9a8b-1f2e3d4c5b6a"}}}';
 
-    public const QR_FAILED = '{"data":{"id":"9d3c1e2a-5b7f-4c1e-9a8b-1f2e3d4c5b6a","wapp_message_id":null,"wid_from":"5581999990000@c.us","wid_to":"551199999999@c.us","message_status":-4,"message_status_name":"FAILED","message_status_label":"Falhou","error":"send_failed","error_message":"O número está offline.","timestamp":null,"links":{"self":"https://app.zapmizer.com/api/sent-messages/9d3c1e2a-5b7f-4c1e-9a8b-1f2e3d4c5b6a"}}}';
+    public const QR_FAILED = '{"data":{"id":"9d3c1e2a-5b7f-4c1e-9a8b-1f2e3d4c5b6a","wapp_message_id":null,"wid_from":"5581999990000@c.us","wid_to":"551199999999@c.us","message_status":-4,"message_status_name":"FAILED","message_status_label":"Erro ao enviar mensagem","error":"send_failed","error_message":"O número está offline.","timestamp":null,"links":{"self":"https://app.zapmizer.com/api/sent-messages/9d3c1e2a-5b7f-4c1e-9a8b-1f2e3d4c5b6a"}}}';
 
-    public const META = '{"data":{"id":42,"bot_instance_id":7,"wamid":"wamid.HBgMNTUxMTk5OTk5OTk5ORUCABEYEjA","wid_from":"5581999990000@c.us","wid_to":"5511999999999@c.us","message_status":3,"message_status_name":"read","payload":[],"media_url":"","error_reason":null,"created_at":"2026-10-17T12:00:00.000000Z","links":{"self":"https://app.zapmizer.com/api/meta-messages/42"}}}';
+    public const META = '{"data":{"id":42,"bot_instance_id":7,"wamid":"wamid.HBgMNTUxMTk5OTk5OTk5ORUCABEYEjA","wid_from":"5581999990000@c.us","wid_to":"5511999999999@c.us","message_status":3,"message_status_name":"ACK_READ","payload":[],"media_url":"","error_reason":null,"created_at":"2026-10-17T12:00:00.000000Z","links":{"self":"https://app.zapmizer.com/api/meta-messages/42"}}}';
 
-    public const META_FAILED = '{"data":{"id":43,"bot_instance_id":7,"wamid":"wamid.X","wid_from":"5581999990000@c.us","wid_to":"5511999999999@c.us","message_status":-1,"message_status_name":"failed","payload":[],"media_url":"","error_reason":"(#131047) Re-engagement message","created_at":null,"links":{"self":"https://app.zapmizer.com/api/meta-messages/43"}}}';
+    public const META_FAILED = '{"data":{"id":43,"bot_instance_id":7,"wamid":"wamid.X","wid_from":"5581999990000@c.us","wid_to":"5511999999999@c.us","message_status":-1,"message_status_name":"ACK_ERROR","payload":[],"media_url":"","error_reason":"(#131047) Re-engagement message","created_at":null,"links":{"self":"https://app.zapmizer.com/api/meta-messages/43"}}}';
 
     protected function client(RecordingTransport $transport, string $base = 'http://localhost/api'): Zapmizer
     {
@@ -62,8 +62,8 @@ class MessageTrackingTest extends TestCase
         $this->assertSame('5581999990000@c.us', $status->widFrom);
         $this->assertSame('551199999999@c.us', $status->widTo);
         $this->assertSame(MessageStatus::DELIVERED, $status->status);
-        $this->assertSame('DELIVERED', $status->statusName);
-        $this->assertSame('Entregue', $status->statusLabel);
+        $this->assertSame('ACK_DEVICE', $status->statusName);
+        $this->assertSame('Mensagem recebida no dispositivo', $status->statusLabel);
         $this->assertNull($status->error);
         $this->assertNull($status->errorMessage);
         $this->assertSame(1760700000, $status->timestamp);
@@ -109,7 +109,7 @@ class MessageTrackingTest extends TestCase
         $this->assertSame('5581999990000@c.us', $status->widFrom);
         $this->assertSame('5511999999999@c.us', $status->widTo);
         $this->assertSame(MessageStatus::READ, $status->status);
-        $this->assertSame('read', $status->statusName);
+        $this->assertSame('ACK_READ', $status->statusName);
         $this->assertNull($status->mediaUrl);
         $this->assertNull($status->errorReason);
         $this->assertInstanceOf(CarbonImmutable::class, $status->createdAt);

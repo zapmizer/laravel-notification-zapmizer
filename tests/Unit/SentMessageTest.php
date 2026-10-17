@@ -17,7 +17,7 @@ class SentMessageTest extends TestCase
 
     public const OFFICIAL_QUEUED = '{"id":null,"type":"chat","wid_from":"5581999990000@c.us","wid_to":"5511999999999@c.us","message_status":-2,"message_status_name":"Enviando","metadata":{"text":"hi"},"attachment_url":null,"links":{"self":null}}';
 
-    public const LEGACY = '{"data":{"id":7,"type":"chat","wid_from":"5581999990000@c.us","wid_to":"551199999999@c.us","author_name":"API","wapp_message_id":"","message_status":-2,"message_status_name":"Enviando","message_status_label":"Enviando","error":null,"error_message":null,"metadata":[],"attachment_url":"","links":{"self":"https://app.zapmizer.com/api/messages/7"}}}';
+    public const LEGACY = '{"data":{"id":7,"type":"chat","wid_from":"5581999990000@c.us","wid_to":"551199999999@c.us","author_name":"API","wapp_message_id":"","message_status":-2,"message_status_name":"ENQUEUED","message_status_label":"Enviando","error":null,"error_message":null,"metadata":[],"attachment_url":"","links":{"self":"https://app.zapmizer.com/api/messages/7"}}}';
 
     protected function sent(string $body): SentMessage
     {

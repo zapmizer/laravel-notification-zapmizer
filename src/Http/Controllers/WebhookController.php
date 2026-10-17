@@ -5,7 +5,10 @@ namespace NotificationChannels\Zapmizer\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use Illuminate\Support\Str;
+use NotificationChannels\Zapmizer\Events\ConnectionStateChanged;
 use NotificationChannels\Zapmizer\Events\MessageReceived;
+use NotificationChannels\Zapmizer\Events\MessageStatusUpdated;
+use NotificationChannels\Zapmizer\Events\WebhookEvent;
 use NotificationChannels\Zapmizer\Events\WebhookHandled;
 use NotificationChannels\Zapmizer\Events\WebhookReceived;
 use NotificationChannels\Zapmizer\Events\WhatsappVerified as WhatsappVerifiedEvent;
@@ -61,6 +64,8 @@ class WebhookController extends Controller
 
         WebhookReceived::dispatch($payload, $this->connection());
 
+        $this->dispatchCatalogEvent($payload);
+
         $method = 'handle' . Str::studly(str_replace('.', '_', (string) ($payload['name'] ?? '')));
 
         if (method_exists($this, $method)) {
@@ -72,6 +77,43 @@ class WebhookController extends Controller
         }
 
         return $this->missingMethod($payload);
+    }
+
+    /**
+     * The typed events of the webhook catalog, by event name. Each class
+     * extends WebhookEvent and builds itself from the delivery. Override to
+     * add, swap or drop one — returning [] turns them all off.
+     *
+     * @return array<string, class-string<WebhookEvent>>
+     */
+    protected function catalogEvents(): array
+    {
+        return [
+            'message_status' => MessageStatusUpdated::class,
+            'connection' => ConnectionStateChanged::class,
+        ];
+    }
+
+    /**
+     * Fire the typed event of the delivery, if the catalog has one and its
+     * `data` can be read. Independent of the `handle{StudlyName}` methods: an
+     * application handler of the same event keeps running, and the event
+     * still goes out.
+     */
+    protected function dispatchCatalogEvent(array $payload): void
+    {
+        $name = $payload['name'] ?? null;
+        $class = is_string($name) ? $this->catalogEvents()[$name] ?? null : null;
+
+        if ($class === null) {
+            return;
+        }
+
+        $event = $class::fromWebhook($payload, $this->connection());
+
+        if ($event !== null) {
+            event($event);
+        }
     }
 
     /**

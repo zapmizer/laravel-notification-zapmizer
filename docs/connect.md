@@ -24,7 +24,7 @@ All connections share `POST /zapmizer/webhook` by default. As an opt-in alternat
 
 You need **partner credentials** (id + secret), issued by Zapmizer for your application. They authenticate the hosted connect flow; each connected team's own token is obtained through it and stored by the package.
 
-**This flow needs a Zapmizer with the hosted pairing** — `POST /api/connect/sessions` accepting `webhook_url` and the token exchange answering `phone_number`/`bot_instance_id`/`webhook_id`/`webhook_secret`. That is Zapmizer **1.149.0 or later** (the release after `connect-pareamento`). The token exchange must also answer `user_id` and `team_id`, which the contract requires: without them the callback reports `exchange_failed` and stores nothing.
+**This flow needs a Zapmizer with the hosted pairing** — `POST /api/connect/sessions` accepting `webhook_url` and the token exchange answering `phone_number`/`bot_instance_id`/`webhook_id`/`webhook_secret`. This version of the package needs Zapmizer **1.148.10 or later**: the token exchange with `user_id` and `team_id`, the reconnect, the token revocation and the partner `users` endpoints arrived in 1.148.8, and the inbox `appearance` and the embed's `user.email` in 1.148.10. Without `user_id` and `team_id`, which the contract requires, the callback reports `exchange_failed` and stores nothing.
 
 Zapmizer validates `webhook_url` the way it validates `redirect_uri`: **https in production**, host on your partner allowlist, public address (anti-SSRF). The package sends `route('zapmizer.webhook')` — make sure `APP_URL` resolves to the public https host, and that this host is on your partner allowlist over there. With the [per-connection webhook URL](#per-connection-webhook-url-opt-in) the host stays the same; only the path changes (`/zapmizer/webhook/{key}`).
 
@@ -305,7 +305,7 @@ The package applies `VerifyWebhookSignature` to `POST /zapmizer/webhook` itself.
 
 It accepts a 5-minute clock drift (`zapmizer.webhook.tolerance`), refuses with **401 and a log line** (reason, wid, timestamp, ip — never the signature), and refuses an inactive connection with 403. A credential that no longer decrypts (`APP_KEY` changed) only takes its own connection out of the matching.
 
-**Unsigned deliveries** are accepted for **`verify_number.*` only** — Zapmizer sends those outside the bot, without a signature, by construction. A `message` (or any other event) without the signature headers is refused with 401: it was not sent by Zapmizer. There is no flag to turn this off. If you rely on `verify_number.*`, note that anyone can POST one — harden `zapmizer.routes.webhook_middleware` with an IP allowlist or a throttle (see [docs/verify-number.md](verify-number.md#6-the-webhook)).
+**Unsigned deliveries** are accepted for **`verify_number.*` only** — Zapmizer sends those outside the bot, without a signature, by construction. A `message` (or any other event) without the signature headers is refused with 401: it was not sent by Zapmizer. There is no flag to turn this off. If you rely on `verify_number.*`, note that anyone can POST one — harden `zapmizer.routes.webhook_middleware` with an IP allowlist or a throttle (see [verify-number.md](verify-number.md#6-the-webhook)).
 
 ### The `MessageReceived` event
 
@@ -433,7 +433,7 @@ $download = $connection->awaitMedia($m, waitsSeconds: [3, 3, 3]); // your own sc
 
 It returns the last answer: `attached`, `unavailable` as soon as Zapmizer says so, or `downloading` when the waits ran out — check `isDownloading()` and decide whether to give up. A **429** on the way is treated like a `downloading`, not thrown: it waits Zapmizer's `Retry-After` or the next entry of the schedule, whichever is longer, and asks again (still rate-limited when the schedule runs out → `downloading`). A **422** propagates as `MediaRejectedException`. The `$sleep` closure argument replaces the real sleep in tests.
 
-Requires **Zapmizer 1.150.0 or later** (media endpoint). <!-- TODO confirm the release that ships `api-media-mensagem` -->
+The media endpoint is in every Zapmizer this version supports (1.148.10 or later, section 1).
 
 ### Per-connection webhook URL (opt-in)
 
@@ -490,7 +490,7 @@ DB::statement('CREATE UNIQUE INDEX zapmizer_connections_webhook_key_unique ON za
 2. Zapmizer creates a webhook for it, with a secret; the row gets the key, the new webhook id and its secret;
 3. the callback revokes the previous token. Zapmizer deletes the old webhook of the shared route only when no other live session uses it **and** the connect created it.
 
-Otherwise the old webhook keeps delivering to the shared route, signed with a secret the row no longer holds: each delivery is a 401 after a scan. Grants left from earlier connects (or from before `revoke_previous_token`) are revoked on Parli: the customer removes the access in their account, or the webhook is deleted on Zapmizer's "Webhooks" screen. There is no bulk command: a connect needs the customer in the popup.
+Otherwise the old webhook keeps delivering to the shared route, signed with a secret the row no longer holds: each delivery is a 401 after a scan. Grants left from earlier connects (or from before `revoke_previous_token`) are revoked on Zapmizer: the customer removes the access in their account, or the webhook is deleted on Zapmizer's "Webhooks" screen. There is no bulk command: a connect needs the customer in the popup.
 
 **Do not turn it off after connections moved.** The route goes away, their deliveries get 404, and Zapmizer does not retry a 4xx: those events are lost. With `route:cache`, turning the option on or off needs the cache built again (`php artisan route:cache`).
 
@@ -740,6 +740,7 @@ On the model, `zapmizerExternalId()` (section 3). For behaviour after a connect 
 
 The partner client changed, and so did the connect flow ("Connect flow" below).
 
+- Needs Zapmizer **1.148.10 or later** (section 1).
 - `PartnerClient::createSession($redirectUri, $state = null, $webhookUrl = null, $expiresIn = null, $externalId = null)`: `state` became optional and `externalId` was added at the end. Named and positional calls keep working; a subclass that overrides `createSession()` must update its signature.
 - `createSession()`, `subscription()` and `checkout()` throw `InvalidArgumentException` for an invalid `external_id` or `state` (`""`, `"0"` or whitespace at either end) before calling Zapmizer.
 - `createSession()` caps `expires_in` at 86400, and sends an empty `redirect_uri`/`webhook_url` (Zapmizer answers 422) instead of dropping it.
@@ -779,7 +780,7 @@ The callback and `destroy` no longer call `/webhooks` (rotation, remote deletion
 
 **Breaking** (0.x: a minor bump is the breaking bump). The pairing moved to Zapmizer's hosted page, and the wizard on your side went with it.
 
-- **Requires Zapmizer 1.149.0 or later** (hosted pairing). Against an older Zapmizer the callback still lands with the token, but with no number: the connection is stored inactive and there is no longer a wizard to pair it. With this release, a token exchange that does not answer `user_id`/`team_id` (Zapmizer before 1.148.8) makes the callback report `exchange_failed` and store nothing.
+- **Requires a Zapmizer with the hosted pairing** (for this version, 1.148.10 or later: section 1). Against an older Zapmizer the callback still lands with the token, but with no number: the connection is stored inactive and there is no longer a wizard to pair it. With this release, a token exchange that does not answer `user_id`/`team_id` (Zapmizer before 1.148.8) makes the callback report `exchange_failed` and store nothing.
 - **Routes removed:** `zapmizer.connect.instance`, `zapmizer.connect.instances`, `zapmizer.connect.connection` (404 now). Response codes that went with them (`reauth_required`, `choice_required`, `booting`, `not_connected`, `no_instance`, `plan_limit` 422, `instance_unavailable`, `qr_not_available`) are gone; `plan_limit` and `qr_unavailable` are now **postMessage statuses** of the callback, alongside the new `webhook_failed`.
 - **The callback activates the connection.** It used to store an inactive token for the wizard to pair; now it stores number, instance, webhook id and secret, and `is_active = true`. Any code that waited for `connection` polling to activate has nothing to wait for.
 - **`show` gained `?live=1`** — the only way left to ask Zapmizer whether the number is online.

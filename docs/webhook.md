@@ -122,7 +122,11 @@ ZAPMIZER_WEBHOOK_DEDUPLICATE_STORE=redis # store do cache; vazio = o padrão
 Quem publicou `config/zapmizer.php` acrescenta à mão, dentro de `webhook`, as chaves `deduplicate`, `deduplicate_ttl` e `deduplicate_store` (o merge da config é raso).
 
 - Uma entrega com `id` já visto responde 200 (`Webhook Received`) e não dispara nada, nem o `WebhookReceived`.
-- O `id` é reservado com `Cache::add` antes de processar. Se a entrega falha (exceção ou resposta 5xx), a reserva é liberada e a retentativa passa.
+- Duas fases. Antes de processar, o `id` é reservado com `Cache::add` por 120 segundos ("em processamento"). Depois de uma resposta que não é 5xx, ele é gravado pelo TTL cheio. Se a entrega falha (exceção ou resposta 5xx), a reserva é apagada e a retentativa passa. Um processo que morre no meio, sem exceção, só segura o `id` pelos 120 segundos.
+- Uma retentativa que chega enquanto a primeira tentativa ainda roda recebe 200 e não dispara nada. Se a primeira falhar depois disso, o evento se perde: a Zapmizer não reenvia uma entrega respondida com 2xx.
+- `deduplicate_ttl` vazio, zero ou negativo vale o padrão, 21600 segundos.
+- A entrega descartada pela rota por conexão (o `wid` é de outro número) não chega ao controller e não reserva o `id`: a URL da conexão dona do número ainda processa o evento.
+- **`connection` com `wid` nulo e várias rotas por conexão.** O mesmo evento do time chega à URL de cada conexão e, sem `wid`, nenhuma o descarta. Com a dedup ligada e um store compartilhado, só a primeira URL processa; as outras recebem 200 e não disparam nada. Como esse evento não muda estado (veja `connection`), isso só pesa para quem conta essas entregas por conexão.
 - Entrega sem `id` (formato antigo) é sempre processada. `verify_number.*` também, porque chega sem assinatura: um `id` forjado ali não pode queimar o `id` de um evento real.
 - Com o cache fora do ar, ou com um store que não existe na config, a entrega é processada e a lib loga um warning `zapmizer: webhook deduplication unavailable, delivery processed.`.
 - Use um store compartilhado entre os servidores (Redis, banco). O `array` só vale dentro da requisição, e o `file` só vale numa máquina.

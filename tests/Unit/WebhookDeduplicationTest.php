@@ -21,6 +21,8 @@ use NotificationChannels\Zapmizer\Test\Fixtures\SignsWebhookDeliveries;
 use NotificationChannels\Zapmizer\Test\Fixtures\UnavailableCacheStore;
 use NotificationChannels\Zapmizer\Test\Fixtures\User;
 use NotificationChannels\Zapmizer\Test\TestCase;
+use NotificationChannels\Zapmizer\Webhook\Deduplicator;
+use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 
 class WebhookDeduplicationTest extends TestCase
@@ -272,6 +274,87 @@ class WebhookDeduplicationTest extends TestCase
         $this->deliverSigned($status, 'whsec_k', path: '/zapmizer/webhook/' . $key)->assertOk();
 
         Event::assertDispatchedTimes(WebhookReceived::class, 1);
+        Event::assertDispatchedTimes(MessageStatusUpdated::class, 1);
+    }
+
+    public function testAProcessedIdIsKeptForTheWholeTtl()
+    {
+        $this->enable(ttl: 3600);
+        Event::fake([MessageStatusUpdated::class]);
+        $this->connectedTeam('secret-a');
+        $status = $this->catalogEnvelope('message_status');
+
+        $this->deliverSigned($status, 'secret-a')->assertOk();
+        $this->travel(3500)->seconds();
+        $this->deliverSigned($status, 'secret-a')->assertOk();
+
+        Event::assertDispatchedTimes(MessageStatusUpdated::class, 1);
+    }
+
+    public function testAClaimThatNeverFinishesExpiresAfterTheProcessingWindow()
+    {
+        // A worker killed mid-delivery (no exception, no response) must not
+        // burn the id for the whole TTL.
+        $this->enable();
+        Event::fake([MessageStatusUpdated::class]);
+        $this->connectedTeam('secret-a');
+        $status = $this->catalogEnvelope('message_status');
+        $this->assertTrue(app(Deduplicator::class)->claim($status));
+
+        $this->deliverSigned($status, 'secret-a')->assertOk()->assertSeeText('Webhook Received');
+        Event::assertNotDispatched(MessageStatusUpdated::class);
+
+        $this->travel(Deduplicator::PROCESSING_TTL + 1)->seconds();
+        $this->deliverSigned($status, 'secret-a')->assertOk();
+
+        Event::assertDispatchedTimes(MessageStatusUpdated::class, 1);
+    }
+
+    /**
+     * @return array<string, array{0: mixed}>
+     */
+    public static function ttlsThatFallBackToTheDefault(): array
+    {
+        return ['zero' => [0], 'negative' => [-5], 'empty' => [''], 'null' => [null]];
+    }
+
+    /** @dataProvider ttlsThatFallBackToTheDefault */
+    #[DataProvider('ttlsThatFallBackToTheDefault')]
+    public function testAnEmptyOrNonPositiveTtlUsesTheDefault(mixed $ttl)
+    {
+        $this->enable();
+        config()->set('zapmizer.webhook.deduplicate_ttl', $ttl);
+        Event::fake([MessageStatusUpdated::class]);
+        $this->connectedTeam('secret-a');
+        $status = $this->catalogEnvelope('message_status');
+
+        $this->deliverSigned($status, 'secret-a')->assertOk();
+        $this->travel(21500)->seconds();
+        $this->deliverSigned($status, 'secret-a')->assertOk();
+        $this->travel(200)->seconds();
+        $this->deliverSigned($status, 'secret-a')->assertOk();
+
+        Event::assertDispatchedTimes(MessageStatusUpdated::class, 2);
+    }
+
+    public function testADeliveryDroppedByTheWidFilterDoesNotBurnTheId()
+    {
+        // The same team event reaches the URL of each of its connections;
+        // the one for another number is dropped before the controller.
+        $this->enable();
+        Event::fake([MessageStatusUpdated::class]);
+        $this->addWebhookKeyColumn();
+        $this->enablePerConnection();
+        $other = str_repeat('a', 40);
+        $owner = str_repeat('b', 40);
+        $this->connectedTeam('whsec_a', '5581922220000', ['webhook_key' => $other]);
+        $this->connectedTeam('whsec_b', '5581911110000', ['webhook_key' => $owner]);
+        $status = $this->catalogEnvelope('message_status');
+
+        $this->deliverSigned($status, 'whsec_a', path: '/zapmizer/webhook/' . $other)->assertOk();
+        Event::assertNotDispatched(MessageStatusUpdated::class);
+
+        $this->deliverSigned($status, 'whsec_b', path: '/zapmizer/webhook/' . $owner)->assertOk();
         Event::assertDispatchedTimes(MessageStatusUpdated::class, 1);
     }
 }

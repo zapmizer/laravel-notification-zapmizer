@@ -92,6 +92,8 @@ class WebhookController extends Controller
 
         if ($response->isServerError()) {
             $deduplicator->release($payload);
+        } else {
+            $deduplicator->confirm($payload);
         }
 
         return $response;

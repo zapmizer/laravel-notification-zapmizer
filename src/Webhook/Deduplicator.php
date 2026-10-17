@@ -12,11 +12,17 @@ use Throwable;
  * with the same one), when `zapmizer.webhook.deduplicate` is on. Off by
  * default.
  *
- * The id is claimed atomically (`Cache::add`) before anything runs, and
- * released when the delivery fails (exception or 5xx), so Zapmizer's retry
- * goes through. A delivery without an `id` is always processed, and so are
- * the unsigned `verify_number.*` events: anyone can POST one, and its id
- * must not burn the id of a real event.
+ * Two phases. `claim()` reserves the id atomically (`Cache::add`) for
+ * PROCESSING_TTL seconds before anything runs; `confirm()`, after an answer
+ * that is not 5xx, keeps it for the whole `deduplicate_ttl`; `release()`,
+ * after an exception or a 5xx, frees it so Zapmizer's retry goes through. A
+ * worker killed mid-delivery leaves only the short reservation behind. A
+ * retry that arrives while the first attempt still runs gets 200 and fires
+ * nothing — if that first attempt then fails, the event is lost.
+ *
+ * A delivery without an `id` is always processed, and so are the unsigned
+ * `verify_number.*` events: anyone can POST one, and its id must not burn
+ * the id of a real event.
  *
  * Best effort: with the cache down (or a store that is not configured) the
  * delivery is processed and a warning is logged — answering 5xx would only
@@ -25,6 +31,20 @@ use Throwable;
 class Deduplicator
 {
     public const KEY_PREFIX = 'zapmizer:webhook:';
+
+    /**
+     * How long a claim lasts while the delivery is being processed, in
+     * seconds.
+     */
+    public const PROCESSING_TTL = 120;
+
+    public const DEFAULT_TTL = 21600;
+
+    /**
+     * The claim could not reach the cache: confirm and release skip it, so
+     * a delivery logs a single warning.
+     */
+    private bool $unavailable = false;
 
     /**
      * Claim the delivery. False when it was already processed.
@@ -40,11 +60,32 @@ class Deduplicator
         }
 
         try {
-            return $this->store()->add($this->key($id), true, $this->ttl());
+            return $this->store()->add($this->key($id), true, min(self::PROCESSING_TTL, $this->ttl()));
         } catch (Throwable $exception) {
+            $this->unavailable = true;
             $this->warn($id, $exception);
 
             return true;
+        }
+    }
+
+    /**
+     * Keep a processed delivery's id for the whole TTL.
+     *
+     * @param array<string, mixed> $payload
+     */
+    public function confirm(array $payload): void
+    {
+        $id = $this->idOf($payload);
+
+        if ($id === null || $this->unavailable) {
+            return;
+        }
+
+        try {
+            $this->store()->put($this->key($id), true, $this->ttl());
+        } catch (Throwable $exception) {
+            $this->warn($id, $exception);
         }
     }
 
@@ -57,7 +98,7 @@ class Deduplicator
     {
         $id = $this->idOf($payload);
 
-        if ($id === null) {
+        if ($id === null || $this->unavailable) {
             return;
         }
 
@@ -93,7 +134,9 @@ class Deduplicator
 
     protected function ttl(): int
     {
-        return max(1, (int) config('zapmizer.webhook.deduplicate_ttl', 21600));
+        $ttl = config('zapmizer.webhook.deduplicate_ttl');
+
+        return is_numeric($ttl) && (int) $ttl > 0 ? (int) $ttl : self::DEFAULT_TTL;
     }
 
     protected function store(): \Illuminate\Contracts\Cache\Repository

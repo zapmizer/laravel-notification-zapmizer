@@ -20,6 +20,9 @@ const TURN_ON_GRACE_MS = 30000;
 /** Estados em que perguntar de novo não muda nada sem o usuário agir. */
 const FINAL_STATES = ['reauth_required', 'instance_gone'];
 
+/** Respostas do `show` que só mudam com o usuário agindo (login de novo, conectar). */
+const STOP_STATUSES = [401, 403, 419];
+
 /**
  * Abre o popup do Zapmizer (autorização + pareamento). O resultado chega por
  * postMessage — ver ConnectButton. Fora do composable de propósito: o botão
@@ -67,6 +70,11 @@ export function useZapmizerIntegration() {
   // estado mais novo: cada pedido leva o número da vez e só aplica a resposta
   // se ainda for o último. `stopPolling()` também avança o número.
   let request = 0;
+
+  // Geração do loop de polling: decide se um poll que voltou agenda o
+  // próximo. Só o `stopPolling()` a avança; `request` decide só se a
+  // resposta é aplicada.
+  let pollGeneration = 0;
 
   let timer: ReturnType<typeof setTimeout> | null = null;
   let polling = false;
@@ -134,19 +142,28 @@ export function useZapmizerIntegration() {
   async function poll() {
     timer = null;
 
+    const gen = pollGeneration;
     const current = ++request;
     let connection: ZapmizerConnection | null;
 
     try {
       connection = await fetchConnection(true);
     } catch (e) {
-      if (current !== request) return;
+      // Um `reload()` mais novo tomou o lugar desta resposta: ela não é
+      // aplicada, mas o loop segue se ninguém o parou.
+      if (current !== request) {
+        if (gen === pollGeneration) schedule();
+
+        return;
+      }
 
       loading.value = false;
 
-      // 403 `no_connectable`: nada a consultar sem o usuário agir. Rede, 429
-      // e 503 são passageiros: segue consultando.
-      if ((e as { response?: { status?: number } }).response?.status === 403) {
+      // 401/419 (sessão do app caída) e 403 `no_connectable`: nada a
+      // consultar sem o usuário agir. Rede, 429 e 503 são passageiros.
+      const status = (e as { response?: { status?: number } }).response?.status ?? 0;
+
+      if (STOP_STATUSES.includes(status)) {
         stopPolling();
 
         return;
@@ -157,7 +174,11 @@ export function useZapmizerIntegration() {
       return;
     }
 
-    if (current !== request) return;
+    if (current !== request) {
+      if (gen === pollGeneration) schedule();
+
+      return;
+    }
 
     loading.value = false;
     errorMessage.value = '';
@@ -181,9 +202,14 @@ export function useZapmizerIntegration() {
     poll();
   }
 
-  /** Para o polling e descarta a resposta que estiver a caminho. */
+  /**
+   * Para o polling e descarta a resposta que estiver a caminho. Só aqui a
+   * geração do loop avança: um poll em voo de um loop parado não agenda o
+   * próximo.
+   */
   function stopPolling() {
     polling = false;
+    pollGeneration++;
     request++;
     clearTimer();
   }

@@ -288,11 +288,24 @@ class EmbedSessionResponseTest extends TestCase
         $this->assertInstanceOf(EmbedResponseWithExpiry::class, EmbedResponseWithExpiry::code('x'));
     }
 
-    public function testO5AClosureThatReturnsSomethingElseIsATypeError()
+    /** @dataProvider closuresThatDoNotReturnASession */
+    #[DataProvider('closuresThatDoNotReturnASession')]
+    public function testO5AClosureThatReturnsSomethingElseIsATypeError(\Closure $open)
     {
         $this->expectException(TypeError::class);
 
-        EmbedSessionResponse::open(fn () => 'x');
+        EmbedSessionResponse::open($open);
+    }
+
+    public static function closuresThatDoNotReturnASession(): array
+    {
+        return [
+            'string' => [fn () => 'x'],
+            'null' => [fn () => null],
+            'braces without return' => [function () {
+                $forgotten = 1;
+            }],
+        ];
     }
 
     protected function hook(): \Closure

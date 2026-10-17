@@ -9,6 +9,7 @@ use NotificationChannels\Zapmizer\Connect\EmbedSession;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
+use TypeError;
 use UnexpectedValueException;
 
 class EmbedSessionResponse implements Responsable
@@ -33,6 +34,10 @@ class EmbedSessionResponse implements Responsable
     {
         try {
             $session = $open();
+
+            if (!$session instanceof EmbedSession) {
+                throw new TypeError(sprintf('The embed closure must return %s, %s returned.', EmbedSession::class, get_debug_type($session)));
+            }
         } catch (ZapmizerApiException $exception) {
             if ($onRefusal !== null) {
                 $onRefusal($exception);

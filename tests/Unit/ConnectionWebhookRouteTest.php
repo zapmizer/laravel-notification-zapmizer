@@ -6,6 +6,7 @@ use Illuminate\Database\QueryException;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
+use LogicException;
 use NotificationChannels\Zapmizer\Support\ConnectionWebhook;
 use NotificationChannels\Zapmizer\Test\Concerns\AssertsContract;
 use NotificationChannels\Zapmizer\Test\Concerns\DrivesTheConnectRoutes;
@@ -77,6 +78,29 @@ class ConnectionWebhookRouteTest extends TestCase
 
         $this->assertSame($on, ConnectionWebhook::enabled());
         $this->assertSame($on, Route::has('zapmizer.webhook.connection'));
+    }
+
+    /** @dataProvider perConnectionValues */
+    #[DataProvider('perConnectionValues')]
+    public function testC46TheStartFollowsTheReader(?string $value, bool $on)
+    {
+        $this->applyPerConnection($value);
+        $this->reloadPackageRoutes();
+        $this->recordReports();
+        $this->actingAsUser();
+        $this->fakeHttp($this->sessionCreated());
+
+        $response = $this->startConnect();
+
+        if ($on) {
+            $response->assertStatus(500);
+            $this->assertCount(1, $this->reported);
+            $this->assertInstanceOf(LogicException::class, $this->reported[0]);
+            $this->assertCount(0, $this->history);
+        } else {
+            $response->assertOk();
+            $this->assertSame('http://localhost/zapmizer/webhook', $this->sentBody(0)['webhook_url']);
+        }
     }
 
     public function testC2WithTheOptionOffTheRouteDoesNotExist()

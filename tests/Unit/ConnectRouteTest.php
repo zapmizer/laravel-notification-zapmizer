@@ -5,6 +5,7 @@ namespace NotificationChannels\Zapmizer\Test\Unit;
 use Closure;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Psr7\Response;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -13,6 +14,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Testing\TestResponse;
 use InvalidArgumentException;
+use LogicException;
 use NotificationChannels\Zapmizer\Connect\ResolvesAuthenticatedUser;
 use NotificationChannels\Zapmizer\Events\NumberConnected;
 use NotificationChannels\Zapmizer\Http\Controllers\ConnectController;
@@ -32,10 +34,12 @@ use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesFirstTeam;
 use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesExternalIdTeam;
 use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesNothing;
 use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesPlainModel;
+use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesTeamWithoutTheKeyColumn;
 use NotificationChannels\Zapmizer\Test\Fixtures\Team;
 use NotificationChannels\Zapmizer\Test\Fixtures\User;
 use NotificationChannels\Zapmizer\Test\Concerns\FakesZapmizerHttp;
 use NotificationChannels\Zapmizer\Test\Concerns\InvalidBaseUris;
+use NotificationChannels\Zapmizer\Test\Concerns\TogglesConnectionWebhook;
 use NotificationChannels\Zapmizer\Test\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 
@@ -46,6 +50,7 @@ class ConnectRouteTest extends TestCase
     use DrivesTheConnectRoutes;
     use FakesZapmizerHttp;
     use InvalidBaseUris;
+    use TogglesConnectionWebhook;
 
     /** @var array<int, array{request: \GuzzleHttp\Psr7\Request}> */
     protected array $history = [];
@@ -2047,6 +2052,7 @@ class ConnectRouteTest extends TestCase
     public function testR2TheRetryAfterTheWaitConnectsAndKeepsTheWebhookKey()
     {
         Carbon::setTestNow('2026-10-16 12:00:00');
+        $this->addWebhookKeyColumn();
         $this->app->bind(ConnectController::class, KeyedConnectController::class);
         $this->fakeHttp($this->sessionCreated(), $this->tooMany(), $this->tokenAnswer());
         $this->actingAsUser();
@@ -2064,6 +2070,7 @@ class ConnectRouteTest extends TestCase
         $this->assertNull(session(ConnectController::SESSION_KEY));
         $this->assertNotNull($this->team()->zapmizerConnection);
         $this->assertCount(3, $this->history);
+        $this->assertSame('fixed-key', $this->storedKey());
     }
 
     /** @dataProvider unusableRetryAfters */
@@ -2405,5 +2412,334 @@ class ConnectRouteTest extends TestCase
 
         $this->assertTrue(ZapmizerConnection::sole()->connectable->is($user));
         $this->assertEquals(0, Team::count());
+    }
+
+    // --- per-connection webhook URL --------------------------------------
+
+    private const KEY_FORMAT = '/^[A-Za-z0-9]{40}\z/';
+
+    /**
+     * The popup coming back with `$code` and the state of the session: the
+     * second half of connect().
+     */
+    protected function finishConnect(string $code = 'c'): TestResponse
+    {
+        return $this->get(route('zapmizer.connect.callback', [
+            'code' => $code,
+            'state' => session(ConnectController::SESSION_KEY)['state'],
+        ]));
+    }
+
+    protected function pendingKey(): ?string
+    {
+        return session(ConnectController::SESSION_KEY)['webhook_key'] ?? null;
+    }
+
+    protected function storedKey(): ?string
+    {
+        return DB::table('zapmizer_connections')->value('webhook_key');
+    }
+
+    protected function keyedUrl(string $key): string
+    {
+        return 'http://localhost/zapmizer/webhook/' . $key;
+    }
+
+    protected function enableKeyedWebhooks(): void
+    {
+        $this->addWebhookKeyColumn();
+        $this->enablePerConnection();
+    }
+
+    public function testC4WithTheOptionOffTheColumnStaysEmpty()
+    {
+        $this->addWebhookKeyColumn();
+        $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer());
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+
+        $this->assertSame('http://localhost/zapmizer/webhook', $this->sentBody(0)['webhook_url']);
+        $this->assertNull($this->storedKey());
+        $this->assertNoWebhookCalls();
+    }
+
+    public function testC5WithoutTheColumnTheStartRefusesLoudly()
+    {
+        $this->enablePerConnection();
+        $this->recordReports();
+        $this->fakeHttp();
+        $this->actingAsUser();
+
+        $this->startConnect()->assertStatus(500);
+
+        $this->assertCount(1, $this->reported);
+        $this->assertInstanceOf(LogicException::class, $this->reported[0]);
+        $this->assertSame('zapmizer.webhook.per_connection needs the webhook_key column: publish --tag=zapmizer-migrations-webhook-key and migrate.', $this->reported[0]->getMessage());
+        $this->assertCount(0, $this->history);
+        $this->assertNull(session(ConnectController::SESSION_KEY));
+    }
+
+    public function testC7ANewConnectableGetsItsOwnUrl()
+    {
+        $this->enableKeyedWebhooks();
+        $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer(['webhook_secret' => 'whsec_1']));
+        $this->actingAsUser();
+
+        $this->startConnect()->assertOk();
+        $key = $this->pendingKey();
+
+        $this->assertMatchesRegularExpression(self::KEY_FORMAT, (string) $key);
+        $this->assertSame($this->keyedUrl($key), $this->sentBody(0)['webhook_url']);
+
+        $this->finishConnect()->assertSee('status: "ok"', false);
+
+        $connection = $this->team()->zapmizerConnection;
+        $this->assertSame($key, $this->storedKey());
+        $this->assertSame(42, $connection->webhook_id);
+        $this->assertSame('whsec_1', $connection->webhook_secret);
+        $this->assertNoWebhookCalls();
+    }
+
+    public function testC8AReconnectWithTheSecretKeepsTheUrl()
+    {
+        $this->enableKeyedWebhooks();
+        $this->fakeHttp(
+            $this->sessionCreated(),
+            $this->tokenAnswer(['webhook_secret' => 'whsec_1']),
+            $this->sessionCreated(),
+            $this->tokenAnswer(['token' => '2|sanctum', 'webhook_secret' => null]),
+        );
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+        $k1 = $this->storedKey();
+        $this->connect()->assertSee('status: "ok"', false);
+
+        $this->assertMatchesRegularExpression(self::KEY_FORMAT, (string) $k1);
+        $this->assertSame($this->keyedUrl($k1), $this->sentBody(2)['webhook_url']);
+        $this->assertSame($k1, $this->storedKey());
+        $this->assertSame('whsec_1', $this->team()->zapmizerConnection->webhook_secret);
+        $this->assertNoWebhookCalls();
+    }
+
+    public function testC9WithoutASecretANewUrlBringsOne()
+    {
+        $this->enableKeyedWebhooks();
+        $this->fakeHttp(
+            $this->sessionCreated(),
+            $this->tokenAnswer(['webhook_secret' => null]),
+            $this->sessionCreated(),
+            $this->tokenAnswer(['token' => '2|sanctum', 'webhook_id' => 43, 'webhook_secret' => 'whsec_43']),
+        );
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "webhook_failed"', false);
+        $k1 = $this->storedKey();
+        $this->connect()->assertSee('status: "ok"', false);
+        $k2 = $this->storedKey();
+
+        $this->assertMatchesRegularExpression(self::KEY_FORMAT, (string) $k1);
+        $this->assertMatchesRegularExpression(self::KEY_FORMAT, (string) $k2);
+        $this->assertNotSame($k1, $k2);
+        $this->assertSame($this->keyedUrl($k2), $this->sentBody(2)['webhook_url']);
+        $this->assertSame('whsec_43', $this->team()->zapmizerConnection->webhook_secret);
+        $this->assertNoWebhookCalls();
+    }
+
+    public function testC10AnOldConnectionMovesToItsOwnUrl()
+    {
+        $this->addWebhookKeyColumn();
+        config()->set('zapmizer.connect.revoke_previous_token', true);
+        $this->fakeHttp(
+            $this->sessionCreated(),
+            $this->tokenAnswer(['webhook_secret' => 'whsec_1']),
+            $this->sessionCreated(),
+            $this->tokenAnswer(['token' => '2|sanctum', 'webhook_id' => 43, 'webhook_secret' => 'whsec_43']),
+            new Response(204),
+        );
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+        $this->assertNull($this->storedKey());
+
+        $this->enablePerConnection();
+        $this->connect()->assertSee('status: "ok"', false);
+
+        $connection = $this->team()->zapmizerConnection;
+        $this->assertMatchesRegularExpression(self::KEY_FORMAT, (string) $this->storedKey());
+        $this->assertSame($this->keyedUrl($this->storedKey()), $this->sentBody(2)['webhook_url']);
+        $this->assertSame(43, $connection->webhook_id);
+        $this->assertSame('whsec_43', $connection->webhook_secret);
+        $this->assertCount(5, $this->history);
+        $this->assertRevoked('1|sanctum');
+        $this->assertNoWebhookCalls();
+    }
+
+    public function testC35AnUnreadableSecretIssuesANewKey()
+    {
+        $this->enableKeyedWebhooks();
+        $this->fakeHttp(
+            $this->sessionCreated(),
+            $this->tokenAnswer(['webhook_secret' => 'whsec_1']),
+            $this->sessionCreated(),
+            $this->tokenAnswer(['token' => '2|sanctum', 'webhook_id' => 43, 'webhook_secret' => 'whsec_43']),
+        );
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+        $k1 = $this->storedKey();
+        $connectionId = $this->team()->zapmizerConnection->id;
+        $this->swapAppKey();
+        Log::spy();
+
+        $this->startConnect()->assertOk();
+        $key = $this->pendingKey();
+
+        $this->assertMatchesRegularExpression(self::KEY_FORMAT, (string) $key);
+        $this->assertNotSame($k1, $key);
+        Log::shouldHaveReceived('warning')->with('zapmizer: unreadable webhook secret, a new webhook key is issued.', ['connection_id' => $connectionId])->once();
+
+        $this->finishConnect()->assertSee('status: "ok"', false);
+
+        $this->assertSame($key, $this->storedKey());
+        $this->assertSame('whsec_43', $this->team()->zapmizerConnection->webhook_secret);
+        $this->assertNoWebhookCalls();
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function refusedTeams(): array
+    {
+        return [
+            'query' => ['query'],
+            'unique race' => ['unique race'],
+        ];
+    }
+
+    /** @dataProvider refusedTeams */
+    #[DataProvider('refusedTeams')]
+    public function testC36ARefusedTeamStoresNoKey(string $variant)
+    {
+        $this->enableKeyedWebhooks();
+        $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer(['token' => '2|sanctum']), new Response(204));
+        $this->actingAsUser();
+
+        if ($variant === 'query') {
+            Team::create(['name' => 'Other'])->zapmizerConnection()->create(['api_token' => 'other-token', 'zapmizer_team_id' => 7, 'is_active' => true]);
+        } else {
+            $raced = false;
+            ZapmizerConnection::creating(function () use (&$raced) {
+                if ($raced) {
+                    return;
+                }
+
+                $raced = true;
+                Team::create(['name' => 'Other'])->zapmizerConnection()->create(['api_token' => 'other-token', 'zapmizer_team_id' => 7, 'is_active' => true]);
+            });
+        }
+
+        $this->connect()->assertSee('status: "team_already_connected"', false);
+
+        $this->assertMatchesRegularExpression('#^http://localhost/zapmizer/webhook/[A-Za-z0-9]{40}$#', $this->sentBody(0)['webhook_url']);
+        $this->assertSame(0, ZapmizerConnection::query()->whereNotNull('webhook_key')->count());
+        $this->assertRevoked('2|sanctum');
+        $this->assertNoWebhookCalls();
+    }
+
+    public function testC37TwoStartsOnlyTheLastKeyIsStored()
+    {
+        $this->enableKeyedWebhooks();
+        $this->fakeHttp($this->sessionCreated(), $this->sessionCreated(), $this->tokenAnswer());
+        $this->actingAsUser();
+
+        $this->startConnect()->assertOk();
+        $a = session(ConnectController::SESSION_KEY);
+        $this->startConnect()->assertOk();
+        $b = session(ConnectController::SESSION_KEY);
+
+        $this->assertNotSame($a['webhook_key'], $b['webhook_key']);
+
+        $this->get(route('zapmizer.connect.callback', ['code' => 'c', 'state' => $a['state']]))
+            ->assertSee('status: "invalid_state"', false);
+        $this->assertSame($b, session(ConnectController::SESSION_KEY));
+
+        $this->get(route('zapmizer.connect.callback', ['code' => 'c', 'state' => $b['state']]))
+            ->assertSee('status: "ok"', false);
+
+        $this->assertSame($b['webhook_key'], $this->storedKey());
+        $this->assertCount(3, $this->history);
+        $this->assertNoWebhookCalls();
+    }
+
+    /**
+     * @return array<string, array{0: bool}>
+     */
+    public static function perConnectionOffAndOn(): array
+    {
+        return [
+            'off' => [false],
+            'on' => [true],
+        ];
+    }
+
+    /** @dataProvider perConnectionOffAndOn */
+    #[DataProvider('perConnectionOffAndOn')]
+    public function testC42AMissingAttributeIsANewKey(bool $on)
+    {
+        if (!method_exists(Model::class, 'preventAccessingMissingAttributes')) {
+            $this->markTestSkipped('Laravel 9.35+');
+        }
+
+        $this->addWebhookKeyColumn();
+
+        if ($on) {
+            $this->enablePerConnection();
+        }
+
+        $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer(['webhook_secret' => 'whsec_1']), $this->sessionCreated());
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+        $stored = $this->storedKey();
+
+        config()->set('zapmizer.connect.resolver', ResolvesTeamWithoutTheKeyColumn::class);
+        // The route keeps the controller it built, and with it the resolver.
+        $this->reloadPackageRoutes();
+        Model::preventAccessingMissingAttributes();
+        $this->beforeApplicationDestroyed(fn () => Model::preventAccessingMissingAttributes(false));
+
+        $this->startConnect()->assertOk();
+
+        if ($on) {
+            $this->assertNotNull($stored);
+            $this->assertMatchesRegularExpression(self::KEY_FORMAT, (string) $this->pendingKey());
+            $this->assertNotSame($stored, $this->pendingKey());
+        } else {
+            $this->assertNull($this->pendingKey());
+            $this->assertSame('http://localhost/zapmizer/webhook', $this->sentBody(2)['webhook_url']);
+        }
+    }
+
+    public function testC47TheKeySurvivesTheWaitOfA429()
+    {
+        Carbon::setTestNow('2026-10-16 12:00:00');
+        $this->enableKeyedWebhooks();
+        $this->fakeHttp($this->sessionCreated(), $this->tooMany(), $this->tokenAnswer());
+        $this->actingAsUser();
+
+        $this->startConnect()->assertOk();
+        $key = $this->pendingKey();
+
+        $this->finishConnect()->assertSee('<meta http-equiv="refresh" content="21">', false);
+        $this->assertSame($key, $this->pendingKey());
+
+        $this->travel(21)->seconds();
+        $this->finishConnect()->assertSee('status: "ok"', false);
+
+        $this->assertMatchesRegularExpression(self::KEY_FORMAT, (string) $key);
+        $this->assertSame($key, $this->storedKey());
+        $this->assertNoWebhookCalls();
     }
 }

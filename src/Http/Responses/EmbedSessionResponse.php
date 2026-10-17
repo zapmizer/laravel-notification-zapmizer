@@ -9,6 +9,7 @@ use NotificationChannels\Zapmizer\Connect\EmbedSession;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
+use UnexpectedValueException;
 
 class EmbedSessionResponse implements Responsable
 {
@@ -63,6 +64,8 @@ class EmbedSessionResponse implements Responsable
 
     /**
      * @param \Illuminate\Http\Request $request
+     *
+     * @throws UnexpectedValueException
      */
     public function toResponse($request): \Illuminate\Http\JsonResponse
     {
@@ -94,7 +97,17 @@ class EmbedSessionResponse implements Responsable
             );
         }
 
-        return new JsonResponse(['code' => $this->refusalCode($this->failure)], $this->refusalStatus($this->failure));
+        $status = $this->refusalStatus($this->failure);
+
+        if ($status < 400 || $status > 599 || $status === 401 || $status === 419) {
+            throw new UnexpectedValueException(sprintf(
+                '%s::refusalStatus() returned %d: a refusal is a 4xx or 5xx other than 401 and 419.',
+                static::class,
+                $status,
+            ));
+        }
+
+        return new JsonResponse(['code' => $this->refusalCode($this->failure)], $status);
     }
 
     protected function sessionPayload(EmbedSession $session): array

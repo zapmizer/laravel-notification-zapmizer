@@ -41,6 +41,9 @@ return [
         // the customer through checkout, so keep it generous. Also sent as the
         // session's expires_in (Zapmizer's floor is 15 minutes).
         'state_ttl_minutes' => (int) env('ZAPMIZER_CONNECT_STATE_TTL', 30),
+        // Revoke the token a connection held before when a new connect replaces it
+        // (DELETE /connect/token), so the model keeps a single grant on Zapmizer.
+        'revoke_previous_token' => env('ZAPMIZER_CONNECT_REVOKE_PREVIOUS_TOKEN', false),
     ],
 
     'webhook' => [

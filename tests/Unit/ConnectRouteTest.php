@@ -6,6 +6,7 @@ use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use InvalidArgumentException;
@@ -1534,6 +1535,358 @@ class ConnectRouteTest extends TestCase
 
         $this->assertSame(1, $this->revocationCalls());
         $this->assertRevoked('2|sanctum');
+    }
+
+    // --- unreadable values and the previous token ------------------------
+
+    /**
+     * The queue of a connect followed by a second one answering `$second`,
+     * then `$after` (the revocation of the previous token, when there is
+     * one).
+     */
+    protected function fakeTwoConnects(array $second, Response|\Throwable ...$after): void
+    {
+        $this->fakeHttp(
+            $this->sessionCreated(),
+            $this->tokenAnswer(),
+            $this->sessionCreated(),
+            $this->tokenAnswer($second + ['token' => '2|sanctum']),
+            ...$after,
+        );
+    }
+
+    protected function revokePrevious(mixed $value = true): void
+    {
+        config()->set('zapmizer.connect.revoke_previous_token', $value);
+    }
+
+    /** @dataProvider revocationOptionsOff */
+    #[DataProvider('revocationOptionsOff')]
+    public function testC3ThePreviousTokenStaysWithTheOptionOff(bool $present, mixed $value)
+    {
+        if ($present) {
+            $this->revokePrevious($value);
+        } else {
+            config()->set('zapmizer.connect', ['resolver' => ResolvesFirstTeam::class]);
+        }
+
+        $this->fakeTwoConnects([]);
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+        $this->connect()->assertSee('status: "ok"', false);
+
+        $this->assertCount(4, $this->history);
+        $this->assertSame(0, $this->revocationCalls());
+        $this->assertSame('2|sanctum', $this->team()->zapmizerConnection->api_token);
+    }
+
+    public static function revocationOptionsOff(): array
+    {
+        return [
+            'absent' => [false, null],
+            'null' => [true, null],
+            'text' => [true, 'abc'],
+            'false' => [true, false],
+            'env off' => [true, 'off'],
+            'env no' => [true, 'no'],
+            'env empty' => [true, ''],
+        ];
+    }
+
+    /** @dataProvider revocationOptionsOn */
+    #[DataProvider('revocationOptionsOn')]
+    public function testC4ThePreviousTokenIsRevokedWithTheOptionOn(mixed $value, int $status, string $body)
+    {
+        $this->assertMatchesContract('DELETE', '/connect/token', $status, $body);
+        Log::spy();
+        $this->revokePrevious($value);
+        $this->fakeTwoConnects([], new Response($status, $body === '' ? [] : ['Content-Type' => 'application/json'], $body));
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+        $this->connect()->assertSee('status: "ok"', false);
+
+        $this->assertCount(5, $this->history);
+        $this->assertSame(1, $this->revocationCalls());
+        $this->assertRevoked('1|sanctum');
+        $this->assertSame('2|sanctum', $this->team()->zapmizerConnection->api_token);
+        Log::shouldNotHaveReceived('warning');
+    }
+
+    public static function revocationOptionsOn(): array
+    {
+        return [
+            'true' => [true, 204, ''],
+            'env true' => ['true', 204, ''],
+            'env 1' => ['1', 204, ''],
+            'env on' => ['on', 204, ''],
+            'env yes' => ['yes', 204, ''],
+            'already gone 401' => [true, 401, '{"message":"Unauthenticated."}'],
+        ];
+    }
+
+    public function testV1TheFirstConnectRevokesNothing()
+    {
+        $this->revokePrevious();
+        $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer());
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+
+        $this->assertCount(2, $this->history);
+    }
+
+    /** @dataProvider failedPreviousRevocationsFromTheContract */
+    #[DataProvider('failedPreviousRevocationsFromTheContract')]
+    public function testV3AFailedRevocationOfThePreviousIsOnlyAWarningFromTheContract(int $status, string $body, ?int $warned)
+    {
+        $this->assertMatchesContract('DELETE', '/connect/token', $status, $body);
+        $this->assertAFailedRevocationOfThePreviousIsOnlyAWarning(new Response($status, ['Content-Type' => 'application/json'], $body), $warned);
+    }
+
+    public static function failedPreviousRevocationsFromTheContract(): array
+    {
+        return [
+            'not a connect token 404' => [404, '{"message":"No connect grant for this token."}', 404],
+        ];
+    }
+
+    /** @dataProvider failedPreviousRevocationsOutsideTheContract */
+    #[DataProvider('failedPreviousRevocationsOutsideTheContract')]
+    public function testV3AFailedRevocationOfThePreviousIsOnlyAWarningOutsideTheContract(Response|\Throwable $answer, ?int $warned)
+    {
+        $this->assertAFailedRevocationOfThePreviousIsOnlyAWarning($answer, $warned);
+    }
+
+    /**
+     * [answer, status in the warning]: a 5xx, the network, a redirect and
+     * a 200 have none.
+     */
+    public static function failedPreviousRevocationsOutsideTheContract(): array
+    {
+        return [
+            'forbidden 403' => [new Response(403, ['Content-Type' => 'application/json'], '{"message":"Forbidden."}'), 403],
+            'rate limited 429' => [new Response(429, ['Content-Type' => 'application/json', 'Retry-After' => '30'], '{"message":"Too Many Attempts."}'), 429],
+            '5xx' => [new Response(500, [], ''), null],
+            'network' => [new ConnectException('timed out', new \GuzzleHttp\Psr7\Request('DELETE', 'connect/token')), null],
+            'redirect 302' => [new Response(302, ['Location' => 'http://zap.test/login']), null],
+            '200 {}' => [new Response(200, ['Content-Type' => 'application/json'], '{}'), null],
+        ];
+    }
+
+    protected function assertAFailedRevocationOfThePreviousIsOnlyAWarning(Response|\Throwable $answer, ?int $warned): void
+    {
+        Log::spy();
+        $this->revokePrevious();
+        $this->fakeTwoConnects([], $answer);
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+        $this->connect()->assertSee('status: "ok"', false);
+
+        $connection = $this->team()->zapmizerConnection;
+        $this->assertSame('2|sanctum', $connection->api_token);
+        $this->assertRevoked('1|sanctum');
+        $this->assertRevocationWarning('zapmizer: the previous token was not revoked.', ['connection_id' => $connection->id], $warned);
+    }
+
+    public function testV4TheSameTokenIsNotRevoked()
+    {
+        $this->revokePrevious();
+        $this->fakeTwoConnects(['token' => '1|sanctum']);
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+        $this->connect()->assertSee('status: "ok"', false);
+
+        $this->assertCount(4, $this->history);
+    }
+
+    /**
+     * Exactly `$warnings` warnings: [message, context] each, once.
+     */
+    protected function assertExactlyTheseWarnings(array $warnings): void
+    {
+        Log::shouldHaveReceived('warning')->times(count($warnings));
+
+        foreach ($warnings as [$message, $context]) {
+            Log::shouldHaveReceived('warning')->with($message, $context)->once();
+        }
+    }
+
+    protected function columnWarnings(int $id, string ...$columns): array
+    {
+        return array_map(fn (string $column) => ['zapmizer: unreadable stored value, overwritten.', ['connection_id' => $id, 'column' => $column]], $columns);
+    }
+
+    public function testV5AnUnreadablePreviousTokenIsSkipped()
+    {
+        Log::spy();
+        $this->revokePrevious();
+        $this->fakeTwoConnects(['webhook_secret' => 'whsec_2']);
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+        $this->swapAppKey();
+        $this->connect()->assertSee('status: "ok"', false);
+
+        $connection = $this->team()->zapmizerConnection;
+        $this->assertCount(4, $this->history);
+        $this->assertExactlyTheseWarnings([
+            ['zapmizer: could not read the previous token to revoke it.', ['connection_id' => $connection->id]],
+            ...$this->columnWarnings($connection->id, 'api_token', 'webhook_secret'),
+        ]);
+        $this->assertSame('2|sanctum', $connection->fresh()->api_token);
+        $this->assertSame('whsec_2', $connection->fresh()->webhook_secret);
+    }
+
+    public function testV6TheWebhookFailedConnectAlsoRevokes()
+    {
+        $this->revokePrevious();
+        $this->fakeTwoConnects(['webhook_id' => 43, 'webhook_secret' => null], new Response(204));
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+        $this->connect()->assertSee('status: "webhook_failed"', false);
+
+        $this->assertCount(5, $this->history);
+        $this->assertRevoked('1|sanctum');
+    }
+
+    public function testV8TheAppKeyChangedWithTheOptionOff()
+    {
+        Log::spy();
+        $this->fakeTwoConnects(['webhook_secret' => 'whsec_2']);
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+        $this->swapAppKey();
+        $this->connect()->assertSee('status: "ok"', false);
+
+        $connection = $this->team()->zapmizerConnection;
+        $this->assertCount(4, $this->history);
+        $this->assertExactlyTheseWarnings($this->columnWarnings($connection->id, 'api_token', 'webhook_secret'));
+        $this->assertSame('2|sanctum', $connection->fresh()->api_token);
+        $this->assertSame('whsec_2', $connection->fresh()->webhook_secret);
+    }
+
+    public function testW3bAnotherTeamWithTheAppKeyChanged()
+    {
+        $this->assertANewWebhookWithTheAppKeyChanged(['team_id' => 8, 'team_name' => 'Other', 'webhook_id' => 77, 'webhook_secret' => 'whsec_77']);
+    }
+
+    public function testW4bANewWebhookWithTheAppKeyChanged()
+    {
+        $this->assertANewWebhookWithTheAppKeyChanged(['webhook_id' => 43, 'webhook_secret' => 'whsec_43']);
+    }
+
+    /**
+     * A connect, the APP_KEY changed, then a connect with a new webhook and
+     * its secret: both unreadable columns are reset and overwritten.
+     */
+    protected function assertANewWebhookWithTheAppKeyChanged(array $second): void
+    {
+        Log::spy();
+        $this->fakeHttp(
+            $this->sessionCreated(),
+            $this->tokenAnswer(['webhook_secret' => 'whsec_1']),
+            $this->sessionCreated(),
+            $this->tokenAnswer($second + ['token' => '2|sanctum']),
+        );
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+        $this->swapAppKey();
+        $this->connect()->assertSee('status: "ok"', false);
+
+        $connection = $this->team()->zapmizerConnection->fresh();
+        $this->assertExactlyTheseWarnings($this->columnWarnings($connection->id, 'api_token', 'webhook_secret'));
+        $this->assertSame('2|sanctum', $connection->api_token);
+        $this->assertSame($second['webhook_secret'], $connection->webhook_secret);
+        $this->assertSame($second['team_id'] ?? 7, $connection->zapmizer_team_id);
+        $this->assertSame($second['webhook_id'], $connection->webhook_id);
+        $this->assertNull(DB::table('zapmizer_connections')->value('webhook_previous_secret'));
+        $this->assertSame(1, ZapmizerConnection::count());
+        $this->assertNoWebhookCalls();
+    }
+
+    public function testW5AnUnreadableStoredSecretIsNotReused()
+    {
+        Log::spy();
+        $this->fakeHttp(
+            $this->sessionCreated(),
+            $this->tokenAnswer(['webhook_secret' => 'whsec_1']),
+            $this->sessionCreated(),
+            $this->tokenAnswer(['token' => '2|sanctum', 'webhook_secret' => null]),
+        );
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+        $this->swapAppKey();
+        $this->connect()->assertSee('status: "webhook_failed"', false);
+
+        $connection = $this->team()->zapmizerConnection->fresh();
+        $this->assertTrue($connection->is_active);
+        $this->assertNull($connection->webhook_secret);
+        $this->assertSame('2|sanctum', $connection->api_token);
+        $this->assertExactlyTheseWarnings([
+            ['zapmizer: unreadable webhook secret.', ['connection_id' => $connection->id]],
+            ...$this->columnWarnings($connection->id, 'api_token'),
+            ['zapmizer: connected without a webhook secret.', ['connection_id' => $connection->id, 'webhook_id' => 42]],
+        ]);
+        $this->assertNoWebhookCalls();
+    }
+
+    public function testA1TheRefusedTeamDoesNotRevokeThePrevious()
+    {
+        $this->revokePrevious();
+        $this->fakeTwoConnects(['team_id' => 8, 'team_name' => 'Other'], new Response(204));
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+        Team::create(['name' => 'Other'])->zapmizerConnection()->create(['api_token' => 'other-token', 'zapmizer_team_id' => 8, 'is_active' => true]);
+        $this->connect()->assertSee('status: "team_already_connected"', false);
+
+        $this->assertSame(1, $this->revocationCalls());
+        $this->assertRevoked('2|sanctum');
+        $this->assertSame('1|sanctum', $this->team()->zapmizerConnection->api_token);
+    }
+
+    public function testD5AnUnreadableTokenIsDeletedWithoutACall()
+    {
+        Log::spy();
+        $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer());
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+        $id = $this->team()->zapmizerConnection->id;
+        $this->swapAppKey();
+
+        $this->deleteJson(route('zapmizer.connect.destroy'))->assertOk()->assertExactJson(['status' => 'disconnected']);
+
+        $this->assertSame(0, ZapmizerConnection::count());
+        $this->assertCount(2, $this->history);
+        $this->assertExactlyTheseWarnings([['zapmizer: could not read the token to revoke it.', ['connection_id' => $id]]]);
+    }
+
+    public function testL1ShowLiveWithAnUnreadableTokenIsReauthRequired()
+    {
+        Log::spy();
+        $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer());
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+        $id = $this->team()->zapmizerConnection->id;
+        $this->swapAppKey();
+
+        $this->getJson(route('zapmizer.connect.show', ['live' => 1]))
+            ->assertOk()
+            ->assertJsonPath('connection.state', 'reauth_required')
+            ->assertJsonPath('connection.is_online', false);
+
+        $this->assertCount(2, $this->history);
+        $this->assertExactlyTheseWarnings([['zapmizer: could not read the token to query the instance.', ['connection_id' => $id]]]);
     }
 
     // --- 429 on the exchange ---------------------------------------------

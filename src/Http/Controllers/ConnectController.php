@@ -2,6 +2,7 @@
 
 namespace NotificationChannels\Zapmizer\Http\Controllers;
 
+use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Contracts\View\View;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\QueryException;
@@ -250,6 +251,11 @@ class ConnectController extends Controller
      * id, no secret in the answer). Without any secret the connection stays
      * active — it sends — and the popup says `webhook_failed`: it cannot
      * verify what it receives until it disconnects and connects again.
+     *
+     * A stored value that no longer decrypts (APP_KEY changed) counts as
+     * absent, with a warning, and is overwritten. With
+     * `zapmizer.connect.revoke_previous_token` on, the token the row held
+     * before is revoked once the new one is saved.
      */
     protected function storeToken(Model&Connectable $connectable, ConnectToken $token): View
     {
@@ -263,6 +269,10 @@ class ConnectController extends Controller
             return $this->result('team_already_connected');
         }
 
+        $previousToken = $this->shouldRevokePreviousToken() && $connection->exists && $connection->hasApiToken()
+            ? $this->readEncrypted($connection, 'api_token', 'zapmizer: could not read the previous token to revoke it.')
+            : null;
+
         $switchingTeam = $connection->exists
             && $connection->zapmizer_team_id !== null
             && $connection->zapmizer_team_id !== $token->teamId;
@@ -273,7 +283,13 @@ class ConnectController extends Controller
 
         $reusedWebhook = $token->needsWebhookSecret()
             && $connection->webhook_id === $token->webhookId
-            && filled($connection->webhook_secret);
+            && filled($this->readEncrypted($connection, 'webhook_secret', 'zapmizer: unreadable webhook secret.'));
+
+        $this->ensureWritable($connection, 'api_token');
+
+        if (!$reusedWebhook && $token->webhookSecret !== null) {
+            $this->ensureWritable($connection, 'webhook_secret');
+        }
 
         $connection->forceFill([
             'api_token' => $token->token,
@@ -316,7 +332,71 @@ class ConnectController extends Controller
             ]);
         }
 
+        if ($previousToken !== null && !hash_equals($previousToken, $token->token)) {
+            $this->revokePreviousToken($connection, $previousToken);
+        }
+
         return $this->result($status);
+    }
+
+    private function shouldRevokePreviousToken(): bool
+    {
+        return filter_var(config('zapmizer.connect.revoke_previous_token', false), FILTER_VALIDATE_BOOLEAN);
+    }
+
+    /**
+     * The decrypted `$column`; `null` when it does not decrypt (APP_KEY
+     * changed), with `$warning` in the log.
+     */
+    private function readEncrypted(ZapmizerConnection $connection, string $column, string $warning): ?string
+    {
+        try {
+            $value = $connection->{$column};
+        } catch (DecryptException) {
+            Log::warning($warning, ['connection_id' => $connection->getKey()]);
+
+            return null;
+        }
+
+        return $value === null ? null : (string) $value;
+    }
+
+    /**
+     * Before a new value is written to an encrypted `$column`: Eloquent's
+     * dirty check decrypts the ORIGINAL value, and one that no longer
+     * decrypts would throw on save. Such a column is reset to `null` — the
+     * attribute and its original — and the new value written over it. The
+     * raw original decides, not the current attribute: forgetPairing()
+     * nulls the attribute but not the original.
+     */
+    private function ensureWritable(ZapmizerConnection $connection, string $column): void
+    {
+        $raw = $connection->getRawOriginal($column);
+
+        if ($raw === null) {
+            return;
+        }
+
+        try {
+            $connection->fromEncryptedString($raw);
+        } catch (DecryptException) {
+            $connection->forceFill([$column => null]);
+            $connection->syncOriginalAttribute($column);
+
+            Log::warning('zapmizer: unreadable stored value, overwritten.', [
+                'connection_id' => $connection->getKey(),
+                'column' => $column,
+            ]);
+        }
+    }
+
+    private function revokePreviousToken(ZapmizerConnection $connection, string $previous): void
+    {
+        $exception = $this->tryRevoke($previous);
+
+        if ($exception !== null) {
+            Log::warning('zapmizer: the previous token was not revoked.', ['connection_id' => $connection->getKey()] + $this->failureContext($exception));
+        }
     }
 
     /**
@@ -335,8 +415,12 @@ class ConnectController extends Controller
         }
 
         if ($connection !== null) {
-            if ($connection->hasApiToken()) {
-                $this->revokeOnDestroy($connection, (string) $connection->api_token);
+            $token = $connection->hasApiToken()
+                ? $this->readEncrypted($connection, 'api_token', 'zapmizer: could not read the token to revoke it.')
+                : null;
+
+            if ($token !== null) {
+                $this->revokeOnDestroy($connection, $token);
             }
 
             $connection->delete();
@@ -420,6 +504,10 @@ class ConnectController extends Controller
             $instance = $connection->instanceClient()->connection((int) $connection->bot_instance_id);
 
             return ['state' => $instance->state, 'is_online' => $instance->isOnline];
+        } catch (DecryptException) {
+            Log::warning('zapmizer: could not read the token to query the instance.', ['connection_id' => $connection->getKey()]);
+
+            return ['state' => 'reauth_required', 'is_online' => false];
         } catch (ZapmizerUnauthorizedException) {
             return ['state' => 'reauth_required', 'is_online' => false];
         } catch (InstanceGoneException) {

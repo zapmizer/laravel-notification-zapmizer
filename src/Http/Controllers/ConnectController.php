@@ -36,11 +36,12 @@ use Throwable;
  * implements Contracts\Connectable (through the Connectable trait).
  *
  * The popup reports its outcome through postMessage with a stable `status`:
- * `ok`, `denied`, `plan_limit`, `qr_unavailable`, `invalid_state`,
+ * `ok`, `denied`, `plan_limit`, `subscription_required`, `invalid_state`,
  * `exchange_failed`, `webhook_failed`, `team_already_connected`,
- * `no_connectable`. The JSON endpoints answer `zapmizer_unavailable` (503),
- * `partner_unauthorized` (503) and `no_connectable` (403) themselves: the
- * package's exceptions do not render.
+ * `no_connectable`. The `state` is checked before anything the popup brings
+ * back, `?error=` included. The JSON endpoints answer `zapmizer_unavailable`
+ * (503), `partner_unauthorized` (503) and `no_connectable` (403) themselves:
+ * the package's exceptions do not render.
  */
 class ConnectController extends Controller
 {
@@ -55,7 +56,7 @@ class ConnectController extends Controller
     protected const POPUP_ERRORS = [
         'access_denied' => 'denied',
         'plan_limit' => 'plan_limit',
-        'qr_unavailable' => 'qr_unavailable',
+        'subscription_required' => 'subscription_required',
     ];
 
     /**
@@ -141,12 +142,7 @@ class ConnectController extends Controller
      */
     public function callback(Request $request): View
     {
-        // pull() guarantees the single use of the state, on error paths too.
-        $pending = $request->session()->pull(self::SESSION_KEY);
-
-        if (($error = $request->query('error')) !== null) {
-            return $this->result(static::POPUP_ERRORS[$error] ?? 'exchange_failed');
-        }
+        $pending = $this->takePending($request, self::SESSION_KEY);
 
         try {
             $connectable = $this->connectable($request);
@@ -154,12 +150,26 @@ class ConnectController extends Controller
             return $this->result('no_connectable');
         }
 
-        if (!$this->validState($pending, (string) $request->query('state', ''), $connectable)) {
+        if (!$this->validState($pending, $this->queryString($request, 'state'), $connectable)) {
             return $this->result('invalid_state');
         }
 
+        if (isset($pending['code_hash']) && !hash_equals((string) $pending['code_hash'], hash('sha256', $this->queryString($request, 'code')))) {
+            return $this->result('invalid_state');
+        }
+
+        $this->pendingWebhookKey = is_string($pending['webhook_key'] ?? null) ? $pending['webhook_key'] : null;
+
+        if (($error = $this->errorParam($request)) !== null) {
+            return $this->result($this->popupStatus($error));
+        }
+
+        if (($code = $this->queryString($request, 'code')) === '') {
+            return $this->result('exchange_failed');
+        }
+
         try {
-            $token = $this->partnerClient->exchangeCode((string) $request->query('code', ''));
+            $token = $this->partnerClient->exchangeCode($code);
 
             if ($token === null) {
                 return $this->result('exchange_failed');
@@ -381,13 +391,28 @@ class ConnectController extends Controller
             || preg_match('#Integrity constraint violation: 1062|UNIQUE constraint failed: |column(s)? .* (is|are) not unique|Cannot insert duplicate key(?: row)? in object#i', $message) === 1;
     }
 
+    /**
+     * The status for the hosted page's `?error=`. An unknown one (or a
+     * value that is not a string) is logged and becomes `exchange_failed`.
+     */
+    protected function popupStatus(string $error): string
+    {
+        if (isset(static::POPUP_ERRORS[$error])) {
+            return static::POPUP_ERRORS[$error];
+        }
+
+        Log::warning('zapmizer: unknown connect error.', ['error' => mb_substr($error, 0, 100)]);
+
+        return 'exchange_failed';
+    }
+
     protected function result(string $status): View
     {
         $messages = [
             'ok' => 'WhatsApp number connected.',
             'denied' => 'Authorization cancelled.',
             'plan_limit' => 'The Zapmizer plan has no room for another WhatsApp number. Free one up on Zapmizer, or upgrade the plan, and try again.',
-            'qr_unavailable' => 'The Zapmizer team cannot pair a number by QR code. Check the team settings on Zapmizer and try again.',
+            'subscription_required' => 'Your Zapmizer account was linked, but it has no active subscription. Connect again to subscribe.',
             'invalid_state' => 'This connection session is invalid or has expired. Close this window and try again.',
             'exchange_failed' => 'The connection could not be completed. Close this window and try again.',
             'webhook_failed' => 'The number was paired, but the receiver could not be set up. Close this window and try again.',

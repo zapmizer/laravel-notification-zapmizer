@@ -1027,12 +1027,276 @@ class ConnectRouteTest extends TestCase
             'another connectable' => [['state' => 's', 'connectable' => 'Other:1', 'expires_at' => $future], ['code' => 'c', 'state' => 's'], 'invalid_state'],
             'expired' => [['state' => 's', 'connectable' => $valid, 'expires_at' => now()->subMinute()->toIso8601String()], ['code' => 'c', 'state' => 's'], 'invalid_state'],
             'user denied' => [['state' => 's', 'connectable' => $valid, 'expires_at' => $future], ['error' => 'access_denied', 'state' => 's'], 'denied'],
-            // The hosted page could not pair: the plan is full, or the team
-            // cannot pair by QR code. Each one is its own status for the screen.
+            // The hosted page could not pair: the plan is full. It is its own
+            // status for the screen.
             'plan limit' => [['state' => 's', 'connectable' => $valid, 'expires_at' => $future], ['error' => 'plan_limit', 'state' => 's'], 'plan_limit'],
-            'qr unavailable' => [['state' => 's', 'connectable' => $valid, 'expires_at' => $future], ['error' => 'qr_unavailable', 'state' => 's'], 'qr_unavailable'],
             'unknown error' => [['state' => 's', 'connectable' => $valid, 'expires_at' => $future], ['error' => 'something_new', 'state' => 's'], 'exchange_failed'],
         ];
+    }
+
+    protected function assertNothingHappened(): void
+    {
+        $this->assertCount(0, $this->history);
+        $this->assertNull($this->team()->zapmizerConnection);
+    }
+
+    public function testE1ACancelledPopupIsDenied()
+    {
+        $this->fakeHttp();
+        $this->actingAsUser();
+
+        $this->withSession($this->pendingSession())
+            ->get(route('zapmizer.connect.callback', ['error' => 'access_denied', 'state' => 's']))
+            ->assertOk()
+            ->assertSee('status: "denied"', false);
+
+        $this->assertNothingHappened();
+    }
+
+    /** @dataProvider hostedPageEndings */
+    #[DataProvider('hostedPageEndings')]
+    public function testE2TheHostedPageEndedWithoutACode(string $error, string $message)
+    {
+        $this->fakeHttp();
+        $this->actingAsUser();
+
+        $this->withSession($this->pendingSession())
+            ->get(route('zapmizer.connect.callback', ['error' => $error, 'state' => 's']))
+            ->assertOk()
+            ->assertSee("status: \"{$error}\"", false)
+            ->assertSee($message);
+
+        $this->assertNothingHappened();
+    }
+
+    public static function hostedPageEndings(): array
+    {
+        return [
+            'plan_limit' => ['plan_limit', 'The Zapmizer plan has no room for another WhatsApp number.'],
+            'subscription_required' => ['subscription_required', 'Your Zapmizer account was linked, but it has no active subscription. Connect again to subscribe.'],
+        ];
+    }
+
+    /** @dataProvider unknownErrors */
+    #[DataProvider('unknownErrors')]
+    public function testE3AnUnknownErrorIsAnExchangeFailure(string $error)
+    {
+        Log::spy();
+        $this->fakeHttp();
+        $this->actingAsUser();
+
+        $this->withSession($this->pendingSession())
+            ->get(route('zapmizer.connect.callback', ['error' => $error, 'code' => 'c', 'state' => 's']))
+            ->assertOk()
+            ->assertSee('status: "exchange_failed"', false);
+
+        Log::shouldHaveReceived('warning')->with('zapmizer: unknown connect error.', ['error' => $error])->once();
+        $this->assertNothingHappened();
+    }
+
+    public static function unknownErrors(): array
+    {
+        return ['qr_unavailable' => ['qr_unavailable'], 'xyz' => ['xyz']];
+    }
+
+    public function testE3AnEmptyErrorIsNoError()
+    {
+        Log::spy();
+        $this->fakeHttp();
+        $this->actingAsUser();
+
+        $this->withSession($this->pendingSession())
+            ->get(route('zapmizer.connect.callback') . '?error=&code=&state=s')
+            ->assertOk()
+            ->assertSee('status: "exchange_failed"', false);
+
+        Log::shouldNotHaveReceived('warning');
+        $this->assertNothingHappened();
+    }
+
+    /** @dataProvider errorsWithABadState */
+    #[DataProvider('errorsWithABadState')]
+    public function testE4TheStateComesBeforeTheError(array $session, array $query)
+    {
+        $this->fakeHttp();
+        $this->actingAsUser();
+        $team = $this->team();
+        $session = array_map(fn ($value) => is_callable($value) ? $value($team) : $value, $session);
+
+        $this->withSession([ConnectController::SESSION_KEY => $session])
+            ->get(route('zapmizer.connect.callback', $query))
+            ->assertOk()
+            ->assertSee('status: "invalid_state"', false);
+
+        $this->assertNothingHappened();
+    }
+
+    public static function errorsWithABadState(): array
+    {
+        $valid = fn (Team $team) => Team::class . ':' . $team->id;
+        $future = now()->addMinutes(5)->toIso8601String();
+
+        return [
+            'expired state' => [['state' => 's', 'connectable' => $valid, 'expires_at' => now()->subMinute()->toIso8601String()], ['error' => 'access_denied', 'state' => 's']],
+            'no state in the query' => [['state' => 's', 'connectable' => $valid, 'expires_at' => $future], ['error' => 'access_denied']],
+            'another connectable' => [['state' => 's', 'connectable' => 'Other:1', 'expires_at' => $future], ['error' => 'access_denied', 'state' => 's']],
+        ];
+    }
+
+    /** @dataProvider arrayErrors */
+    #[DataProvider('arrayErrors')]
+    public function testE5AnArrayErrorIsUnknown(array $query)
+    {
+        Log::spy();
+        $this->fakeHttp();
+        $this->actingAsUser();
+
+        $this->withSession($this->pendingSession())
+            ->get(route('zapmizer.connect.callback', $query))
+            ->assertOk()
+            ->assertSee('status: "exchange_failed"', false);
+
+        Log::shouldHaveReceived('warning')->with('zapmizer: unknown connect error.', ['error' => '(array)'])->once();
+        $this->assertNothingHappened();
+    }
+
+    public static function arrayErrors(): array
+    {
+        return [
+            'without a code' => [['error' => ['x'], 'state' => 's']],
+            'with a code' => [['error' => ['x'], 'state' => 's', 'code' => 'c']],
+        ];
+    }
+
+    /** @dataProvider arrayStatesAndCodes */
+    #[DataProvider('arrayStatesAndCodes')]
+    public function testE5AnArrayStateOrCodeNeverAnswers500(array $query, string $status)
+    {
+        $this->fakeHttp();
+        $this->actingAsUser();
+
+        $this->withSession($this->pendingSession())
+            ->get(route('zapmizer.connect.callback', $query))
+            ->assertOk()
+            ->assertSee("status: \"{$status}\"", false);
+
+        $this->assertNothingHappened();
+    }
+
+    public static function arrayStatesAndCodes(): array
+    {
+        return [
+            'array state' => [['state' => ['x'], 'code' => 'c'], 'invalid_state'],
+            'array code' => [['state' => 's', 'code' => ['x']], 'exchange_failed'],
+        ];
+    }
+
+    public function testT1WithoutAStateInTheQuery()
+    {
+        $this->fakeHttp();
+        $this->actingAsUser();
+        $pending = $this->pendingSession();
+
+        $this->withSession($pending)
+            ->get(route('zapmizer.connect.callback', ['code' => 'c']))
+            ->assertOk()
+            ->assertSee('status: "invalid_state"', false);
+
+        $this->assertSame($pending[ConnectController::SESSION_KEY], session(ConnectController::SESSION_KEY));
+        $this->assertNothingHappened();
+    }
+
+    public function testT4TheSameCallbackTwiceExchangesOnce()
+    {
+        $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer());
+        $this->actingAsUser();
+
+        $this->startConnect()->assertOk();
+        $url = route('zapmizer.connect.callback', ['code' => 'c', 'state' => session(ConnectController::SESSION_KEY)['state']]);
+
+        $this->get($url)->assertOk()->assertSee('status: "ok"', false);
+        $this->get($url)->assertOk()->assertSee('status: "invalid_state"', false);
+
+        $this->assertCount(2, $this->history);
+    }
+
+    public function testT5WithoutAConnectableTheStateIsSpent()
+    {
+        $this->fakeHttp();
+        $this->actingAsUser();
+        $pending = $this->pendingSession();
+        config()->set('zapmizer.connect.resolver', ResolvesNothing::class);
+
+        $this->withSession($pending)
+            ->get(route('zapmizer.connect.callback', ['code' => 'c', 'state' => 's']))
+            ->assertOk()
+            ->assertSee('status: "no_connectable"', false);
+
+        $this->assertNull(session(ConnectController::SESSION_KEY));
+        $this->assertCount(0, $this->history);
+    }
+
+    public function testT6TheCallbackOfAnOlderTabLeavesTheNewerPending()
+    {
+        $this->fakeHttp($this->sessionCreated(), $this->sessionCreated(), $this->tokenAnswer());
+        $this->actingAsUser();
+
+        $this->startConnect()->assertOk();
+        $a = session(ConnectController::SESSION_KEY)['state'];
+        $this->startConnect()->assertOk();
+        $b = session(ConnectController::SESSION_KEY);
+
+        $this->get(route('zapmizer.connect.callback', ['code' => 'c', 'state' => $a]))
+            ->assertOk()
+            ->assertSee('status: "invalid_state"', false);
+        $this->assertSame($b, session(ConnectController::SESSION_KEY));
+
+        $this->get(route('zapmizer.connect.callback', ['code' => 'c', 'state' => $b['state']]))
+            ->assertOk()
+            ->assertSee('status: "ok"', false);
+
+        $this->assertNotNull($this->team()->zapmizerConnection);
+        $this->assertCount(3, $this->history);
+    }
+
+    /** @dataProvider matchingStatesThatDoNotHold */
+    #[DataProvider('matchingStatesThatDoNotHold')]
+    public function testT7AMatchingStateOfAnotherConnectableOrExpiredIsSpent(array $session)
+    {
+        $this->fakeHttp();
+        $this->actingAsUser();
+        $team = $this->team();
+        $session = array_map(fn ($value) => is_callable($value) ? $value($team) : $value, $session);
+
+        $this->withSession([ConnectController::SESSION_KEY => $session])
+            ->get(route('zapmizer.connect.callback', ['code' => 'c', 'state' => 's']))
+            ->assertOk()
+            ->assertSee('status: "invalid_state"', false);
+
+        $this->assertNull(session(ConnectController::SESSION_KEY));
+        $this->assertNothingHappened();
+    }
+
+    public static function matchingStatesThatDoNotHold(): array
+    {
+        return [
+            'another connectable' => [['state' => 's', 'connectable' => 'Other:1', 'expires_at' => now()->addMinutes(5)->toIso8601String()]],
+            'expired' => [['state' => 's', 'connectable' => fn (Team $team) => Team::class . ':' . $team->id, 'expires_at' => now()->subMinute()->toIso8601String()]],
+        ];
+    }
+
+    public function testAnUnknownErrorIsLoggedCutAt100Characters()
+    {
+        Log::spy();
+        $this->fakeHttp();
+        $this->actingAsUser();
+
+        $this->withSession($this->pendingSession())
+            ->get(route('zapmizer.connect.callback', ['error' => str_repeat('é', 300), 'state' => 's']))
+            ->assertOk()
+            ->assertSee('status: "exchange_failed"', false);
+
+        Log::shouldHaveReceived('warning')->with('zapmizer: unknown connect error.', ['error' => str_repeat('é', 100)])->once();
     }
 
     public function testCallbackReportsAFailedExchange()

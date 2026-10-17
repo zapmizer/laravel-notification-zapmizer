@@ -2,15 +2,19 @@
 
 namespace NotificationChannels\Zapmizer\Test\Unit;
 
+use Closure;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Testing\TestResponse;
 use InvalidArgumentException;
 use NotificationChannels\Zapmizer\Connect\ResolvesAuthenticatedUser;
+use NotificationChannels\Zapmizer\Events\NumberConnected;
 use NotificationChannels\Zapmizer\Http\Controllers\ConnectController;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
 use NotificationChannels\Zapmizer\Exceptions\NoConnectableException;
@@ -1221,6 +1225,99 @@ class ConnectRouteTest extends TestCase
 
         $this->assertNull($this->team()->zapmizerConnection);
         $this->assertCount(1, $this->history);
+    }
+
+    // --- events -----------------------------------------------------------
+
+    public function testN1AConnectedNumberIsAnnounced()
+    {
+        Event::fake([NumberConnected::class]);
+        $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer());
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+
+        Event::assertDispatchedTimes(NumberConnected::class, 1);
+        Event::assertDispatched(NumberConnected::class, fn (NumberConnected $event) => $event->connectable->is($this->team())
+            && $event->connection->exists
+            && $event->connection->is($this->team()->zapmizerConnection));
+    }
+
+    public function testN2AFailingListenerDoesNotUndoTheConnect()
+    {
+        $this->recordReports();
+        Event::listen(NumberConnected::class, fn () => throw new \RuntimeException('listener bug'));
+        $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer());
+        $this->actingAsUser();
+
+        $this->connect()->assertOk()->assertSee('status: "ok"', false);
+
+        $connection = $this->team()->zapmizerConnection;
+        $this->assertNotNull($connection);
+        $this->assertEquals('1|sanctum', $connection->api_token);
+        $this->assertTrue($connection->is_active);
+        $this->assertCount(1, $this->reported);
+        $this->assertSame('listener bug', $this->reported[0]->getMessage());
+    }
+
+    public function testN3TheWebhookFailedConnectIsAnnounced()
+    {
+        Event::fake([NumberConnected::class]);
+        $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer(['webhook_secret' => null]));
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "webhook_failed"', false);
+
+        Event::assertDispatchedTimes(NumberConnected::class, 1);
+    }
+
+    /** @dataProvider nothingStored */
+    #[DataProvider('nothingStored')]
+    public function testN4NothingIsAnnouncedWithoutAStoredConnection(Closure $scenario, string $status)
+    {
+        Event::fake([NumberConnected::class]);
+        $this->actingAsUser();
+
+        $scenario($this)->assertOk()->assertSee('status: "' . $status . '"', false);
+
+        Event::assertNotDispatched(NumberConnected::class);
+    }
+
+    public static function nothingStored(): array
+    {
+        return [
+            'exchange 404' => [function (self $test) {
+                $test->fakeHttp(new Response(404, [], '{"message":"Record not found."}'));
+
+                return $test->callbackWithPending(['code' => 'c', 'state' => 's']);
+            }, 'exchange_failed'],
+            'token without a number' => [function (self $test) {
+                $test->fakeHttp($test->tokenAnswer(['token' => '2|sanctum', 'bot_instance_id' => null]), new Response(204));
+
+                return $test->callbackWithPending(['code' => 'c', 'state' => 's']);
+            }, 'exchange_failed'],
+            'team connected elsewhere' => [function (self $test) {
+                $test->fakeHttp($test->tokenAnswer(['token' => '2|sanctum']), new Response(204));
+                Team::create(['name' => 'Other'])->zapmizerConnection()->create(['api_token' => 'other-token', 'zapmizer_team_id' => 7, 'is_active' => true]);
+
+                return $test->callbackWithPending(['code' => 'c', 'state' => 's']);
+            }, 'team_already_connected'],
+            'invalid state' => [function (self $test) {
+                $test->fakeHttp();
+
+                return $test->get(route('zapmizer.connect.callback', ['code' => 'c', 'state' => 's']));
+            }, 'invalid_state'],
+            'denied' => [function (self $test) {
+                $test->fakeHttp();
+
+                return $test->callbackWithPending(['error' => 'access_denied', 'state' => 's']);
+            }, 'denied'],
+        ];
+    }
+
+    protected function callbackWithPending(array $query): TestResponse
+    {
+        return $this->withSession($this->pendingSession())->get(route('zapmizer.connect.callback', $query));
     }
 
     // --- the token of the exchange ---------------------------------------

@@ -17,6 +17,7 @@ use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Connect\PartnerClient;
 use NotificationChannels\Zapmizer\Contracts\Connectable;
 use NotificationChannels\Zapmizer\Contracts\ResolvesConnectable;
+use NotificationChannels\Zapmizer\Events\NumberConnected;
 use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;
 use NotificationChannels\Zapmizer\Exceptions\NoConnectableException;
 use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;
@@ -255,7 +256,8 @@ class ConnectController extends Controller
      * A stored value that no longer decrypts (APP_KEY changed) counts as
      * absent, with a warning, and is overwritten. With
      * `zapmizer.connect.revoke_previous_token` on, the token the row held
-     * before is revoked once the new one is saved.
+     * before is revoked once the new one is saved. Then NumberConnected
+     * fires; a listener that throws is reported and the status stays.
      */
     protected function storeToken(Model&Connectable $connectable, ConnectToken $token): View
     {
@@ -335,6 +337,8 @@ class ConnectController extends Controller
         if ($previousToken !== null && !hash_equals($previousToken, $token->token)) {
             $this->revokePreviousToken($connection, $previousToken);
         }
+
+        rescue(fn () => event(new NumberConnected($connectable, $connection)), report: true);
 
         return $this->result($status);
     }

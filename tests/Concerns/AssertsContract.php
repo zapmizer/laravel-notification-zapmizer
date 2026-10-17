@@ -103,6 +103,23 @@ trait AssertsContract
         $this->addToAssertionCount(1);
     }
 
+    protected function assertMatchesSchema(string $pointer, mixed $data): void
+    {
+        $data = json_decode(json_encode($data, JSON_THROW_ON_ERROR), false, 512, JSON_THROW_ON_ERROR);
+
+        $result = self::contractValidator()->validate($data, (object) ['$ref' => self::contractId() . $pointer]);
+
+        if (!$result->isValid()) {
+            $this->fail(sprintf(
+                'The data does not match %s in the contract snapshot: %s',
+                $pointer,
+                json_encode((new ErrorFormatter())->format($result->error()), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+            ));
+        }
+
+        $this->addToAssertionCount(1);
+    }
+
     private static function contractValidator(): Validator
     {
         if (self::$contractValidator === null) {

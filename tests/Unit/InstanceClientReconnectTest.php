@@ -2,11 +2,8 @@
 
 namespace NotificationChannels\Zapmizer\Test\Unit;
 
-use GuzzleHttp\Client as HttpClient;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
-use GuzzleHttp\HandlerStack;
-use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\NoSeekStream;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
@@ -15,7 +12,7 @@ use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
 use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Connect\ReconnectResult;
-use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
+use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
 use NotificationChannels\Zapmizer\Exceptions\ErrorCode;
 use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
@@ -24,6 +21,7 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
 use NotificationChannels\Zapmizer\Test\Concerns\AssertsContract;
+use NotificationChannels\Zapmizer\Test\Concerns\FakesZapmizerHttp;
 use NotificationChannels\Zapmizer\Test\Fixtures\RecordingTransport;
 use NotificationChannels\Zapmizer\Test\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -31,6 +29,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 class InstanceClientReconnectTest extends TestCase
 {
     use AssertsContract;
+    use FakesZapmizerHttp;
 
     private const NEEDS_RECONNECT_MESSAGE = 'O número precisa ser reconectado pelo cliente.';
 
@@ -39,10 +38,9 @@ class InstanceClientReconnectTest extends TestCase
 
     protected function makeClient(MockHandler $mock): InstanceClient
     {
-        $stack = HandlerStack::create($mock);
-        $stack->push(Middleware::history($this->history));
+        $this->fakeZapmizer($mock);
 
-        return new InstanceClient('team-token', new GuzzleTransport(new HttpClient(['handler' => $stack])), 'http://localhost/api', '2025-06-27');
+        return new InstanceClient('team-token', new LaravelHttpTransport(), 'http://localhost/api', '2025-06-27');
     }
 
     protected function reconnectWith(Response $response): ReconnectResult

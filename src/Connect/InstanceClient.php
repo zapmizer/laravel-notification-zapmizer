@@ -2,9 +2,9 @@
 
 namespace NotificationChannels\Zapmizer\Connect;
 
-use NotificationChannels\Zapmizer\Connect\Concerns\BuildsZapmizerRequests;
-use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
+use Illuminate\Container\Container;
 use InvalidArgumentException;
+use NotificationChannels\Zapmizer\Connect\Concerns\BuildsZapmizerRequests;
 use NotificationChannels\Zapmizer\Contracts\Transport;
 use NotificationChannels\Zapmizer\Exceptions\ErrorCode;
 use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;
@@ -14,6 +14,9 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
 use NotificationChannels\Zapmizer\Support\ApiError;
 use NotificationChannels\Zapmizer\Support\JsonResponse;
 use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\StreamInterface;
+use RuntimeException;
+use Throwable;
 
 /**
  * Class InstanceClient.
@@ -28,10 +31,6 @@ class InstanceClient
 {
     use BuildsZapmizerRequests;
 
-    public const MEDIA_CONNECT_TIMEOUT = 60;
-
-    public const MEDIA_TIMEOUT = 600;
-
     protected Transport $transport;
 
     protected string $apiBaseUri;
@@ -42,7 +41,7 @@ class InstanceClient
         ?string $apiBaseUri = null,
         protected ?string $apiVersion = null,
     ) {
-        $this->transport = $transport ?? new GuzzleTransport();
+        $this->transport = $transport ?? Container::getInstance()->make(Transport::class);
         $this->apiBaseUri = rtrim($apiBaseUri ?? 'https://app.zapmizer.com/api/', '/');
     }
 
@@ -233,8 +232,9 @@ class InstanceClient
      * `downloading` (ask again later — see `ZapmizerConnection::awaitMedia()`)
      * or `unavailable` (it will never come: outside the 600 s window from
      * `$timestamp`, a type Zapmizer does not download, a view-once message).
-     * On `attached` the bytes are streamed into a temporary file owned by the
-     * returned object — never held in memory as a string.
+     * On `attached` the bytes are copied into a temporary file owned by the
+     * returned object; on the way the transport keeps them in `php://temp`
+     * (memory up to 2 MB, disk beyond).
      *
      * A 200 here is binary by design, so the JSON guard the other endpoints
      * run through is skipped for it; 202 and 404 are JSON with `media_state`.
@@ -252,47 +252,17 @@ class InstanceClient
      */
     public function media(int $botInstanceId, string $messageId, int $timestamp): MediaDownload
     {
-        $path = $this->temporaryMediaPath();
-        $response = null;
-        $download = null;
+        $response = $this->request('GET', '/whatsapp-messages/media', [
+            'query' => [
+                'bot_instance_id' => $botInstanceId,
+                'message_id' => $messageId,
+                'timestamp' => $timestamp,
+            ],
+            'connect_timeout' => ZapmizerApi::TRANSFER_CONNECT_TIMEOUT,
+            'timeout' => ZapmizerApi::TRANSFER_TIMEOUT,
+        ], expectsJson: false);
 
-        try {
-            $response = $this->request('GET', '/whatsapp-messages/media', array_merge([
-                'query' => [
-                    'bot_instance_id' => $botInstanceId,
-                    'message_id' => $messageId,
-                    'timestamp' => $timestamp,
-                ],
-                'connect_timeout' => self::MEDIA_CONNECT_TIMEOUT,
-                'timeout' => self::MEDIA_TIMEOUT,
-            ], $path === null ? ['stream' => true] : ['sink' => $path]), expectsJson: false);
-
-            return $download = $this->mediaFrom($response, $path);
-        } finally {
-            if ($response !== null && $this->ownsBody($response, $path)) {
-                $response->getBody()->close();
-            }
-
-            if ($path !== null && ($download === null || !$download->isAttached()) && is_file($path)) {
-                @unlink($path);
-            }
-        }
-    }
-
-    /**
-     * Whether the body is one this call opened and must close — the sink
-     * file, or, under `stream`, the 200 left unread on the connection (the
-     * other answers are read whole). A fake (`Http::fake` in array form)
-     * hands back the same response on every call; closing its body would
-     * break the next one.
-     */
-    protected function ownsBody(ResponseInterface $response, ?string $path): bool
-    {
-        if ($path === null) {
-            return $response->getStatusCode() === 200;
-        }
-
-        return $response->getBody()->getMetadata('uri') === $path;
+        return $this->mediaFrom($response);
     }
 
     protected function temporaryMediaPath(): ?string
@@ -302,7 +272,7 @@ class InstanceClient
         return $path === false ? null : $path;
     }
 
-    protected function mediaFrom(ResponseInterface $response, ?string $path): MediaDownload
+    protected function mediaFrom(ResponseInterface $response): MediaDownload
     {
         $this->guardUnauthorized($response);
 
@@ -317,15 +287,14 @@ class InstanceClient
         }
 
         if ($status === 200) {
-            if ($path === null) {
-                throw ZapmizerConnectException::unexpectedResponse('could not create a temporary file for the media');
-            }
+            $path = $this->spool($response->getBody());
+            $size = $this->storedSize($response, $path);
 
             return MediaDownload::attached(
-                path: $this->storedMedia($response, $path),
+                path: $path,
                 mimeType: $response->hasHeader('Content-Type') ? $response->getHeaderLine('Content-Type') : null,
                 filename: $this->filenameFrom($response->getHeaderLine('Content-Disposition')),
-                size: $response->hasHeader('Content-Length') ? (int) $response->getHeaderLine('Content-Length') : null,
+                size: $size,
             );
         }
 
@@ -348,51 +317,73 @@ class InstanceClient
         throw ZapmizerConnectException::unexpectedResponse("HTTP {$status} on the media endpoint");
     }
 
-    protected function storedMedia(ResponseInterface $response, string $path): string
+    /**
+     * @throws ZapmizerConnectException
+     */
+    protected function spool(StreamInterface $body): string
     {
-        clearstatcache(true, $path);
-        $total = (int) filesize($path);
-        $body = $response->getBody();
+        if (!$body->isReadable()) {
+            throw ZapmizerConnectException::unexpectedResponse('the media body was lost before it could be stored');
+        }
 
-        if ($total === 0) {
-            if (!$body->isReadable()) {
-                throw ZapmizerConnectException::unexpectedResponse('the media body was lost before it could be stored');
+        $path = $this->temporaryMediaPath();
+        $target = $path === null ? false : @fopen($path, 'wb');
+
+        if ($target === false) {
+            if ($path !== null) {
+                @unlink($path);
             }
 
+            throw ZapmizerUnavailableException::dueTo();
+        }
+
+        try {
             if ($body->isSeekable()) {
                 $body->rewind();
             }
 
-            $target = fopen($path, 'wb');
+            while (!$body->eof()) {
+                $chunk = $body->read(65536);
 
-            try {
-                while (!$body->eof()) {
-                    $chunk = $body->read(65536);
-
-                    if ($chunk === '') {
-                        break;
-                    }
-
-                    $total += (int) fwrite($target, $chunk);
+                if ($chunk === '') {
+                    break;
                 }
-            } finally {
-                fclose($target);
+
+                if (@fwrite($target, $chunk) !== strlen($chunk)) {
+                    throw new RuntimeException('Could not write the media to the temporary file.');
+                }
             }
+        } catch (Throwable $exception) {
+            fclose($target);
+            @unlink($path);
+
+            throw $exception instanceof RuntimeException ? ZapmizerUnavailableException::dueTo($exception) : $exception;
         }
 
+        fclose($target);
+
+        return $path;
+    }
+
+    protected function storedSize(ResponseInterface $response, string $path): int
+    {
+        clearstatcache(true, $path);
+        $size = (int) @filesize($path);
         $expected = $response->hasHeader('Content-Length') && !$response->hasHeader('Transfer-Encoding')
             ? (int) $response->getHeaderLine('Content-Length')
             : null;
 
-        if ($expected !== null && $total < $expected) {
-            if ($total === 0 && !$body->isSeekable()) {
+        if ($expected !== null && $size < $expected) {
+            @unlink($path);
+
+            if ($size === 0 && !$response->getBody()->isSeekable()) {
                 throw ZapmizerConnectException::unexpectedResponse('the media body was lost before it could be stored');
             }
 
             throw ZapmizerUnavailableException::dueTo();
         }
 
-        return $path;
+        return $size;
     }
 
     /**

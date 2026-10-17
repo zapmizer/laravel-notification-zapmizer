@@ -24,6 +24,9 @@
         "orchestra/testbench": "^6.48 || ^7.58 || ^8.18 || ^9.0 || ^10.0 || ^11.0",
         "phpunit/phpunit": "^9.5.10 || ^10.0 || ^11.0 || ^12.0"
     },
+    "suggest": {
+        "ext-curl": "Enforces the 600 s total limit of media downloads; without it Guzzle's stream handler applies the timeout per read."
+    },
     "autoload": {
         "psr-4": {
             "NotificationChannels\\Zapmizer\\": "src"
@@ -32,11 +35,7 @@
     "autoload-dev": {
         "psr-4": {
             "NotificationChannels\\Zapmizer\\Test\\": "tests"
-        },
-        "classmap": [
-            "examples/",
-            "tests/Examples/"
-        ]
+        }
     },
     "scripts": {
         "contract:update": "@php tests/contract/update.php"

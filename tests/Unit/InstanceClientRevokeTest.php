@@ -2,36 +2,34 @@
 
 namespace NotificationChannels\Zapmizer\Test\Unit;
 
-use GuzzleHttp\Client as HttpClient;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
-use GuzzleHttp\HandlerStack;
-use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use NotificationChannels\Zapmizer\Connect\InstanceClient;
-use NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport;
+use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
 use NotificationChannels\Zapmizer\Test\Concerns\AssertsContract;
+use NotificationChannels\Zapmizer\Test\Concerns\FakesZapmizerHttp;
 use NotificationChannels\Zapmizer\Test\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 class InstanceClientRevokeTest extends TestCase
 {
     use AssertsContract;
+    use FakesZapmizerHttp;
 
     /** @var array<int, array{request: Request}> */
     protected array $history = [];
 
     protected function makeClient(MockHandler $mock): InstanceClient
     {
-        $stack = HandlerStack::create($mock);
-        $stack->push(Middleware::history($this->history));
+        $this->fakeZapmizer($mock);
 
-        return new InstanceClient('team-token', new GuzzleTransport(new HttpClient(['handler' => $stack])), 'http://localhost/api', '2025-06-27');
+        return new InstanceClient('team-token', new LaravelHttpTransport(), 'http://localhost/api', '2025-06-27');
     }
 
     /** @dataProvider answersThatMeanRevokedFromTheContract */

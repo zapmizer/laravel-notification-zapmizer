@@ -26,7 +26,7 @@ return [
     ],
 
     'http' => [
-        'transport' => \NotificationChannels\Zapmizer\Connect\Transports\GuzzleTransport::class,
+        'transport' => \NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport::class,
         'connect_timeout' => env('ZAPMIZER_HTTP_CONNECT_TIMEOUT'),
         'timeout' => env('ZAPMIZER_HTTP_TIMEOUT'),
     ],

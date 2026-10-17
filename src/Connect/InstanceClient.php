@@ -3,7 +3,10 @@
 namespace NotificationChannels\Zapmizer\Connect;
 
 use Illuminate\Container\Container;
+use InvalidArgumentException;
+use NotificationChannels\Zapmizer\Connect\Concerns\BuildsZapmizerRequests;
 use NotificationChannels\Zapmizer\Contracts\Transport;
+use NotificationChannels\Zapmizer\Exceptions\ErrorCode;
 use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
@@ -18,15 +21,16 @@ use Throwable;
 /**
  * Class InstanceClient.
  *
- * Zapmizer's instance-connection and webhook endpoints, authenticated by
- * the connected team's token (the one the connect flow stored). Pairing
- * itself happens on Zapmizer's hosted page — this client only reads the
- * state of the paired instance and manages the webhook. The token is
- * always per connection — there is no single-tenant fallback on purpose:
- * resolve it through `ZapmizerConnection::instanceClient()`.
+ * Zapmizer's endpoints that act for one connection, authenticated by the
+ * connected team's token (the one the connect flow stored). Pairing itself
+ * happens on Zapmizer's hosted page, not here. The token is always per
+ * connection — there is no single-tenant fallback on purpose: resolve it
+ * through `ZapmizerConnection::instanceClient()`.
  */
 class InstanceClient
 {
+    use BuildsZapmizerRequests;
+
     protected Transport $transport;
 
     protected string $apiBaseUri;
@@ -69,6 +73,105 @@ class InstanceClient
         $this->guardFailure($response);
 
         return InstanceConnection::fromArray($this->decode($response));
+    }
+
+    /**
+     * @throws InvalidArgumentException
+     * @throws ZapmizerConnectException
+     */
+    public function reconnect(int $botInstanceId, string $redirectUri, ?string $state = null, ?int $expiresIn = null): ReconnectResult
+    {
+        $this->guardState($state);
+
+        $response = $this->request('POST', "/bot-instances/{$botInstanceId}/reconnect", [
+            'json' => $this->withoutNulls([
+                'redirect_uri' => $redirectUri,
+                'state' => $state,
+                'expires_in' => $this->clampExpiresIn($expiresIn),
+            ]),
+        ]);
+
+        $this->guardUnauthorized($response);
+
+        $status = $response->getStatusCode();
+
+        if ($status === 404) {
+            throw new InstanceGoneException(ApiError::from($response), $botInstanceId);
+        }
+
+        if ($status === 409) {
+            $error = ApiError::from($response);
+
+            if ($error->error === ErrorCode::NEEDS_RECONNECT) {
+                return ReconnectResult::fromNeedsReconnect($error->payload);
+            }
+
+            throw ZapmizerApi::failure($error);
+        }
+
+        $this->guardFailure($response);
+
+        if ($status !== 200 && $status !== 202) {
+            throw ZapmizerConnectException::unexpectedResponse("HTTP {$status} on the reconnect endpoint");
+        }
+
+        $this->decode($response);
+
+        return new ReconnectResult($status === 200 ? ReconnectResult::ONLINE : ReconnectResult::STARTING);
+    }
+
+    /**
+     * @throws ZapmizerConnectException
+     */
+    public function revokeToken(): void
+    {
+        $response = $this->request('DELETE', '/connect/token', expectsJson: false);
+
+        $status = $response->getStatusCode();
+
+        if ($status === 204 || $status === 401) {
+            return;
+        }
+
+        $this->guardFailure($response);
+
+        throw ZapmizerConnectException::unexpectedResponse("HTTP {$status} on the token revocation endpoint");
+    }
+
+    /**
+     * @param array<string, mixed> $appearance
+     *
+     * @throws ZapmizerConnectException
+     */
+    public function conversationSession(
+        string $phone,
+        string $parentOrigin,
+        array $appearance = [],
+        ?string $userId = null,
+        ?string $userName = null,
+    ): EmbedSession {
+        return $this->embedSession($this->withoutNulls([
+            'component' => 'conversation',
+            'phone' => $phone,
+            'parent_origin' => $parentOrigin,
+            'appearance' => $this->withoutNulls($appearance) ?: null,
+            'user' => $this->embedUser($userId, $userName),
+        ]));
+    }
+
+    /**
+     * @param array<string, mixed> $appearance
+     *
+     * @throws ZapmizerConnectException
+     */
+    public function inboxSession(string $parentOrigin, array $appearance = [], ?string $userId = null, ?string $userName = null): EmbedSession
+    {
+        return $this->embedSession($this->withoutNulls([
+            'component' => 'inbox',
+            'parent_origin' => $parentOrigin,
+            'appearance' => $this->withoutNulls($appearance) ?: null,
+            'user' => $this->embedUser($userId, $userName),
+        ]));
     }
 
     /**
@@ -302,6 +405,29 @@ class InstanceClient
         }
 
         return null;
+    }
+
+    /**
+     * @throws ZapmizerConnectException
+     */
+    private function embedSession(array $body): EmbedSession
+    {
+        $response = $this->request('POST', '/embed/sessions', ['json' => $body]);
+
+        $this->guardFailure($response);
+
+        if ($response->getStatusCode() !== 201) {
+            throw ZapmizerConnectException::unexpectedResponse("HTTP {$response->getStatusCode()} on the embed session endpoint");
+        }
+
+        return EmbedSession::fromArray($this->decode($response));
+    }
+
+    private function embedUser(?string $id, ?string $name): ?array
+    {
+        $user = array_filter(['id' => $id, 'name' => $name], fn (?string $value) => $value !== null && trim($value) !== '');
+
+        return $user === [] ? null : $user;
     }
 
     protected function request(string $method, string $path, array $options = [], bool $expectsJson = true): ResponseInterface

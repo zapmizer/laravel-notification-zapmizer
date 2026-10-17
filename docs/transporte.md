@@ -68,7 +68,7 @@ $download = app(InstanceClient::class, ['api_token' => 'team-token'])->media(77,
 $download->contents(); // 'png-bytes'
 ```
 
-Um `Http::fake()` sem resposta para a URL da Zapmizer responde `200` vazio (o "fake vazio"). As chamadas que esperam JSON (`createSession`, `exchangeCode`, `subscription`, `checkout`, `connection`, `createWebhook` e `rotateWebhookSecret`) falham com `unexpectedResponse`: não viram uma sessão vazia. Duas passam sem aviso: `deleteWebhook()` retorna normalmente e `media()` devolve um download anexado vazio (`size === 0`). Um `MockHandler` num `GuzzleHttp\Client` do container não pega mais parceiro, instância nem envio.
+Um `Http::fake()` sem resposta para a URL da Zapmizer responde `200` vazio (o "fake vazio"). As chamadas que esperam JSON (`createSession`, `exchangeCode`, `subscription`, `checkout`, `connection`, `createWebhook`, `rotateWebhookSecret`, `reconnect`, `conversationSession` e `inboxSession`) falham com `unexpectedResponse`: não viram uma sessão vazia. `revokeToken()` também falha com `unexpectedResponse`: só `204` e `401` contam como revogado. Duas passam sem aviso: `deleteWebhook()` retorna normalmente e `media()` devolve um download anexado vazio (`size === 0`). Um `MockHandler` num `GuzzleHttp\Client` do container não pega mais parceiro, instância nem envio.
 
 O envio de mensagem também passa pelo fake, e a recusa da Zapmizer vira `ZapmizerApiException` (os dois fakes abaixo são de testes diferentes, porque o primeiro que casa vence):
 

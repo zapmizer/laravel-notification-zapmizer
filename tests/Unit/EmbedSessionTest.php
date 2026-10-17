@@ -66,6 +66,7 @@ class EmbedSessionTest extends TestCase
             'E3 unicode host' => [['url' => 'https://ação.com']],
             'E3 port with letters' => [['url' => 'https://h.com:44a/x']],
             'E3 ipv6 with a zone id' => [['url' => 'https://[fe80::1%25eth0]/']],
+            'underscore in the host' => [['url' => 'https://app_x.parlichat.com/embed/start/1']],
         ];
     }
 
@@ -109,6 +110,7 @@ class EmbedSessionTest extends TestCase
             'E5 port' => ['https://app.parlichat.com:8443/chats?embed_inbox=1', 'https://app.parlichat.com:8443'],
             'E5 unsafe' => ['javascript:alert(1)//app.parlichat.com', null],
             'E5 unsafe with user' => ['https://app.parlichat.com@evil.com/chats', null],
+            'underscore in the host' => ['https://app_x.parlichat.com/chats?embed_inbox=1', null],
         ];
     }
 

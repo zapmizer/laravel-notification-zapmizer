@@ -22,6 +22,7 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
 use NotificationChannels\Zapmizer\Test\Concerns\AssertsContract;
 use NotificationChannels\Zapmizer\Test\Concerns\FakesZapmizerHttp;
+use NotificationChannels\Zapmizer\Test\Concerns\InvalidBaseUris;
 use NotificationChannels\Zapmizer\Test\Fixtures\RecordingTransport;
 use NotificationChannels\Zapmizer\Test\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -30,6 +31,7 @@ class InstanceClientTest extends TestCase
 {
     use AssertsContract;
     use FakesZapmizerHttp;
+    use InvalidBaseUris;
 
     /** @var array<int, array{request: Request}> */
     protected array $history = [];
@@ -594,5 +596,21 @@ class InstanceClientTest extends TestCase
             $this->assertSame(403, $exception->status());
             $this->assertSame(ErrorCode::ORIGIN_NOT_ALLOWED, $exception->error());
         }
+    }
+
+    /** @dataProvider invalidBaseUris */
+    #[DataProvider('invalidBaseUris')]
+    public function testX18bAnInvalidBaseSendsNothing(string $base)
+    {
+        Http::fake();
+
+        try {
+            (new InstanceClient('team-token', new LaravelHttpTransport(), $base))->connection(1);
+            $this->fail('Expected the invalid base URI.');
+        } catch (ZapmizerConnectException $e) {
+            $this->assertIsTheInvalidBaseUri($e);
+        }
+
+        Http::assertNothingSent();
     }
 }

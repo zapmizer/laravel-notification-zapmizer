@@ -32,6 +32,7 @@ class ExceptionHierarchyTest extends TestCase
             ZapmizerConnectException::notConnected(),
             ZapmizerUnavailableException::dueTo(),
             ZapmizerConnectException::noConnectable(),
+            ZapmizerConnectException::invalidBaseUri(),
             ZapmizerVerificationException::apiTokenNotProvided(),
             new ZapmizerApiException($this->error(422, '{}')),
             new ZapmizerRateLimitedException($this->error(429, '{}')),

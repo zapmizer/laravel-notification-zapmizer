@@ -5,6 +5,8 @@ namespace NotificationChannels\Zapmizer\Http\Middleware;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
+use NotificationChannels\Zapmizer\Support\PhoneNumber;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -16,6 +18,11 @@ use Symfony\Component\HttpFoundation\Response;
  * (current and previous) may sign the delivery. No application secret, no
  * scan of the table, no unsigned event. Every refusal before a valid HMAC
  * is the same 401 — the response never tells whether the key exists.
+ *
+ * A signed delivery whose body `wid` is another number (the team's webhook
+ * on this URL also serves its other numbers) is acknowledged with 200 and
+ * dropped, no event fired. Only the body `wid` counts: it is signed, the
+ * `X-Wid` header is not.
  */
 class VerifyConnectionWebhookSignature extends VerifyWebhookSignature
 {
@@ -66,9 +73,33 @@ class VerifyConnectionWebhookSignature extends VerifyWebhookSignature
             abort(403);
         }
 
+        if (!$this->belongsToConnection($request, $connection)) {
+            Log::info('zapmizer: delivery for another number discarded.', [
+                'connection_id' => $connection->getKey(),
+                'wid' => json_decode($request->getContent(), true)['wid'],
+            ]);
+
+            return new Response('Webhook Received', 200);
+        }
+
         $request->attributes->set(self::CONNECTION_ATTRIBUTE, $connection);
         $request->route()->forgetParameter('zapmizerWebhookKey');
 
         return $next($request);
+    }
+
+    protected function belongsToConnection(Request $request, ZapmizerConnection $connection): bool
+    {
+        $body = json_decode($request->getContent(), true);
+
+        if (!is_array($body) || !array_key_exists('wid', $body) || $body['wid'] === null) {
+            return true;
+        }
+
+        if (!is_string($body['wid'])) {
+            return false;
+        }
+
+        return in_array(PhoneNumber::fromWid($body['wid']), PhoneNumber::variants($connection->phone_number), true);
     }
 }

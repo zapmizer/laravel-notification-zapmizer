@@ -353,6 +353,139 @@ class ConnectionWebhookTest extends TestCase
         Event::assertDispatched(WebhookReceived::class, fn (WebhookReceived $event) => $event->connection->is($owner));
     }
 
+    private function fakeDeliveryEvents(): void
+    {
+        Event::fake([MessageReceived::class, WebhookReceived::class, WebhookHandled::class]);
+    }
+
+    private function assertNothingDispatched(): void
+    {
+        Event::assertNotDispatched(MessageReceived::class);
+        Event::assertNotDispatched(WebhookReceived::class);
+        Event::assertNotDispatched(WebhookHandled::class);
+    }
+
+    public function testC27AnotherNumbersEventIsAcknowledgedAndDropped()
+    {
+        $this->fakeDeliveryEvents();
+        $connection = $this->keyedTeam(self::KA)->zapmizerConnection;
+        Log::spy();
+
+        $this->deliverTo(self::KA, $this->messageEnvelope(wid: '5581922220000@c.us'), 'whsec_a', wid: '5581922220000@c.us')
+            ->assertOk()
+            ->assertSeeText('Webhook Received');
+
+        $this->assertNothingDispatched();
+        Log::shouldHaveReceived('info')
+            ->with('zapmizer: delivery for another number discarded.', ['connection_id' => $connection->getKey(), 'wid' => '5581922220000@c.us'])
+            ->once();
+    }
+
+    /**
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function ninthDigitVariants(): array
+    {
+        return [
+            'wid with the ninth digit' => ['5581999990000@c.us', '558199990000'],
+            'number with the ninth digit' => ['558199990000@c.us', '5581999990000'],
+        ];
+    }
+
+    /** @dataProvider ninthDigitVariants */
+    #[DataProvider('ninthDigitVariants')]
+    public function testC28TheNinthDigitVariantIsTheSameNumber(string $wid, string $number)
+    {
+        $this->fakeDeliveryEvents();
+        $this->keyedTeam(self::KA, number: $number);
+
+        $this->deliverTo(self::KA, $this->messageEnvelope(wid: $wid), 'whsec_a', wid: $wid)
+            ->assertOk()
+            ->assertSeeText('Webhook Handled');
+
+        Event::assertDispatchedTimes(MessageReceived::class, 1);
+    }
+
+    public function testC28bASubscriberStartingWith1HasNoVariant()
+    {
+        $this->fakeDeliveryEvents();
+        $this->keyedTeam(self::KA, number: '558112345678');
+
+        $this->deliverTo(self::KA, $this->messageEnvelope(wid: '5581912345678@c.us'), 'whsec_a', wid: '5581912345678@c.us')
+            ->assertOk()
+            ->assertSeeText('Webhook Received');
+
+        $this->assertNothingDispatched();
+    }
+
+    /**
+     * @return array<string, array{0: mixed}>
+     */
+    public static function widsThatAreNotANumber(): array
+    {
+        return [
+            'int' => [5581911110000],
+            'array' => [['5581911110000@c.us']],
+            'empty' => [''],
+            'suffix only' => ['@c.us'],
+        ];
+    }
+
+    /** @dataProvider widsThatAreNotANumber */
+    #[DataProvider('widsThatAreNotANumber')]
+    public function testC29AWidThatIsNotANumberIsDropped(mixed $wid)
+    {
+        $this->fakeDeliveryEvents();
+        $this->keyedTeam(self::KA);
+
+        $this->deliverTo(self::KA, ['wid' => $wid] + $this->messageEnvelope(), 'whsec_a')
+            ->assertOk()
+            ->assertSeeText('Webhook Received');
+
+        $this->assertNothingDispatched();
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function otherWidSuffixes(): array
+    {
+        return [
+            'lid' => ['5581911110000@lid'],
+            's.whatsapp.net' => ['5581911110000@s.whatsapp.net'],
+        ];
+    }
+
+    /** @dataProvider otherWidSuffixes */
+    #[DataProvider('otherWidSuffixes')]
+    public function testAnotherWidSuffixMatchesByTheDigits(string $wid)
+    {
+        $this->fakeDeliveryEvents();
+        $this->keyedTeam(self::KA);
+
+        $this->deliverTo(self::KA, $this->messageEnvelope(wid: $wid), 'whsec_a')
+            ->assertOk()
+            ->assertSeeText('Webhook Handled');
+
+        Event::assertDispatchedTimes(MessageReceived::class, 1);
+    }
+
+    public function testAConnectionWithoutANumberOnlyTakesEventsWithoutWid()
+    {
+        $this->fakeDeliveryEvents();
+        $this->keyedTeam(self::KA, overrides: ['phone_number' => null]);
+
+        $this->deliverTo(self::KA, $this->ownerEnvelope(), 'whsec_a')
+            ->assertOk()
+            ->assertSeeText('Webhook Received');
+        $this->assertNothingDispatched();
+
+        $this->deliverTo(self::KA, $this->messageEnvelope(), 'whsec_a')
+            ->assertOk()
+            ->assertSeeText('Webhook Handled');
+        Event::assertDispatchedTimes(MessageReceived::class, 1);
+    }
+
     public function testC43AKeyNotYetStoredIs401()
     {
         $this->connectedTeam('whsec_a');

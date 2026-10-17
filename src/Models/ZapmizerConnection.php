@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Relations\MorphTo;
 use Illuminate\Support\Str;
 use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Connect\MediaDownload;
+use NotificationChannels\Zapmizer\Connect\ReceivedMessages;
 use NotificationChannels\Zapmizer\Connect\WebhookRegistration;
 use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
@@ -202,6 +203,21 @@ class ZapmizerConnection extends Model
             $message->id,
             $message->sentAt->getTimestamp(),
         );
+    }
+
+    /**
+     * What this connection's number received after `$after` — the way back to
+     * what the webhook did not deliver. See `Connect\ReceivedMessages`.
+     *
+     * @throws ZapmizerConnectException
+     */
+    public function receivedMessages(int $after = 0, ?int $since = null, ?int $limit = null): ReceivedMessages
+    {
+        if (blank($this->bot_instance_id)) {
+            throw new ZapmizerUnauthorizedException('There is no paired Zapmizer instance for this connection.');
+        }
+
+        return $this->instanceClient()->receivedMessages((int) $this->bot_instance_id, $after, $since, $limit);
     }
 
     /**

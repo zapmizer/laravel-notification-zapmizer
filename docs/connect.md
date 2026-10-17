@@ -328,6 +328,22 @@ It returns the last answer: `attached`, `unavailable` as soon as Zapmizer says s
 
 Requires **Zapmizer 1.150.0 or later** (media endpoint). <!-- TODO confirm the release that ships `api-media-mensagem` -->
 
+### Recovering what the webhook missed
+
+Zapmizer tries each delivery 3 times in about 3 seconds and gives up. With the app down for longer, or with messages that arrived in the sync after the number reconnected, the `message` event never comes. `ZapmizerConnection::receivedMessages(int $after = 0, ?int $since = null, ?int $limit = null)` reads them back from `GET /api/whatsapp-messages` (numbers by QR only):
+
+```php
+$page = $connection->receivedMessages(after: $cursor, since: $cursor ? null : now()->subHour()->getTimestamp());
+
+foreach ($page->messages as $i => $message) {
+    event(new MessageReceived($message, $connection, ['name' => 'message', 'data' => [$page->payloads[$i]]]));
+}
+
+$cursor = $page->nextAfter; // keep it; call again while $page->hasMore
+```
+
+Each message is an `InboundMessage` built exactly like the webhook's, so the same listener handles both — and must already be idempotent on `$message->id`, since a message may come both ways. Run it on a schedule (every minute is fine: the endpoint allows 30 calls a minute per number). Requires Zapmizer with `GET /api/whatsapp-messages`.
+
 ## 7. Rotating the webhook secret
 
 ```php

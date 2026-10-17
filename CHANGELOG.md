@@ -1,5 +1,13 @@
 # Changelog
 
+# 0.4.0
+
+Sem breaking. **Recuperar mensagens exige o Zapmizer com `GET /api/whatsapp-messages`.**
+
+- **Mensagens que o webhook não entregou.** `ZapmizerConnection::receivedMessages($after = 0, $since = null, $limit = null): Connect\ReceivedMessages` lê o que o número recebeu depois do cursor `$after`, cada mensagem traduzida como no webhook (`InboundMessage::fromMessage()`, motor wwebjs ou Rust). `ReceivedMessages` traz `messages`, `payloads` (o objeto cru, na mesma ordem), `nextAfter` (nunca volta para trás) e `hasMore`. Entrada sem id é descartada sem travar a página. Sem `bot_instance_id` lança `ZapmizerUnauthorizedException`. Veja "Recovering what the webhook missed" em `docs/connect.md`.
+- `Connect\InstanceClient::receivedMessages(int $botInstanceId, int $after = 0, ?int $since = null, ?int $limit = null)`.
+- Laravel do 8.83 ao 13, com PHP 8.1.
+
 # 0.3.1
 
 Sem breaking.

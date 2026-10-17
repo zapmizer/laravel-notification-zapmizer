@@ -316,4 +316,75 @@ class InstanceClientTest extends TestCase
 
         $this->assertFalse($this->history[0]['options']['allow_redirects']);
     }
+
+    public function testReceivedMessagesTranslatesEachMessageLikeTheWebhook()
+    {
+        $client = $this->makeClient(new MockHandler([
+            new Response(200, [], json_encode([
+                'wid' => '5581999990000@c.us',
+                'data' => [
+                    ['id' => 11, 'stored_at' => '2026-10-16T19:29:49+00:00', 'message' => [
+                        'id' => ['id' => 'AAA', '_serialized' => 'false_5581988887777@c.us_AAA'],
+                        'from' => '5581988887777@c.us',
+                        'type' => 'document',
+                        'body' => '',
+                        'hasMedia' => true,
+                        'timestamp' => 1792193389,
+                        '_data' => ['mimetype' => 'application/pdf', 'filename' => 'extrato.pdf', 'size' => 555593],
+                    ]],
+                    ['id' => 12, 'stored_at' => '2026-10-16T19:30:00+00:00', 'message' => ['type' => 'chat']],
+                ],
+                'next_after' => 12,
+                'has_more' => true,
+            ])),
+        ]));
+
+        $page = $client->receivedMessages(9, after: 10, limit: 50);
+
+        $this->assertCount(1, $page->messages);
+        $this->assertSame('false_5581988887777@c.us_AAA', $page->messages[0]->id);
+        $this->assertSame('5581988887777', $page->messages[0]->fromPhone);
+        $this->assertSame('5581999990000@c.us', $page->messages[0]->to);
+        $this->assertSame('extrato.pdf', $page->messages[0]->mediaFilename());
+        $this->assertSame('AAA', $page->payloads[0]['id']['id']);
+        $this->assertSame(12, $page->nextAfter);
+        $this->assertTrue($page->hasMore);
+        $this->assertEquals(
+            'http://localhost/api/whatsapp-messages?bot_instance_id=9&after=10&limit=50',
+            (string) $this->history[0]['request']->getUri(),
+        );
+    }
+
+    public function testReceivedMessagesNeverMovesTheCursorBack()
+    {
+        $client = $this->makeClient(new MockHandler([
+            new Response(200, [], json_encode(['wid' => null, 'data' => [], 'next_after' => 3, 'has_more' => false])),
+            new Response(200, [], json_encode(['data' => []])),
+        ]));
+
+        $this->assertSame(10, $client->receivedMessages(9, after: 10)->nextAfter);
+        $this->assertSame(10, $client->receivedMessages(9, after: 10)->nextAfter);
+    }
+
+    public function testReceivedMessagesStartsFromSinceAndRefusesLikeEveryEndpoint()
+    {
+        $client = $this->makeClient(new MockHandler([
+            new Response(200, [], json_encode(['data' => [], 'next_after' => 0, 'has_more' => false])),
+            new Response(401, [], '{}'),
+            new Response(422, [], '{"message":"meta"}'),
+            new Response(503, [], ''),
+        ]));
+
+        $client->receivedMessages(9, since: 1792190000);
+
+        $this->assertEquals(
+            'http://localhost/api/whatsapp-messages?bot_instance_id=9&after=0&since=1792190000',
+            (string) $this->history[0]['request']->getUri(),
+        );
+
+        $this->expectExceptionInOrder(
+            [ZapmizerUnauthorizedException::class, ZapmizerConnectException::class, ZapmizerUnavailableException::class],
+            fn () => $client->receivedMessages(9),
+        );
+    }
 }

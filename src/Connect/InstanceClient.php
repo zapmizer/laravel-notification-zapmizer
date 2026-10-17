@@ -198,6 +198,32 @@ class InstanceClient
     }
 
     /**
+     * What the number received after the cursor `$after` (the `nextAfter` of
+     * the previous page; 0 to start). On the very first call, without a
+     * cursor, pass `$since` (seconds) so the whole history is not walked.
+     * Messages sent by the number itself are left out. Only for numbers by QR
+     * (a 422 otherwise); 429 is over the limit of 30 requests a minute.
+     *
+     * @throws ZapmizerConnectException
+     */
+    public function receivedMessages(int $botInstanceId, int $after = 0, ?int $since = null, ?int $limit = null): ReceivedMessages
+    {
+        $response = $this->request('GET', '/whatsapp-messages', [
+            'query' => array_filter([
+                'bot_instance_id' => $botInstanceId,
+                'after' => $after,
+                'since' => $since,
+                'limit' => $limit,
+            ], fn ($value) => $value !== null),
+        ]);
+
+        $this->guardUnauthorized($response);
+        $this->guardFailure($response);
+
+        return ReceivedMessages::fromResponse($this->decode($response), $after);
+    }
+
+    /**
      * The reason of a JSON error answer: Laravel's `message`, plus the first
      * of each validation error when there is one. The raw body otherwise.
      */

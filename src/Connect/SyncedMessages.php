@@ -7,9 +7,9 @@ use NotificationChannels\Zapmizer\InboundMessage;
 /**
  * Class SyncedMessages.
  *
- * One page of GET /whatsapp-messages: every message of the number that
- * changed since the cursor — received and sent, edited, revoked, the ones
- * that came in the sync after a reconnect — in its current state, each
+ * One page of GET /whatsapp-messages: every message of the number stored
+ * after the cursor — received and sent, the ones that came in the sync after
+ * a reconnect included — each
  * translated the way the `message` webhook is (`InboundMessage::fromMessage()`,
  * wwebjs and Rust engines alike).
  *

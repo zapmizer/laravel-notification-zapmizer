@@ -206,7 +206,7 @@ class ZapmizerConnection extends Model
     }
 
     /**
-     * Every message of this connection's number that changed after `$cursor`
+     * Every message of this connection's number stored after `$cursor`
      * — the way back to what the webhook did not deliver. See
      * `Connect\SyncedMessages`.
      *

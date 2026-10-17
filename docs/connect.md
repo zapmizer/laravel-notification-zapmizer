@@ -18,13 +18,15 @@ Zapmizer ──(signed)──> POST /zapmizer/webhook ──> MessageReceived ev
 
 There is no wizard on your side: no instance creation, no QR code rendering, no polling. The popup opens, the user comes back, the connection is ready. Your screen needs one button and one panel.
 
+All connections share `POST /zapmizer/webhook` by default. As an opt-in alternative, each connection can get its own URL, `POST /zapmizer/webhook/{key}`: see [Per-connection webhook URL](#per-connection-webhook-url-opt-in).
+
 ## 1. Zapmizer-side setup
 
 You need **partner credentials** (id + secret), issued by Zapmizer for your application. They authenticate the hosted connect flow; each connected team's own token is obtained through it and stored by the package.
 
 **This flow needs a Zapmizer with the hosted pairing** — `POST /api/connect/sessions` accepting `webhook_url` and the token exchange answering `phone_number`/`bot_instance_id`/`webhook_id`/`webhook_secret`. That is Zapmizer **1.149.0 or later** (the release after `connect-pareamento`). The token exchange must also answer `user_id` and `team_id`, which the contract requires: without them the callback reports `exchange_failed` and stores nothing.
 
-Zapmizer validates `webhook_url` the way it validates `redirect_uri`: **https in production**, host on your partner allowlist, public address (anti-SSRF). The package sends `route('zapmizer.webhook')` — make sure `APP_URL` resolves to the public https host, and that this host is on your partner allowlist over there.
+Zapmizer validates `webhook_url` the way it validates `redirect_uri`: **https in production**, host on your partner allowlist, public address (anti-SSRF). The package sends `route('zapmizer.webhook')` — make sure `APP_URL` resolves to the public https host, and that this host is on your partner allowlist over there. With the [per-connection webhook URL](#per-connection-webhook-url-opt-in) the host stays the same; only the path changes (`/zapmizer/webhook/{key}`).
 
 ## 2. Package setup
 
@@ -129,9 +131,9 @@ All under the package prefix (`zapmizer`), behind `web` + `auth`:
 | Route name | Method | Returns |
 |---|---|---|
 | `zapmizer.connect.show` | GET | `{ connection }` — the model's connection, or `null`. With `?live=1` the paired instance is queried on Zapmizer and `connection` also carries `state` and `is_online` (below). |
-| `zapmizer.connect.start` | POST | `{ url, expires_at }` — open `url` in a popup (520×720 works). `expires_at` is ISO 8601 with the offset (`2026-09-07T01:00:00+00:00`), or `null`. Stores the `state` in the session and sends, with the session, `route('zapmizer.webhook')` as `webhook_url`, the model's `zapmizerExternalId()` as `external_id` and the state's TTL as `expires_in` (`zapmizer.connect.state_ttl_minutes` × 60, at least Zapmizer's 900 seconds), so the hosted link lives as long as the state. 10 a minute. |
+| `zapmizer.connect.start` | POST | `{ url, expires_at }` — open `url` in a popup (520×720 works). `expires_at` is ISO 8601 with the offset (`2026-09-07T01:00:00+00:00`), or `null`. Stores the `state` in the session and sends, with the session, `route('zapmizer.webhook')` as `webhook_url` (with `zapmizer.webhook.per_connection` on, the connection's own `route('zapmizer.webhook.connection', ['zapmizerWebhookKey' => $key])`, [below](#per-connection-webhook-url-opt-in)), the model's `zapmizerExternalId()` as `external_id` and the state's TTL as `expires_in` (`zapmizer.connect.state_ttl_minutes` × 60, at least Zapmizer's 900 seconds), so the hosted link lives as long as the state. 10 a minute. |
 | `zapmizer.connect.callback` | GET | HTML page that `postMessage`s `{ source: 'zapmizer-connect', status, message }` to the opener and closes — it never answers a 500 (that would leave the opener waiting). Stores token, team, number, instance and webhook; the connection is born **active**. It never calls `/webhooks`. |
-| `zapmizer.connect.destroy` | DELETE | Revokes the connection's token on Zapmizer (`DELETE /api/connect/token`, best-effort: a failure is a warning and the local row goes anyway) and deletes the local connection with its credentials. Zapmizer drops the webhook the connect created only when no other live grant uses the same URL: grants of earlier connects that were never revoked (`revoke_previous_token` off, section 9) keep it. The remedy then is a per-connection webhook URL. |
+| `zapmizer.connect.destroy` | DELETE | Revokes the connection's token on Zapmizer (`DELETE /api/connect/token`, best-effort: a failure is a warning and the local row goes anyway) and deletes the local connection with its credentials. Zapmizer drops the webhook the connect created only when no other live grant uses the same URL: grants of earlier connects that were never revoked (`revoke_previous_token` off, section 9) keep it. The remedy then is a [per-connection webhook URL](#per-connection-webhook-url-opt-in). |
 | `zapmizer.connect.reconnect` | POST | Brings the stored number back with the token the connection already holds — see "Reconnecting a number from the panel". 10 a minute. |
 | `zapmizer.connect.reconnect.callback` | GET | HTML page that `postMessage`s `{ source: 'zapmizer-reconnect', status, message }` to the opener and closes. Stores nothing. |
 
@@ -169,7 +171,7 @@ The callback **never calls `/webhooks`**: Zapmizer refuses those endpoints to a 
 - a `null` secret for the webhook stored on the connection (same `webhook_id`) keeps the secret already stored;
 - a `null` secret without a stored, readable one — another `webhook_id`, a first connect, or a stored secret that no longer decrypts because `APP_KEY` changed — stores the connection **active** and without a secret, logs `zapmizer: connected without a webhook secret.` and reports `webhook_failed`. The number sends, but no delivery to it can be verified.
 
-The remedy is to disconnect (`destroy` revokes the token) and connect again: with no other live grant on that URL, Zapmizer creates the webhook again and hands a new secret. If it still comes back `null`, another grant keeps the webhook alive; the way out is a per-connection webhook URL.
+The remedy is to disconnect (`destroy` revokes the token) and connect again: with no other live grant on that URL, Zapmizer creates the webhook again and hands a new secret. If it still comes back `null`, another grant keeps the webhook alive; the way out is a [per-connection webhook URL](#per-connection-webhook-url-opt-in). In that mode, a connection without a secret gets a new key on its next connect: a new URL, so Zapmizer creates a new webhook and the secret comes back.
 
 A stored token or secret that no longer decrypts (`APP_KEY` changed) counts as absent, with a warning, and the next connect overwrites it — on the same team or on a team switch.
 
@@ -299,7 +301,7 @@ X-Zapmizer-Signature: v1=<hex>[,v1=<hex>]     # HMAC-SHA256(secret, "{timestamp}
 The package applies `VerifyWebhookSignature` to `POST /zapmizer/webhook` itself. Two kinds of secret can sign a delivery:
 
 - **`zapmizer.webhook.secret`** (`ZAPMIZER_WEBHOOK_SECRET`) — the secret of the webhook you registered by hand on Zapmizer's "Webhooks" screen, the single-tenant setup. It is tested first, without touching the database. A delivery it signs carries **no connection** (`$event->connection === null`).
-- **each `ZapmizerConnection`'s secret** — registered by the connect flow. The connections whose `phone_number` matches `X-Wid` are queried first; only on a miss is the whole table scanned (a signed delivery is never refused because `X-Wid` lied — the proof is the HMAC). An application that never published the `zapmizer_connections` migration skips this leg: the table's existence is checked (and cached once true), not assumed.
+- **each `ZapmizerConnection`'s secret** — registered by the connect flow. The connections whose `phone_number` matches `X-Wid` are queried first; only on a miss is the whole table scanned (a signed delivery is never refused because `X-Wid` lied — the proof is the HMAC). An application that never published the `zapmizer_connections` migration skips this leg: the table's existence is checked (and cached once true), not assumed. A refused delivery always goes through the whole scan; the [per-connection webhook URL](#per-connection-webhook-url-opt-in) finds the owner by its path instead.
 
 It accepts a 5-minute clock drift (`zapmizer.webhook.tolerance`), refuses with **401 and a log line** (reason, wid, timestamp, ip — never the signature), and refuses an inactive connection with 403. A credential that no longer decrypts (`APP_KEY` changed) only takes its own connection out of the matching.
 
@@ -433,6 +435,84 @@ It returns the last answer: `attached`, `unavailable` as soon as Zapmizer says s
 
 Requires **Zapmizer 1.150.0 or later** (media endpoint). <!-- TODO confirm the release that ships `api-media-mensagem` -->
 
+### Per-connection webhook URL (opt-in)
+
+On the shared route a connection is found by `X-Wid`. Every refused delivery (a forged signature, an orphan webhook, a forgotten secret) scans the whole table, and a valid delivery without `X-Wid`, or with another number of the team, reads half of it on average: each row read decrypts one or two secrets. With `zapmizer.webhook.per_connection` on, each connection made through the connect flow gets its own URL, `POST /zapmizer/webhook/{key}`. The key in the path finds the owner with one select, only that connection's secrets are tested, and events of another number are discarded.
+
+Turn it on:
+
+```env
+ZAPMIZER_WEBHOOK_PER_CONNECTION=true
+```
+
+`true`, `1`, `on` and `yes` turn it on; anything else, absent included, leaves it off. The config merge is shallow: a `config/zapmizer.php` published before this version has no `per_connection` inside `webhook`, and the env var does nothing. Add it there, or re-publish the config:
+
+```php
+// config/zapmizer.php
+'webhook' => [
+    // ...
+    'per_connection' => env('ZAPMIZER_WEBHOOK_PER_CONNECTION', false),
+],
+```
+
+**Turn `zapmizer.connect.revoke_previous_token` on with it** (section 9). The two options are separate, but without the revocation the old webhooks keep delivering until they are revoked on Zapmizer.
+
+**Run the migration first.** The key lives in a column of its own, `webhook_key` (nullable, unique), published only by its own tag:
+
+```bash
+php artisan vendor:publish --provider="NotificationChannels\Zapmizer\ZapmizerServiceProvider" --tag=zapmizer-migrations-webhook-key
+php artisan migrate
+```
+
+With the option on and no column, `start` throws a `LogicException` (`zapmizer.webhook.per_connection needs the webhook_key column: publish --tag=zapmizer-migrations-webhook-key and migrate.`, a 500) before anything goes to Zapmizer, and a delivery to a keyed URL answers 500. On SQL Server a plain unique index refuses a second `NULL`: in the published migration, swap `->unique()` for a filtered unique index:
+
+```php
+use Illuminate\Support\Facades\DB;
+
+Schema::table('zapmizer_connections', function (Blueprint $table) {
+    $table->string('webhook_key', 64)->nullable();
+});
+
+DB::statement('CREATE UNIQUE INDEX zapmizer_connections_webhook_key_unique ON zapmizer_connections (webhook_key) WHERE webhook_key IS NOT NULL');
+```
+
+(Dropping the column on SQLite under Laravel 8 needs `doctrine/dbal`.)
+
+**What the route accepts.** `POST {prefix}/webhook/{key}` (`zapmizer.webhook.connection`) sits in the same group as the shared route: same prefix and `zapmizer.routes.webhook_middleware`. `VerifyConnectionWebhookSignature` guards it, and only the connection's own secrets sign there, current and previous (a rotation keeps working). `zapmizer.webhook.secret` does not sign this route, and nothing unsigned is accepted, `verify_number.*` included: Zapmizer sends those to the verify-number webhook URL, never here. Every refusal before a valid signature is the same 401 (a malformed or unknown key, a connection without a secret, a wrong signature, missing headers, an old timestamp), with the usual `zapmizer: delivery refused by signature.` warning; the middleware never logs the key. An inactive connection answers 403, as on the shared route. Connections made before the option keep using the shared route.
+
+**Events of another number are dropped.** When a connect on the same team picks another number, the key, and so the URL, stays: Zapmizer reuses the webhook and adds the new instance to it, and the URL receives the events of both numbers. A signed delivery whose body `wid` is not the connection's `phone_number` (the Brazilian ninth digit is matched both ways) answers 200 `Webhook Received`, fires no event and logs `zapmizer: delivery for another number discarded.` (info, with `connection_id` and `wid`). Only the body's `wid` counts: it is signed, the `X-Wid` header is not.
+
+**A `connection` event without `wid`** (`qr_pending`, `connecting`) passes: the key found the connection. But it does not say which number it is about, so a listener should not change the connection's state on it; confirm it with the API first: `$connection->instanceClient()->connection($connection->bot_instance_id)` (`GET /bot-instances/{id}/connection`, what `show?live=1` calls).
+
+**Moving the existing connections.** Turning the option on touches no row: a connection without a key keeps using the shared route, with the same middleware and the same events, with no deadline. The package cannot repoint a webhook on Zapmizer (the connect token is refused on `/webhooks`), so a connection moves by connecting again:
+
+1. with `per_connection` and `revoke_previous_token` on, the customer connects again through the package: `start` issues a key and sends the new URL;
+2. Zapmizer creates a webhook for it, with a secret; the row gets the key, the new webhook id and its secret;
+3. the callback revokes the previous token. Zapmizer deletes the old webhook of the shared route only when no other live session uses it **and** the connect created it.
+
+Otherwise the old webhook keeps delivering to the shared route, signed with a secret the row no longer holds: each delivery is a 401 after a scan. Grants left from earlier connects (or from before `revoke_previous_token`) are revoked on Parli: the customer removes the access in their account, or the webhook is deleted on Zapmizer's "Webhooks" screen. There is no bulk command: a connect needs the customer in the popup.
+
+**Do not turn it off after connections moved.** The route goes away, their deliveries get 404, and Zapmizer does not retry a 4xx: those events are lost. With `route:cache`, turning the option on or off needs the cache built again (`php artisan route:cache`).
+
+**With `zapmizer.routes.enabled = false`**, mount the route yourself with the name `zapmizer.webhook.connection` **and** the parameter `zapmizerWebhookKey`, which the middleware reads. Without the route, `start` answers 500 (`route()` throws); without the parameter, every delivery answers 401.
+
+```php
+use Illuminate\Support\Facades\Route;
+use NotificationChannels\Zapmizer\Http\Controllers\WebhookController;
+use NotificationChannels\Zapmizer\Http\Middleware\VerifyConnectionWebhookSignature;
+
+Route::post('zapmizer/webhook/{zapmizerWebhookKey}', [WebhookController::class, 'handleWebhook'])
+    ->middleware(VerifyConnectionWebhookSignature::class)
+    ->name('zapmizer.webhook.connection');
+```
+
+Also:
+
+- An app that extends `VerifyWebhookSignature`: the new route uses `VerifyConnectionWebhookSignature`, so the overrides of your subclass do not apply there. To customize it, extend `VerifyConnectionWebhookSignature` and mount the routes.
+- A subclass of the model (`zapmizer.models.connection`) that redefines `$hidden` must list `webhook_key`, which the package hides from serialization.
+- A connection loaded with a select of your own that leaves `webhook_key` out gets a new key at every connect (the package does not see the stored one): the URL changes, and the secret with it.
+- `registerWebhook()` registers the shared route (`route('zapmizer.webhook')`) unless you pass a URL. On a connection with a `webhook_key` (even with a `*` token), connect again instead of calling it.
+
 ## 7. Rotating the webhook secret
 
 ```php
@@ -445,7 +525,7 @@ That also means **rotating once does not revoke a leaked secret**: the previous 
 
 **Only with a full-access token.** Zapmizer refuses the `/webhooks` endpoints to a connect token — the one the connect flow stores — with 403 `missing_ability`. The same goes for `registerWebhook()` and `deleteRemoteWebhook()`. They work with a token that has every ability (`*`).
 
-For a connection that came from the connect flow, replace a leaked secret by disconnecting (`destroy` revokes the token) and connecting again: with no other live grant on the same URL, Zapmizer creates the webhook again and hands a new secret. A per-connection webhook URL keeps other grants off it.
+For a connection that came from the connect flow, replace a leaked secret by disconnecting (`destroy` revokes the token) and connecting again: with no other live grant on the same URL, Zapmizer creates the webhook again and hands a new secret. A [per-connection webhook URL](#per-connection-webhook-url-opt-in) keeps other grants off it.
 
 ## 8. Subscription and checkout
 
@@ -650,6 +730,7 @@ The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceCli
 | `zapmizer.connect.revoke_previous_token` | revoke the token a connection held before when a new connect replaces it (default off; recommended on) |
 | `zapmizer.webhook.secret` | the single-tenant webhook secret (`ZAPMIZER_WEBHOOK_SECRET`) |
 | `zapmizer.webhook.tolerance` | accepted timestamp drift in seconds (default 300) |
+| `zapmizer.webhook.per_connection` | each connection made through the connect flow gets its own webhook URL (`ZAPMIZER_WEBHOOK_PER_CONNECTION`, default off; [section 6](#per-connection-webhook-url-opt-in)) |
 | `zapmizer.models.connection` | subclass the connection model |
 | `zapmizer.routes.*` | enable/prefix/middleware of the package routes |
 

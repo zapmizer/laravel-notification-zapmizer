@@ -17,6 +17,7 @@ use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
 use NotificationChannels\Zapmizer\Contracts\ResolvesConnectable;
 use NotificationChannels\Zapmizer\Contracts\Transport;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
+use NotificationChannels\Zapmizer\Support\ConnectionWebhook;
 
 class ZapmizerServiceProvider extends ServiceProvider
 {
@@ -108,13 +109,19 @@ class ZapmizerServiceProvider extends ServiceProvider
 
         // The webhook is public and stateless — registered outside the
         // user-facing middleware on purpose. The signature check is on the
-        // route itself (routes/webhook.php), not left to the config.
+        // route itself (routes/webhook.php), not left to the config. The
+        // per-connection route (`zapmizer.webhook.per_connection`) joins it,
+        // same group.
         Route::group([
             'prefix' => config('zapmizer.routes.prefix', 'zapmizer'),
             'middleware' => config('zapmizer.routes.webhook_middleware', []),
             'as' => 'zapmizer.',
         ], function () {
             $this->loadRoutesFrom(__DIR__ . '/../routes/webhook.php');
+
+            if (ConnectionWebhook::enabled()) {
+                $this->loadRoutesFrom(__DIR__ . '/../routes/connection-webhook.php');
+            }
         });
     }
 
@@ -131,7 +138,8 @@ class ZapmizerServiceProvider extends ServiceProvider
             ], 'config');
 
             // One tag per flow, so an app publishes only the table it uses;
-            // `migrations` still publishes both (compat).
+            // `migrations` still publishes both (compat). The per-connection
+            // webhook key is optional and has only its own tag.
             $this->publishes([
                 __DIR__ . '/../database/migrations/create_whatsapp_verifieds_table.php.stub' => database_path('migrations/' . date('Y_m_d_His') . '_create_whatsapp_verifieds_table.php'),
             ], ['migrations', 'zapmizer-migrations-verify']);
@@ -139,6 +147,10 @@ class ZapmizerServiceProvider extends ServiceProvider
             $this->publishes([
                 __DIR__ . '/../database/migrations/create_zapmizer_connections_table.php.stub' => database_path('migrations/' . date('Y_m_d_His', time() + 1) . '_create_zapmizer_connections_table.php'),
             ], ['migrations', 'zapmizer-migrations-connect']);
+
+            $this->publishes([
+                __DIR__ . '/../database/migrations/add_webhook_key_to_zapmizer_connections_table.php.stub' => database_path('migrations/' . date('Y_m_d_His', time() + 2) . '_add_webhook_key_to_zapmizer_connections_table.php'),
+            ], 'zapmizer-migrations-webhook-key');
 
             $this->publishes([
                 __DIR__ . '/../resources/views' => resource_path('views/vendor/zapmizer'),

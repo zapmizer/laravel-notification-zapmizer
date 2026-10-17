@@ -12,6 +12,8 @@ use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
+use LogicException;
 use NotificationChannels\Zapmizer\Connect\ConnectToken;
 use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Connect\PartnerClient;
@@ -28,6 +30,8 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
 use NotificationChannels\Zapmizer\Http\Controllers\Concerns\HandlesPopupState;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
+use NotificationChannels\Zapmizer\Support\ColumnExists;
+use NotificationChannels\Zapmizer\Support\ConnectionWebhook;
 use Throwable;
 
 /**
@@ -302,7 +306,7 @@ class ConnectController extends Controller
             'connected_at' => now(),
             'webhook_id' => $token->webhookId,
             'is_active' => true,
-        ]);
+        ] + ($this->pendingWebhookKey === null ? [] : ['webhook_key' => $this->pendingWebhookKey]));
 
         if (!$reusedWebhook) {
             $connection->forceFill([
@@ -523,19 +527,44 @@ class ConnectController extends Controller
 
     /**
      * The key of the webhook this connectable's session registers; `null`
-     * is the package's single webhook route.
+     * is the package's single webhook route. With
+     * `zapmizer.webhook.per_connection` on, it is the stored key when the
+     * row also holds a readable webhook secret (the same URL keeps the same
+     * webhook), and a new one otherwise.
+     *
+     * @throws LogicException with the option on and no `webhook_key` column
      */
     protected function webhookKeyFor(Model&Connectable $connectable): ?string
     {
-        return null;
+        if (!ConnectionWebhook::enabled()) {
+            return null;
+        }
+
+        $connection = $connectable->zapmizerConnectionOrNew();
+
+        if (!ColumnExists::for($connection, 'webhook_key')) {
+            throw new LogicException('zapmizer.webhook.per_connection needs the webhook_key column: publish --tag=zapmizer-migrations-webhook-key and migrate.');
+        }
+
+        $key = $connection->exists ? ($connection->getAttributes()['webhook_key'] ?? null) : null;
+
+        if (is_string($key) && $key !== '' && filled($this->readEncrypted($connection, 'webhook_secret', 'zapmizer: unreadable webhook secret, a new webhook key is issued.'))) {
+            return $key;
+        }
+
+        return Str::random(40);
     }
 
     /**
-     * The webhook URL sent with the session for `$key`.
+     * The webhook URL sent with the session for `$key`: the single webhook
+     * route without one, the key in the path of
+     * `zapmizer.webhook.connection` with one.
      */
     protected function webhookUrl(?string $key): string
     {
-        return route('zapmizer.webhook');
+        return $key === null
+            ? route('zapmizer.webhook')
+            : route('zapmizer.webhook.connection', ['zapmizerWebhookKey' => $key]);
     }
 
     protected function teamConnectedElsewhere(ZapmizerConnection $connection, int $teamId): bool

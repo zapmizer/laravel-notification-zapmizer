@@ -1,0 +1,30 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+/**
+ * The key in the path of a connection's own webhook URL
+ * ({prefix}/webhook/{key}), used only with zapmizer.webhook.per_connection.
+ * Dropping the column on SQLite under Laravel 8 needs doctrine/dbal.
+ */
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::table('zapmizer_connections', function (Blueprint $table) {
+            // On SQL Server a plain unique index refuses a second NULL: swap
+            // it for a filtered unique index (WHERE webhook_key IS NOT NULL).
+            $table->string('webhook_key', 64)->nullable()->unique();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::table('zapmizer_connections', function (Blueprint $table) {
+            $table->dropUnique(['webhook_key']);
+            $table->dropColumn('webhook_key');
+        });
+    }
+};

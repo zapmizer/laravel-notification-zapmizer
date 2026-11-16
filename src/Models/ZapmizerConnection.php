@@ -155,7 +155,7 @@ class ZapmizerConnection extends Model
     public function instanceClient(): InstanceClient
     {
         if (!$this->hasApiToken()) {
-            throw new ZapmizerUnauthorizedException('There is no Zapmizer token for this connection.');
+            throw ZapmizerUnauthorizedException::withoutResponse('There is no Zapmizer token for this connection.');
         }
 
         return app(InstanceClient::class, [
@@ -195,7 +195,7 @@ class ZapmizerConnection extends Model
     public function media(InboundMessage $message): MediaDownload
     {
         if (blank($this->bot_instance_id)) {
-            throw new ZapmizerUnauthorizedException('There is no paired Zapmizer instance for this connection.');
+            throw ZapmizerConnectException::notPaired();
         }
 
         return $this->instanceClient()->media(
@@ -215,7 +215,7 @@ class ZapmizerConnection extends Model
     public function syncMessages(?string $cursor = null, ?int $since = null, ?int $limit = null): SyncedMessages
     {
         if (blank($this->bot_instance_id)) {
-            throw new ZapmizerUnauthorizedException('There is no paired Zapmizer instance for this connection.');
+            throw ZapmizerConnectException::notPaired();
         }
 
         return $this->instanceClient()->syncMessages((int) $this->bot_instance_id, $cursor, $since, $limit);

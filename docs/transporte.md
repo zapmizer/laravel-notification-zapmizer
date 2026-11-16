@@ -2,7 +2,7 @@
 
 ## O transporte
 
-`PartnerClient` e `InstanceClient` mandam tudo pelo `Http` do Laravel, por meio do `Connect\Transports\LaravelHttpTransport`, o padrão e único transporte da lib. O ponto de extensão é a interface `Contracts\Transport` e o nome da classe em `zapmizer.http.transport`:
+`PartnerClient`, `InstanceClient` e o `Zapmizer` (o cliente de envio, que o `ZapmizerMessage::send()` usa) mandam tudo pelo `Http` do Laravel, por meio do `Connect\Transports\LaravelHttpTransport`, o padrão e único transporte da lib. O ponto de extensão é a interface `Contracts\Transport` e o nome da classe em `zapmizer.http.transport`:
 
 ```php
 'http' => [
@@ -14,7 +14,7 @@
 
 Por isso `Http::fake()`, `Http::preventStrayRequests()` (Laravel 9 em diante), `Http::globalMiddleware()` (10 em diante), os listeners de `RequestSending` e `ResponseReceived` e o Telescope veem as chamadas.
 
-O `Zapmizer` (envio) e o `VerificationClient` ainda usam o `GuzzleHttp\Client` do container.
+O `GuzzleHttp\Client` do container passa a valer só para o `VerificationClient`.
 
 Quem publicou o `config/zapmizer.php` antes e tem a chave `http` sem `transport` (ou com `null` ou `''`) cai no `LaravelHttpTransport`: o merge da config é só no primeiro nível, então a chave nova não chega sozinha. Um valor inválido (classe que não implementa a interface, a própria interface, algo que não é string) lança `InvalidArgumentException` ao resolver o transporte.
 
@@ -25,6 +25,8 @@ Se o app registra a classe no container, os timeouts da config não se aplicam: 
 Só um número maior que zero conta. Vazio, `0` ou texto valem `null`; não use `0` como "sem limite". Sem valor, vale o padrão do `Http` da versão: nenhum no Laravel 8; 30 s de total e 10 s de conexão no 9.52 e do 10 em diante.
 
 Recomendamos `ZAPMIZER_HTTP_CONNECT_TIMEOUT=10` e `ZAPMIZER_HTTP_TIMEOUT=30`.
+
+O envio com arquivo (`sendMessageWithFile()`, `ZapmizerMessage::image()`/`document()`) ignora esses valores e usa os mesmos 60 s para conectar e 600 s no total (`ZapmizerApi::TRANSFER_CONNECT_TIMEOUT` e `TRANSFER_TIMEOUT`), para que um timeout curto pensado nas chamadas JSON não o corte. O envio de texto segue a config.
 
 ## Mídia
 
@@ -66,13 +68,41 @@ $download = app(InstanceClient::class, ['api_token' => 'team-token'])->media(77,
 $download->contents(); // 'png-bytes'
 ```
 
-Um `Http::fake()` sem resposta para a URL da Zapmizer responde `200` vazio (o "fake vazio"). As chamadas que esperam JSON (`createSession`, `exchangeCode`, `connection`, `createWebhook` e `rotateWebhookSecret`) falham com `unexpectedResponse`: não viram uma sessão vazia. Duas passam sem aviso: `deleteWebhook()` retorna normalmente e `media()` devolve um download anexado vazio (`size === 0`). Um `MockHandler` num `GuzzleHttp\Client` do container não pega mais parceiro nem instância.
+Um `Http::fake()` sem resposta para a URL da Zapmizer responde `200` vazio (o "fake vazio"). As chamadas que esperam JSON (`createSession`, `exchangeCode`, `connection`, `createWebhook` e `rotateWebhookSecret`) falham com `unexpectedResponse`: não viram uma sessão vazia. Duas passam sem aviso: `deleteWebhook()` retorna normalmente e `media()` devolve um download anexado vazio (`size === 0`). Um `MockHandler` num `GuzzleHttp\Client` do container não pega mais parceiro, instância nem envio.
+
+O envio de mensagem também passa pelo fake, e a recusa da Zapmizer vira `ZapmizerApiException` (os dois fakes abaixo são de testes diferentes, porque o primeiro que casa vence):
+
+```php
+use NotificationChannels\Zapmizer\Exceptions\ErrorCode;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
+use NotificationChannels\Zapmizer\ZapmizerMessage;
+
+config(['zapmizer.api_token' => 'team-token', 'zapmizer.base_uri' => 'https://zapmizer.test/api/']);
+
+Http::fake(['zapmizer.test/*' => Http::response(['id' => 1], 200)]);
+
+ZapmizerMessage::create(from: '5581911110000', to: '5511999999999')->text('Hello')->send();
+
+Http::assertSent(fn (Request $request) => $request->url() === 'https://zapmizer.test/api/messages'
+    && $request['to'] === '5511999999999'
+    && $request['metadata']['text'] === 'Hello');
+
+// Em outro teste, com o fake da recusa:
+Http::fake(['zapmizer.test/*' => Http::response(['error' => 'window_closed', 'message' => 'The 24 h window is closed.'], 409)]);
+
+try {
+    ZapmizerMessage::create(from: '5581911110000', to: '5511999999999')->text('Hello')->send();
+} catch (ZapmizerApiException $exception) {
+    $exception->status();  // 409
+    $exception->error();   // ErrorCode::WINDOW_CLOSED
+}
+```
 
 ## Transporte próprio
 
 O contrato é implementar `Contracts\Transport::send(string $method, string $url, array $options = []): ResponseInterface`:
 
-- As opções têm nomes do Guzzle: `headers`, `json`, `query`, `timeout`, `connect_timeout`.
+- As opções têm nomes do Guzzle: `headers`, `json`, `query`, `form_params`, `multipart`, `timeout`, `connect_timeout`. O envio de texto usa `form_params`; o envio de arquivo usa `multipart`, com o arquivo como recurso aberto.
 - Não lance exceção em 4xx nem 5xx.
 - Não siga redirect. Com o token recusado a Zapmizer redireciona para o login, e seguido isso vira um `200` HTML e uma mensagem perdida em silêncio.
 - Devolva o corpo legível, de preferência seekable. Um corpo não seekable é lido de onde está, uma vez.
@@ -115,7 +145,7 @@ class ProxiedTransport implements Transport
 
 ## Montar um cliente à mão
 
-`new PartnerClient($id, $secret)` e `new InstanceClient($token)` pegam o `Contracts\Transport` do container, já configurado. Isso pede o provider da lib registrado, o que o package discovery faz num app normal. Fora disso o erro é `BindingResolutionException`: resolva o cliente pelo container ou registre o provider.
+`new PartnerClient($id, $secret)`, `new InstanceClient($token)` e `new Zapmizer($token)` pegam o `Contracts\Transport` do container, já configurado. Isso pede o provider da lib registrado, o que o package discovery faz num app normal. Fora disso o erro é `BindingResolutionException`: resolva o cliente pelo container ou registre o provider.
 
 Passar um transporte no construtor também vale. Uma config inválida falha no construtor.
 

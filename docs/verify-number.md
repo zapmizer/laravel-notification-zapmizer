@@ -188,7 +188,7 @@ use NotificationChannels\Zapmizer\Exceptions\VerificationRequestFailed;    // 4x
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerVerificationException; // base of all of the above
 ```
 
-The client sends `Accept: application/json` and does **not** follow redirects: a revoked token makes Zapmizer redirect to its login page, and a redirect or a non-JSON answer throws `ZapmizerVerificationException` (`unexpectedResponse`) instead of passing an HTML page off as a result. The same holds for the messages client (`Zapmizer::sendMessage()` → `CouldNotSendNotification`).
+The client sends `Accept: application/json` and does **not** follow redirects: a revoked token makes Zapmizer redirect to its login page, and a redirect or a non-JSON answer throws `ZapmizerVerificationException` (`unexpectedResponse`) instead of passing an HTML page off as a result. The same holds for the messages client (`Zapmizer::sendMessage()` → `ZapmizerConnectException`, `unexpectedResponse`). `ZapmizerVerificationException` extends `ZapmizerException`, the root of every exception of the package.
 
 Notable API errors when creating a session: `503` when the team has no online bot, `422` when the `from` number doesn't match any of the team's WhatsApp accounts.
 

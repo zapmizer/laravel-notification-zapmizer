@@ -2,7 +2,7 @@
 
 namespace NotificationChannels\Zapmizer;
 
-use NotificationChannels\Zapmizer\Exceptions\CouldNotSendNotification;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerException;
 
 class ZapmizerMessage
 {
@@ -65,7 +65,7 @@ class ZapmizerMessage
     }
 
     /**
-     * @throws CouldNotSendNotification
+     * @throws ZapmizerException
      */
     public function send()
     {

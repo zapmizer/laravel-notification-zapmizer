@@ -2,6 +2,8 @@
 
 namespace NotificationChannels\Zapmizer\Exceptions;
 
+use NotificationChannels\Zapmizer\Support\ApiError;
+
 /**
  * Class MediaRejectedException.
  *
@@ -10,15 +12,10 @@ namespace NotificationChannels\Zapmizer\Exceptions;
  * request will not do better on a retry. `reason()` is Zapmizer's own
  * explanation.
  */
-final class MediaRejectedException extends ZapmizerConnectException
+final class MediaRejectedException extends ZapmizerApiException
 {
-    public function __construct(private readonly string $reason)
+    public function __construct(ApiError $error)
     {
-        parent::__construct("Zapmizer rejected the media request: {$reason}");
-    }
-
-    public function reason(): string
-    {
-        return $this->reason;
+        parent::__construct($error, "Zapmizer rejected the media request: {$error->reason()}");
     }
 }

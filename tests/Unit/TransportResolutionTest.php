@@ -14,6 +14,7 @@ use NotificationChannels\Zapmizer\Test\Fixtures\FixedTimeoutTransport;
 use NotificationChannels\Zapmizer\Test\Fixtures\RecordingTransport;
 use NotificationChannels\Zapmizer\Test\Fixtures\TimeoutCapturingTransport;
 use NotificationChannels\Zapmizer\Test\TestCase;
+use NotificationChannels\Zapmizer\Zapmizer;
 use NotificationChannels\Zapmizer\ZapmizerServiceProvider;
 
 class TransportResolutionTest extends TestCase
@@ -130,7 +131,14 @@ class TransportResolutionTest extends TestCase
             }
         })->transport();
 
-        foreach ([$partner, $instance] as $transport) {
+        $sender = (new class () extends Zapmizer {
+            public function transport(): Transport
+            {
+                return $this->transport;
+            }
+        })->transport();
+
+        foreach ([$partner, $instance, $sender] as $transport) {
             $this->assertInstanceOf(TimeoutCapturingTransport::class, $transport);
             $this->assertSame(99.0, $transport->timeout);
         }
@@ -140,7 +148,7 @@ class TransportResolutionTest extends TestCase
     {
         config()->set('zapmizer.http.transport', 'guzzle');
 
-        foreach ([fn () => new PartnerClient(), fn () => new InstanceClient('tok')] as $build) {
+        foreach ([fn () => new PartnerClient(), fn () => new InstanceClient('tok'), fn () => new Zapmizer()] as $build) {
             try {
                 $build();
                 $this->fail('expected InvalidArgumentException');
@@ -166,6 +174,13 @@ class TransportResolutionTest extends TestCase
             try {
                 new InstanceClient('tok');
                 $this->fail('expected BindingResolutionException from InstanceClient');
+            } catch (BindingResolutionException) {
+                $this->addToAssertionCount(1);
+            }
+
+            try {
+                new Zapmizer('tok');
+                $this->fail('expected BindingResolutionException from Zapmizer');
             } catch (BindingResolutionException) {
                 $this->addToAssertionCount(1);
             }

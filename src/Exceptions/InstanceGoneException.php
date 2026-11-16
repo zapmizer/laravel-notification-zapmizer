@@ -2,13 +2,19 @@
 
 namespace NotificationChannels\Zapmizer\Exceptions;
 
+use NotificationChannels\Zapmizer\Support\ApiError;
+
 /**
  * Class InstanceGoneException.
  *
- * Non-401 4xx when fetching an instance (deleted/unknown on Zapmizer). The
- * stored instance id is NOT cleared because of it: restarting the wizard
+ * 404 when fetching an instance (deleted/unknown on Zapmizer). The stored
+ * instance id is NOT cleared because of it: restarting the wizard
  * re-resolves the instance.
  */
-final class InstanceGoneException extends ZapmizerConnectException
+final class InstanceGoneException extends ZapmizerApiException
 {
+    public function __construct(ApiError $error, int $instanceId)
+    {
+        parent::__construct($error, "Instance {$instanceId} is gone on Zapmizer.");
+    }
 }

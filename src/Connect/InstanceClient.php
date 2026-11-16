@@ -8,6 +8,7 @@ use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
+use NotificationChannels\Zapmizer\Support\ApiError;
 use NotificationChannels\Zapmizer\Support\JsonResponse;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamInterface;
@@ -73,8 +74,8 @@ class InstanceClient
 
         $this->guardUnauthorized($response);
 
-        if ($response->getStatusCode() >= 400 && $response->getStatusCode() < 500) {
-            throw new InstanceGoneException("Instance {$id} is gone on Zapmizer.");
+        if ($response->getStatusCode() === 404) {
+            throw new InstanceGoneException(ApiError::from($response), $id);
         }
 
         $this->guardFailure($response);
@@ -178,7 +179,8 @@ class InstanceClient
      * Every message of the number stored after `$cursor` (the `cursor`
      * of the previous page). On the very first call, without a cursor, pass
      * `$since` (seconds) so the whole history is not walked. Only for numbers
-     * by QR (a 422 otherwise); 429 is over the limit of 30 requests a minute.
+     * by QR (a 422 otherwise, a `ZapmizerApiException`); 429 is over the limit of
+     * 30 requests a minute (`ZapmizerRateLimitedException`).
      *
      * @throws ZapmizerConnectException
      */
@@ -200,28 +202,6 @@ class InstanceClient
         return SyncedMessages::fromResponse($this->decode($response), $cursor);
     }
 
-    /**
-     * The reason of a JSON error answer: Laravel's `message`, plus the first
-     * of each validation error when there is one. The raw body otherwise.
-     */
-    protected function reasonFrom(ResponseInterface $response): string
-    {
-        $body = (string) $response->getBody();
-        $payload = json_decode($body, true);
-
-        if (!is_array($payload)) {
-            return trim($body);
-        }
-
-        $errors = array_map(
-            fn ($messages) => is_array($messages) ? (string) reset($messages) : (string) $messages,
-            $payload['errors'] ?? [],
-        );
-
-        return implode(' ', array_filter([$payload['message'] ?? null, ...array_values($errors)]))
-            ?: trim($body);
-    }
-
     protected function temporaryMediaPath(): ?string
     {
         $path = @tempnam(sys_get_temp_dir(), 'zapmizer-media-');
@@ -236,13 +216,11 @@ class InstanceClient
         $status = $response->getStatusCode();
 
         if ($status === 422) {
-            throw ZapmizerConnectException::mediaRejected($this->reasonFrom($response));
+            throw ZapmizerConnectException::mediaRejected(ApiError::from($response));
         }
 
         if ($status === 429) {
-            throw ZapmizerConnectException::mediaRateLimited(
-                $response->hasHeader('Retry-After') ? (int) $response->getHeaderLine('Retry-After') : null,
-            );
+            throw ZapmizerConnectException::mediaRateLimited(ApiError::from($response));
         }
 
         if ($status === 200) {
@@ -384,7 +362,7 @@ class InstanceClient
     protected function guardUnauthorized(ResponseInterface $response): void
     {
         if ($response->getStatusCode() === 401) {
-            throw new ZapmizerUnauthorizedException('Zapmizer refused the connection token.');
+            throw ZapmizerApi::failure($response);
         }
     }
 
@@ -394,9 +372,7 @@ class InstanceClient
     protected function guardFailure(ResponseInterface $response): void
     {
         if ($response->getStatusCode() >= 400) {
-            throw ZapmizerConnectException::unexpectedResponse(
-                "HTTP {$response->getStatusCode()} - " . (string) $response->getBody()
-            );
+            throw ZapmizerApi::failure($response);
         }
     }
 

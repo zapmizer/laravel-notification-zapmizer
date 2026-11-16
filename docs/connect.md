@@ -752,7 +752,7 @@ The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceCli
 
 On the model, `zapmizerExternalId()` (section 3). For behaviour after a connect or a refused reconnect, the `NumberConnected` and `ReconnectRefused` events (section 5).
 
-## Upgrading from 0.3.x
+## Upgrading from 0.3.x or 0.4.x
 
 The partner client changed, and so did the connect flow ("Connect flow" below).
 

@@ -2,9 +2,11 @@
 
 # Unreleased
 
-**Quebra a 0.3.** Leia "Upgrade da 0.3" antes de atualizar; o resto desta seção traz o de/para por tema.
+**Quebra a 0.3 e a 0.4.** Leia "Upgrade da 0.3 e da 0.4" antes de atualizar; o resto desta seção traz o de/para por tema.
 
-## Upgrade da 0.3
+## Upgrade da 0.3 e da 0.4
+
+A 0.4 só acrescentou o `syncMessages()` à 0.3, que segue igual aqui: a lista vale para as duas.
 
 1. **Zapmizer 1.148.10 ou superior.** O contrato que esta versão usa está todo nela (`user_id`/`team_id` no `connect/token`, reconnect, revogação e `partner/users` desde a 1.148.8; `appearance` da caixa e `user.email` do embed desde a 1.148.10). A 1.149.0 e a 1.150.0 citadas nas versões anteriores nunca foram lançadas.
 2. **Procure `CouldNotSendNotification` no app.** A classe saiu, e um `catch` dela não dá erro: só deixa de casar, e a exceção escapa. Troque por `catch (ZapmizerException $e)` ou pelas classes de "Envio" abaixo.
@@ -92,7 +94,7 @@ Subclasses de `ZapmizerApiException` ganham `context()`.
 
 ## Connect
 
-**Breaking no fluxo de connect.** O de/para está na tabela; veja também "Connect flow" em "Upgrading from 0.3.x" (`docs/connect.md`).
+**Breaking no fluxo de connect.** O de/para está na tabela; veja também "Connect flow" em "Upgrading from 0.3.x or 0.4.x" (`docs/connect.md`).
 
 | Antes | Agora |
 | --- | --- |
@@ -234,7 +236,7 @@ Só documentação. `syncMessages()` devolve as mensagens **gravadas** depois do
 
 # 0.4.0
 
-Sem breaking. **Recuperar mensagens exige o Zapmizer com `GET /api/whatsapp-messages`.**
+Sem breaking. **Recuperar mensagens exige o Zapmizer 1.148.15 ou superior** (`GET /api/whatsapp-messages`).
 
 - **Sincronizar as mensagens do número.** `ZapmizerConnection::syncMessages($cursor = null, $since = null, $limit = null): Connect\SyncedMessages` lê tudo o que mudou nas mensagens do número desde o cursor (recebidas e enviadas, editadas, apagadas, as do sync na reconexão), cada uma traduzida como no webhook (`InboundMessage::fromMessage()`, motor wwebjs ou Rust). O Zapmizer não filtra nem deduplica: pule `fromMe` e deduplique por `$message->id`. `SyncedMessages` traz `messages`, `payloads` (o objeto cru, na mesma ordem), `cursor` (opaco; mantém o anterior quando nada veio) e `hasMore`. Entrada sem id é descartada sem travar a página. Sem `bot_instance_id` lança `ZapmizerUnauthorizedException`. Veja "Recovering what the webhook missed" em `docs/connect.md`.
 - `Connect\InstanceClient::syncMessages(int $botInstanceId, ?string $cursor = null, ?int $since = null, ?int $limit = null)`.

@@ -330,6 +330,22 @@ It returns the last answer: `attached`, `unavailable` as soon as Zapmizer says s
 
 Requires **Zapmizer 1.150.0 or later** (media endpoint). <!-- TODO confirm the release that ships `api-media-mensagem` -->
 
+### Recovering what the webhook missed
+
+Zapmizer tries each delivery 3 times in about 3 seconds and gives up. With the app down for longer, or with messages that arrived in the sync after the number reconnected, the `message` event never comes. `ZapmizerConnection::syncMessages(?string $cursor = null, ?int $since = null, ?int $limit = null)` reads back, from `GET /api/whatsapp-messages` (numbers by QR only), every message of the number stored after the cursor — received and sent, including the ones that came in the sync after a reconnect:
+
+```php
+$page = $connection->syncMessages($cursor, since: $cursor ? null : now()->subHour()->getTimestamp());
+
+foreach ($page->messages as $i => $message) {
+    event(new MessageReceived($message, $connection, ['name' => 'message', 'data' => [$page->payloads[$i]]]));
+}
+
+$cursor = $page->cursor; // keep it; call again while $page->hasMore
+```
+
+Each message is an `InboundMessage` built exactly like the webhook's, so the same listener handles both. Zapmizer neither filters nor deduplicates: the listener must skip `fromMe` and be idempotent on `$message->id`, since a message may come back more than once. Run it on a schedule (every minute is fine: the endpoint allows 30 calls a minute per number). Requires Zapmizer with `GET /api/whatsapp-messages`.
+
 ## 7. Rotating the webhook secret
 
 ```php
@@ -353,7 +369,7 @@ use NotificationChannels\Zapmizer\Exceptions\MediaRejectedException;        // m
 use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;     // media endpoint rate limit (429) — ->retryAfter()
 ```
 
-The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceClient`) are container-bound with the configured transport, `LaravelHttpTransport` by default — see [transporte.md](transporte.md). Fake them in tests with `Http::fake()`. Every client sends `Accept: application/json` and does **not** follow redirects: a revoked token makes Zapmizer redirect to its login page, and a redirect or a non-JSON answer is an exception (`unexpectedResponse`) instead of a silent "success". `InstanceClient` always acts for one connection: its token is mandatory, there is no fallback to `zapmizer.api_token` — get it through `$connection->instanceClient()`. It only knows `connection($id)`, `createWebhook($url)`, `rotateWebhookSecret($id)`, `deleteWebhook($id)` and `media($botInstanceId, $messageId, $timestamp)` — instances are created and paired on Zapmizer's page, not from here. `media()` is the one endpoint whose 200 is not JSON (the bytes); its 202/404 answers are, and a redirect is still refused; its 422 (bad request, Meta Cloud instance) is a `MediaRejectedException` and its 429 (rate limit) a `MediaRateLimitedException` — both `ZapmizerConnectException`s.
+The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceClient`) are container-bound with the configured transport, `LaravelHttpTransport` by default — see [transporte.md](transporte.md). Fake them in tests with `Http::fake()`. Every client sends `Accept: application/json` and does **not** follow redirects: a revoked token makes Zapmizer redirect to its login page, and a redirect or a non-JSON answer is an exception (`unexpectedResponse`) instead of a silent "success". `InstanceClient` always acts for one connection: its token is mandatory, there is no fallback to `zapmizer.api_token` — get it through `$connection->instanceClient()`. It only knows `connection($id)`, `createWebhook($url)`, `rotateWebhookSecret($id)`, `deleteWebhook($id)`, `media($botInstanceId, $messageId, $timestamp)` and `syncMessages($botInstanceId, $cursor, $since, $limit)` — instances are created and paired on Zapmizer's page, not from here. `media()` is the one endpoint whose 200 is not JSON (the bytes); its 202/404 answers are, and a redirect is still refused; its 422 (bad request, Meta Cloud instance) is a `MediaRejectedException` and its 429 (rate limit) a `MediaRateLimitedException` — both `ZapmizerConnectException`s.
 
 `PartnerClient::createSession($redirectUri, $state, $webhookUrl = null, $expiresIn = null)` never asks for an `expires_in` below Zapmizer's floor of **900 seconds** (`PartnerClient::MIN_EXPIRES_IN`): the same signature covers the page, the authorization and the QR code, and a shorter one died mid-pairing.
 

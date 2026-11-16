@@ -20,4 +20,5 @@ final class ErrorCode
     public const NUMBER_BANNED = 'number_banned';
     public const WINDOW_CLOSED = 'window_closed';
     public const NEEDS_RECONNECT = 'needs_reconnect';
+    public const UNKNOWN_API_VERSION = 'unknown_api_version';
 }

@@ -885,9 +885,9 @@ class PartnerClientTest extends TestCase
         config()->set('zapmizer.partner.secret', 'secret');
 
         $session = '{"url":"http://zap.test/connect/1","expires_at":"2026-09-07T01:00:00Z"}';
-        $token = '{"token":"1|sanctum","user_id":3,"team_id":7,"team_name":"Acme","phone_number":"5581911110000","bot_instance_id":9,"webhook_id":null,"webhook_secret":null}';
+        $token = '{"token":"1|sanctum","user_id":3,"team_id":7,"team_name":"Acme","phone_number":"5581911110000","bot_instance_id":9,"webhook_id":null,"webhook_secret":null,"webhook_version":null}';
         $subscription = '{"user_id":3,"team_id":7,"external_id":"42","subscribed":false,"quantity":null,"trial_ends_at":"2999-01-01T00:00:00Z","payment_incomplete":false}';
-        $checkout = '{"url":"https://checkout.test/c/1","expires_at":null}';
+        $checkout = '{"url":"https://checkout.test/c/1","expires_at":"2026-09-07T01:00:00Z"}';
         $this->assertMatchesContract('POST', '/connect/sessions', 201, $session);
         $this->assertMatchesContract('POST', '/connect/token', 200, $token);
         $this->assertMatchesContract('GET', '/partner/users/{externalId}', 200, $subscription);

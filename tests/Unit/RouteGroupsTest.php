@@ -68,7 +68,13 @@ class RouteGroupsTest extends TestCase
 
         Artisan::call('route:list', ['--json' => true]);
 
-        $this->assertStringNotContainsString('zapmizer', Artisan::output());
+        // Only the routes themselves: the JSON also carries file paths (the
+        // Laravel 12 storage route points into vendor/, under this repo's name).
+        $routes = json_decode(Artisan::output(), true) ?: [];
+        $ours = array_filter($routes, fn (array $route) => str_contains(strtolower((string) ($route['uri'] ?? '')), 'zapmizer')
+            || str_starts_with((string) ($route['name'] ?? ''), 'zapmizer.')
+            || str_contains((string) ($route['action'] ?? ''), 'NotificationChannels\\Zapmizer'));
+        $this->assertSame([], array_values($ours));
     }
 
     public function testTheGroupsAreOffInThePackageConfigWithoutTheirEnv()

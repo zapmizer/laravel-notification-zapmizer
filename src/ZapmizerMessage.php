@@ -3,6 +3,7 @@
 namespace NotificationChannels\Zapmizer;
 
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerException;
+use NotificationChannels\Zapmizer\Messages\SentMessage;
 
 class ZapmizerMessage
 {
@@ -65,16 +66,18 @@ class ZapmizerMessage
     }
 
     /**
+     * Send it. The answer is the accepted send (`id`, `links.self`, the
+     * checked `wid_to`), not the delivery: follow it with
+     * `Zapmizer::track()`.
+     *
      * @throws ZapmizerException
      */
-    public function send()
+    public function send(): SentMessage
     {
         if (is_null($this->file)) {
-            $this->zapmizer->sendMessage($this->params);
-        } else {
-            $this->zapmizer->sendMessageWithFile($this->params, $this->file);
+            return $this->zapmizer->sendMessage($this->params);
         }
 
-        return $this;
+        return $this->zapmizer->sendMessageWithFile($this->params, $this->file);
     }
 }

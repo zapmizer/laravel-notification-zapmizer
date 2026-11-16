@@ -8,6 +8,9 @@ use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Http\Client\Request as HttpRequest;
+use Illuminate\Notifications\AnonymousNotifiable;
+use Illuminate\Notifications\Events\NotificationSent;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Route;
 use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
@@ -17,14 +20,17 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
+use NotificationChannels\Zapmizer\Messages\SentMessage;
 use NotificationChannels\Zapmizer\Test\Concerns\AssertsContract;
 use NotificationChannels\Zapmizer\Test\Concerns\FakesZapmizerHttp;
 use NotificationChannels\Zapmizer\Test\Concerns\InvalidBaseUris;
 use NotificationChannels\Zapmizer\Test\Fixtures\RecordingTransport;
+use NotificationChannels\Zapmizer\Test\Fixtures\SendsThroughZapmizer;
 use NotificationChannels\Zapmizer\Test\TestCase;
 use NotificationChannels\Zapmizer\Zapmizer;
 use NotificationChannels\Zapmizer\ZapmizerMessage;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Psr\Http\Message\ResponseInterface;
 
 class ZapmizerTest extends TestCase
 {
@@ -60,9 +66,9 @@ class ZapmizerTest extends TestCase
         $this->assertMatchesContract('POST', '/messages', 200, '{"id": 1}');
         $client = $this->makeClient(new Response(200, ['Content-Type' => 'application/json'], '{"id": 1}'));
 
-        $response = $client->sendMessage($this->params());
+        $sent = $client->sendMessage($this->params());
 
-        $this->assertEquals(200, $response->getStatusCode());
+        $this->assertSame('1', $sent->id);
 
         $request = $this->history[0]['request'];
         $this->assertEquals('http://localhost/api/messages', (string) $request->getUri());
@@ -208,7 +214,126 @@ class ZapmizerTest extends TestCase
         $this->assertMatchesContract('POST', '/messages', 200, '{"id": 1}');
         $client = $this->makeClient(new Response(200, [], '{"id": 1}'));
 
-        $this->assertSame('{"id": 1}', (string) $client->sendMessage($this->params())->getBody());
+        $this->assertSame(['id' => 1], $client->sendMessage($this->params())->raw());
+    }
+
+    public function testSendMessageAnswersTheTypedSend()
+    {
+        $this->assertMatchesContract('POST', '/messages', 200, SentMessageTest::QR);
+        $this->assertMatchesContract('POST', '/messages', 200, SentMessageTest::OFFICIAL);
+        $client = $this->makeClient(
+            new Response(200, ['Content-Type' => 'application/json'], SentMessageTest::QR),
+            new Response(200, ['Content-Type' => 'application/json'], SentMessageTest::OFFICIAL),
+        );
+
+        $qr = $client->sendMessage($this->params());
+        $official = $client->sendMessageWithFile($this->params(), __FILE__);
+
+        $this->assertInstanceOf(SentMessage::class, $qr);
+        $this->assertSame('9d3c1e2a-5b7f-4c1e-9a8b-1f2e3d4c5b6a', $qr->id);
+        $this->assertSame('https://app.zapmizer.com/api/sent-messages/9d3c1e2a-5b7f-4c1e-9a8b-1f2e3d4c5b6a', $qr->selfUrl);
+        $this->assertSame('551199999999@c.us', $qr->widTo);
+        $this->assertSame(json_decode(SentMessageTest::QR, true), $qr->raw());
+        $this->assertSame('42', $official->id);
+        $this->assertSame('https://app.zapmizer.com/api/meta-messages/42', $official->selfUrl);
+    }
+
+    public function testTheLegacyAnswerIsReadToo()
+    {
+        $this->assertMatchesContract('GET', '/messages/{id}', 200, SentMessageTest::LEGACY);
+        $this->fakeZapmizer(new MockHandler([new Response(200, ['Content-Type' => 'application/json'], SentMessageTest::LEGACY)]));
+        $client = new Zapmizer('bot-token', new LaravelHttpTransport(), 'http://localhost/api');
+
+        $sent = $client->sendMessage($this->params());
+
+        $this->assertSame('', $this->history[0]['request']->getHeaderLine('api-version'));
+        $this->assertSame('7', $sent->id);
+        $this->assertSame('551199999999@c.us', $sent->widTo);
+    }
+
+    /** @dataProvider jsonThatIsNotAnObject */
+    #[DataProvider('jsonThatIsNotAnObject')]
+    public function testAJsonAnswerThatIsNotAnObjectIsUnexpected(string $body)
+    {
+        $client = $this->makeClient(
+            new Response(200, ['Content-Type' => 'application/json'], $body),
+            new Response(200, ['Content-Type' => 'application/json'], $body),
+        );
+
+        foreach ([fn () => $client->sendMessage($this->params()), fn () => $client->sendMessageWithFile($this->params(), __FILE__)] as $send) {
+            try {
+                $send();
+                $this->fail('Expected unexpectedResponse.');
+            } catch (ZapmizerConnectException $exception) {
+                $this->assertNotInstanceOf(ZapmizerApiException::class, $exception);
+                $this->assertStringContainsString('response body is not a JSON object', $exception->getMessage());
+            }
+        }
+    }
+
+    public static function jsonThatIsNotAnObject(): array
+    {
+        return [
+            'empty body' => [''],
+            'list' => ['[1, 2]'],
+            'string' => ['"ok"'],
+            'null' => ['null'],
+            'true' => ['true'],
+        ];
+    }
+
+    public function testAZapmizerMessageAnswersTheTypedSend()
+    {
+        $this->assertMatchesContract('POST', '/messages', 200, SentMessageTest::QR);
+        config()->set('zapmizer.api_token', 'team-token');
+        config()->set('zapmizer.base_uri', 'https://zapmizer.test/api/');
+        Http::fake(['zapmizer.test/*' => Http::response(SentMessageTest::QR, 200, ['Content-Type' => 'application/json'])]);
+
+        $text = ZapmizerMessage::create(from: '5581911110000', to: '5511999999999')->text('Hello')->send();
+        $file = ZapmizerMessage::create(from: '5581911110000', to: '5511999999999')->document(__FILE__, 'caption')->send();
+
+        $this->assertInstanceOf(SentMessage::class, $text);
+        $this->assertSame('9d3c1e2a-5b7f-4c1e-9a8b-1f2e3d4c5b6a', $text->id);
+        $this->assertInstanceOf(SentMessage::class, $file);
+        Http::assertSentCount(2);
+    }
+
+    public function testNotificationSentCarriesTheTypedSend()
+    {
+        $this->assertMatchesContract('POST', '/messages', 200, SentMessageTest::QR);
+        config()->set('zapmizer.api_token', 'team-token');
+        config()->set('zapmizer.base_uri', 'https://zapmizer.test/api/');
+        Http::fake(['zapmizer.test/*' => Http::response(SentMessageTest::QR, 200, ['Content-Type' => 'application/json'])]);
+        $events = [];
+        Event::listen(NotificationSent::class, function (NotificationSent $event) use (&$events) {
+            $events[] = $event;
+        });
+
+        (new AnonymousNotifiable())->route('zapmizer', '5511999999999')->notify(new SendsThroughZapmizer());
+
+        $this->assertCount(1, $events);
+        $this->assertSame('zapmizer', $events[0]->channel);
+        $this->assertInstanceOf(SentMessage::class, $events[0]->response['message']);
+        $this->assertSame('9d3c1e2a-5b7f-4c1e-9a8b-1f2e3d4c5b6a', $events[0]->response['message']->id);
+    }
+
+    public function testASubclassThatOverridesPostStillSends()
+    {
+        $this->assertMatchesContract('POST', '/messages', 200, '{"id": 9}');
+        $transport = new RecordingTransport(new Response(200, ['Content-Type' => 'application/json'], '{"id": 9}'));
+        $client = new class('bot-token', $transport, 'http://localhost/api') extends Zapmizer {
+            public array $posted = [];
+
+            protected function post(array $options): ResponseInterface
+            {
+                $this->posted[] = $options;
+
+                return parent::post($options);
+            }
+        };
+
+        $this->assertSame('9', $client->sendMessage($this->params())->id);
+        $this->assertCount(1, $client->posted);
     }
 
     public function testM22UnauthorizedIsTheTokenRefusal()

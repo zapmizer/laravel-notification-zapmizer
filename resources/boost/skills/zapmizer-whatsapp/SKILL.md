@@ -93,7 +93,11 @@ router.on('before', (event) => {
 });
 ```
 
-4. Build the front (`npm run build` or the app's equivalent) to make sure it compiles.
+4. Build the front (`npm run build` or the app's equivalent) to make sure it compiles. The build bakes in `VITE_ZAPMIZER_BRAND` from `.env`.
+
+### The embed brand
+
+The iframe tags its events with `source: "<brand>-embed"` and `@zapmizer/embed` drops any other, so the front's brand must be the one of the Zapmizer deploy `ZAPMIZER_BASE_URI` points at: `zapmizer` for `app.zapmizer.com` (default), `parli` for `app.parlichat.com`. `zapmizer:install` writes `VITE_ZAPMIZER_BRAND` with the derived brand (only if missing); `ZAPMIZER_EMBED_BRAND` overrides the backend's derivation. A wrong brand shows as an inbox that never gets `ready` (`ready_timeout`); `zapmizer:check` reports it as `embed_brand`. After changing either value, rebuild the front.
 
 ## Verify
 
@@ -108,6 +112,7 @@ Each check has `id`, `status` (`ok`, `fail`, `warn`, `skip`), `message` and `hin
 - `partner_credentials` fails: ask for the credentials. Never invent them.
 - `partner_api` fails (401) or the connect answers `partner_unauthorized`: the credentials are wrong or from another environment.
 - The inbox says the address is not allowed (`origin_not_allowed`), or the connect fails on the host: the host is not on the partner allowlist.
+- `embed_brand` fails: set `VITE_ZAPMIZER_BRAND` to the brand the hint gives and rebuild; ask the human only if the `ZAPMIZER_BASE_URI` itself is in doubt.
 - The inbox answers `missing_ability`: the user must connect again.
 - Connecting the number itself (popup + QR code on the phone) is the human's step. Testing it in development needs a public https URL (a tunnel) allowed on the partner account.
 

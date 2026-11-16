@@ -21,6 +21,8 @@ A conversa não tem rota da lib: ela precisa do telefone do contato, de quem é 
 
 A caixa de entrada tem rota pronta, opt-in: com `ZAPMIZER_INBOX_ENABLED=true` (o `zapmizer:install --inbox` liga), a lib registra `zapmizer.inbox.session` e `zapmizer.inbox.keepalive`, que abrem a caixa da conexão do model do `zapmizer.connect.resolver` com o usuário logado como atendente e respondem pela `EmbedSessionResponse`. Veja [instalar.md](instalar.md#as-rotas-da-caixa). Para outra regra (outro dono, aparência, permissão), deixe-a desligada e escreva a sua rota como abaixo.
 
+No front, o `brand` do `@zapmizer/embed` é a marca do deploy da `base_uri` (`zapmizer` em app.zapmizer.com, `parli` em app.parlichat.com): o iframe só manda eventos com `source: "<marca>-embed"`. A lib deriva a marca em `Support\EmbedBrand::resolve()` (sobrescrita por `zapmizer.inbox.brand`); veja [A marca do embed](instalar.md#a-marca-do-embed). A `origin` da resposta não depende da marca: sai da `url` da sessão.
+
 ## 2. A rota do app
 
 ```php

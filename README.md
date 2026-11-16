@@ -18,7 +18,7 @@ npm install github:zapmizer/embed#v0.1.2 axios lucide-vue-next   # or bun/pnpm/y
 php artisan zapmizer:check --json
 ```
 
-Then mount `resources/js/components/zapmizer/InboxScreen.vue` on an authenticated page. Only a human has the partner credentials (`ZAPMIZER_PARTNER_ID`, `ZAPMIZER_PARTNER_SECRET`) and can get the app's host allowed on the partner account: ask, never make them up. Step by step, with what to ask and when to stop: [docs/instalar.md](docs/instalar.md) (Portuguese).
+Then mount `resources/js/components/zapmizer/InboxScreen.vue` on an authenticated page and rebuild the front: the embed brand (`VITE_ZAPMIZER_BRAND`, written by the installer) must be the one of the deploy `ZAPMIZER_BASE_URI` points at (`parli` for app.parlichat.com), or the inbox never loads. Only a human has the partner credentials (`ZAPMIZER_PARTNER_ID`, `ZAPMIZER_PARTNER_SECRET`) and can get the app's host allowed on the partner account: ask, never make them up. Step by step, with what to ask and when to stop: [docs/instalar.md](docs/instalar.md) (Portuguese).
 
 > Full guides live in [`docs/`](docs/README.md). The [wiki](https://github.com/zapmizer/laravel-notification-zapmizer/wiki) is a mirror of `docs/` on `main`; edit `docs/`, not the wiki.
 

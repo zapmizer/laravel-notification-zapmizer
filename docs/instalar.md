@@ -48,7 +48,7 @@ O comando é idempotente: rodar de novo só faz o que falta. Sem `--no-interacti
 | --- | --- |
 | config | `config/zapmizer.php`, se ainda não existe |
 | migration | `database/migrations/*_create_zapmizer_connections_table.php`, uma vez só |
-| `.env` e `.env.example` | acrescenta só as chaves ausentes: `ZAPMIZER_BASE_URI`, `ZAPMIZER_API_VERSION=2025-06-27`, `ZAPMIZER_PARTNER_ID=` e `ZAPMIZER_PARTNER_SECRET=` vazios, e `ZAPMIZER_INBOX_ENABLED=true` com `--inbox` |
+| `.env` e `.env.example` | acrescenta só as chaves ausentes: `ZAPMIZER_BASE_URI`, `ZAPMIZER_API_VERSION=2025-06-27`, `ZAPMIZER_PARTNER_ID=` e `ZAPMIZER_PARTNER_SECRET=` vazios, `VITE_ZAPMIZER_BRAND` (a [marca do embed](#a-marca-do-embed)) e `ZAPMIZER_INBOX_ENABLED=true` com `--inbox` |
 | `--model` | `implements Connectable` e `use ConnectsZapmizer;` no model, com os `use` no topo |
 | `--inbox` | os componentes em `resources/js` (os mesmos de `vendor:publish --tag=zapmizer-wizard`), se o `package.json` tem `vue` |
 
@@ -164,7 +164,23 @@ router.on('before', (event) => {
 - Ajuste o caminho se o logout do app não for `/logout`.
 - Sem Inertia, chame `endZapmizerEmbeds()` no handler do logout, antes do POST.
 
-Por fim, confira que o front compila: `npm run build` (ou o `build` do gerenciador do app).
+Por fim, confira que o front compila: `npm run build` (ou o `build` do gerenciador do app). O build também grava no bundle o `VITE_ZAPMIZER_BRAND` do `.env`: mudou a marca ou a `ZAPMIZER_BASE_URI`, rebuilde.
+
+### A marca do embed
+
+O iframe marca cada evento com `source: "<marca>-embed"`, e o `@zapmizer/embed` descarta qualquer evento de outra marca (`src/messages.ts`, linha 12, do embed). Cada deploy da Zapmizer emite a sua: o servidor monta o `source` com o `VITE_BRAND` do deploy (`resources/js/Pages/Embed/embedBridge.ts` e `config/app.php` do servidor, padrão `zapmizer`), e o deploy da Parli (`app.parlichat.com`) manda `parli-embed`. Com a marca errada a caixa abre o iframe e nunca recebe o `ready`: depois de 45 s vira `ready_timeout`.
+
+A regra: **a marca é a do deploy da `ZAPMIZER_BASE_URI`**.
+
+| `ZAPMIZER_BASE_URI` | Marca |
+| --- | --- |
+| `https://app.zapmizer.com/api/` (o padrão) | `zapmizer` |
+| `https://app.parlichat.com/api/` (qualquer host em `parlichat.com`) | `parli` |
+
+- No backend, `zapmizer.inbox.brand` (`ZAPMIZER_EMBED_BRAND`) vale quando definida; vazia, a lib deriva do host da `base_uri` (`NotificationChannels\Zapmizer\Support\EmbedBrand::resolve()`). Defina-a só para um deploy fora da tabela.
+- O front precisa da marca já no boot (o `listenToLogout` roda antes de qualquer sessão), então ela vem do `VITE_ZAPMIZER_BRAND` do `.env`, lido no build. O `zapmizer:install` grava o valor derivado, só se a chave não existir. Trocou a `base_uri`, troque o `VITE_ZAPMIZER_BRAND` e rebuilde.
+- O `zapmizer:check` falha (`embed_brand`) quando a caixa está ligada e o `VITE_ZAPMIZER_BRAND` do `.env` falta ou é outro que a marca da config.
+- A retomada da caixa fica na chave `<marca>-inbox:<person>` do `sessionStorage`, e o logout entre abas usa o canal da marca: use a mesma marca no `endEmbeds` e no `listenToLogout`.
 
 ### 5. Conferir
 
@@ -188,6 +204,7 @@ Sai com código diferente de zero quando algo crítico falha. A única chamada e
 | `connect_routes` | rotas do connect e do webhook registradas | sim |
 | `inbox_routes` | rotas da caixa registradas, com `ZAPMIZER_INBOX_ENABLED=true` | sim |
 | `embed_package` | `@zapmizer/embed` no `package.json`, com tag fixa | sim sem o pacote; aviso sem tag |
+| `embed_brand` | `VITE_ZAPMIZER_BRAND` do `.env` igual à marca da config (a do deploy da `ZAPMIZER_BASE_URI`) | sim, com a caixa ligada |
 | `app_url` | `APP_URL` absoluto; aviso com `http` ou host local | sim só se não for URL |
 | `parent_origin` | `ZAPMIZER_INBOX_PARENT_ORIGIN`, quando definido, é uma origem | sim |
 
@@ -207,6 +224,7 @@ No JSON, cada item traz `id`, `status` (`ok`, `fail`, `warn` ou `skip`), `messag
 | `partner_api` em `fail` (`401`) | As credenciais estão erradas ou são de outro ambiente (`ZAPMIZER_BASE_URI`). Peça ao humano para conferir. |
 | O connect responde `partner_unauthorized` (503) | Igual ao anterior. |
 | A caixa mostra "Este endereço ainda não foi liberado" (`origin_not_allowed`) ou o connect falha com host não permitido | O host não está liberado na conta de parceiro. Peça ao humano para pedir a liberação à Zapmizer. |
+| A caixa fica em "Demorou demais para abrir" (`ready_timeout`) | Confira a [marca do embed](#a-marca-do-embed): `zapmizer:check` (`embed_brand`) e rebuild do front. |
 | A caixa responde `missing_ability` (403) | A conexão foi feita antes de a caixa existir. O usuário precisa conectar de novo. |
 | O instalador não reconheceu o model | Cole o trecho que ele imprimiu e rode o instalador de novo. |
 | O app não tem Vue | Siga [Sem Inertia/Vue](#sem-inertiavue) e confirme com o humano onde a caixa entra. |
@@ -222,7 +240,8 @@ As rotas da caixa (`zapmizer.inbox.session` e `zapmizer.inbox.keepalive`) servem
 <div id="caixa" style="position: relative; height: 80vh"
      data-person="{{ auth()->id() }}"
      data-session="{{ route('zapmizer.inbox.session') }}"
-     data-keepalive="{{ route('zapmizer.inbox.keepalive') }}"></div>
+     data-keepalive="{{ route('zapmizer.inbox.keepalive') }}"
+     data-brand="{{ \NotificationChannels\Zapmizer\Support\EmbedBrand::resolve() }}"></div>
 <p id="caixa-estado"></p>
 @vite('resources/js/atendimento.js')
 ```
@@ -237,7 +256,7 @@ const csrf = () => document.querySelector('meta[name="csrf-token"]').content;
 
 createInbox({
   container: el,
-  brand: 'zapmizer',
+  brand: el.dataset.brand, // 'zapmizer', ou 'parli' no deploy da Parli: veja "A marca do embed"
   person: el.dataset.person,
   openSession: async () => {
     const response = await fetch(el.dataset.session, {
@@ -261,7 +280,7 @@ createInbox({
 ```
 
 - `not_connected` (409) quer dizer que o usuário ainda não conectou: mostre o connect. O botão de conectar faz `POST route('zapmizer.connect.start')` (com o CSRF), abre a `url` da resposta numa janela de 520×720 e espera o `postMessage` com `source: 'zapmizer-connect'` e `status: 'ok'`, conferindo `event.origin === window.location.origin`. Veja o `ConnectButton.vue` em `stubs/inertia-vue` como referência.
-- No logout: `endEmbeds({ brand: 'zapmizer' })` de `@zapmizer/embed/logout` antes do POST, e `listenToLogout({ brand: 'zapmizer' })` em cada página.
+- No logout: `endEmbeds({ brand })` de `@zapmizer/embed/logout` antes do POST, e `listenToLogout({ brand })` em cada página, com a mesma marca.
 - O guia completo do front está na doc do embed: [caixa-de-entrada.md](https://github.com/zapmizer/embed/blob/v0.1.2/docs/caixa-de-entrada.md) e [backend.md](https://github.com/zapmizer/embed/blob/v0.1.2/docs/backend.md).
 
 ## As rotas da caixa

@@ -32,6 +32,15 @@
 - Subclasses: a propriedade `$http` não existe mais (as chamadas passam pelo `$transport`). `InstanceClient::spool()` continua com a assinatura da 0.3, mas rebobina o corpo e não o fecha.
 - Quem publicou `config/zapmizer.php` com a chave `http` e quer trocar de transporte precisa acrescentar `'transport' => ...` dentro dela: o merge da config é só no primeiro nível.
 
+# 0.4.2
+
+Sem breaking. A partir do Zapmizer 1.148.17, `api-version: 2026-10-20` muda o formato do `GET /whatsapp-messages` e dos webhooks novos para o contrato de mensagens, que esta versão não lê.
+
+- `syncMessages()` manda sempre `api-version: 2025-06-27`, qualquer que seja `zapmizer.api_version`. Antes, com `2026-10-20` na config, toda mensagem vinha no formato novo, era descartada e o cursor avançava: as mensagens se perdiam sem erro.
+- Se a resposta vier no contrato de mensagens mesmo assim, `syncMessages()` lança `ZapmizerConnectException` (`unexpectedResponse`) em vez de devolver uma página vazia.
+- `createWebhook()` (e com ele `registerWebhook()`) cria o webhook na versão `2024-02-27`, a do evento `message` que a lib lê, e manda `api-version: 2025-06-27`. Antes o webhook herdava a versão da config e, com `2026-10-20`, o `MessageReceived` nunca disparava. Zapmizer anterior à 1.148.17 ignora o campo.
+- Webhook cadastrado à mão na tela de Webhooks do Zapmizer: escolha a versão `2024-02-27`. A tela sugere `2026-10-20`, e com ela o evento `message` não chega.
+
 # 0.4.1
 
 Só documentação. `syncMessages()` devolve as mensagens **gravadas** depois do cursor: as que chegam no sync de uma reconexão entram, mas a edição de uma mensagem que já existia não volta (o Zapmizer pagina pela chave primária). O texto da 0.4.0 dizia "editadas, apagadas".

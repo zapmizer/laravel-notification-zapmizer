@@ -22,21 +22,24 @@ The full guide (Portuguese) is `docs/instalar.md` in the package: `vendor/zapmiz
 
 Ask one thing at a time, and only what the app does not tell you:
 
-1. The partner credentials, `ZAPMIZER_PARTNER_ID` (digits only) and `ZAPMIZER_PARTNER_SECRET`. Zapmizer issues them per partner application. Never invent them, never commit them: they go in `.env` only.
-2. The app's host allowed on the partner account (it goes in the connect's `redirect_uri` and `webhook_url`, and in the inbox's `parent_origin`). Zapmizer's team allows it. Production needs `https` and a public host.
-3. Which model owns the number: the logged-in user (default) or another model such as the current team.
+1. The API of the partner account (`ZAPMIZER_BASE_URI`): `https://app.zapmizer.com/api/` or `https://app.parlichat.com/api/` (or another one, e.g. local). The account, its credentials and the embed brand belong to one deploy.
+2. The partner credentials, `ZAPMIZER_PARTNER_ID` (digits only) and `ZAPMIZER_PARTNER_SECRET`. Zapmizer issues them per partner application. Never invent them, never commit them: they go in `.env` only.
+3. The app's host allowed on the partner account (it goes in the connect's `redirect_uri` and `webhook_url`, and in the inbox's `parent_origin`). Zapmizer's team allows it. Production needs `https` and a public host.
+4. Which model owns the number: the logged-in user (default) or another model such as the current team.
 
 ## Install
 
 ```bash
-composer require "zapmizer/laravel-notification-zapmizer:^2.0@beta"
-php artisan zapmizer:install --model=App\\Models\\User --inbox --no-interaction
+composer require "zapmizer/laravel-notification-zapmizer:^2.0.0-beta.2@beta"
+php artisan zapmizer:install --base-uri=https://app.parlichat.com/api/ --model=App\\Models\\User --inbox --no-interaction
 php artisan migrate
 ```
 
+- Pass the base URI before anything else (`--base-uri`, or `ZAPMIZER_BASE_URI` already in `.env`): the embed brand comes from it. A value already in `.env` is never overwritten; a different `--base-uri` makes the command fail.
 - `zapmizer:install` is idempotent. It publishes `config/zapmizer.php` and the `zapmizer_connections` migration, adds only the missing `ZAPMIZER_*` keys to `.env` and `.env.example` (partner keys empty), makes the model `implements Connectable` + `use ConnectsZapmizer;`, and with `--inbox` sets `ZAPMIZER_INBOX_ENABLED=true` and copies the Vue components to `resources/js`.
 - Follow the "Próximos passos" it prints. If it says it did not recognize the model file, paste the snippet it printed.
-- Drop `--inbox` when the app has no Vue; the guide has the Blade path.
+- Drop `--inbox` when the app has no Vue; the guide has the complete Blade path (connect + inbox + logout).
+- `@zapmizer/embed/vue` needs Vue >= 3.3.
 
 ### A model other than the logged-in user
 
@@ -79,7 +82,7 @@ import InboxScreen from '@/components/zapmizer/InboxScreen.vue';
 ```
 
    Without a connection it shows the connect button; once connected, the inbox opens. `person` is the stable id of who attends (`${user.id}:${team.id}` when the connection is the team's).
-3. Logout: call `listenToZapmizerLogout()` once at app boot and `endZapmizerEmbeds()` before the logout request (both in `resources/js/composables/zapmizerEmbed.ts`). With Inertia:
+3. Logout (Inertia 1+/2; with Inertia 0.x use `import { Inertia } from '@inertiajs/inertia'` and `Inertia.on('before', ...)`): call `listenToZapmizerLogout()` once at app boot and `endZapmizerEmbeds()` before the logout request (both in `resources/js/composables/zapmizerEmbed.ts`). With Inertia:
 
 ```ts
 import { router } from '@inertiajs/vue3';
@@ -110,10 +113,11 @@ Each check has `id`, `status` (`ok`, `fail`, `warn`, `skip`), `message` and `hin
 ## When to stop and ask the human
 
 - `partner_credentials` fails: ask for the credentials. Never invent them.
+- `partner_api` fails with "a rota de parceiro não existe": `ZAPMIZER_BASE_URI` is not the API (missing `/api`?). Confirm the deploy with the human.
 - `partner_api` fails (401) or the connect answers `partner_unauthorized`: the credentials are wrong or from another environment.
 - The inbox says the address is not allowed (`origin_not_allowed`), or the connect fails on the host: the host is not on the partner allowlist.
 - `embed_brand` fails: set `VITE_ZAPMIZER_BRAND` to the brand the hint gives and rebuild; ask the human only if the `ZAPMIZER_BASE_URI` itself is in doubt.
-- The inbox answers `missing_ability`: the user must connect again.
+- The inbox falls back to the connect button ("A conexão com o WhatsApp precisa ser refeita"): the token was revoked, no longer decrypts, or predates the inbox (`missing_ability`, `not_a_partner_connection`, answered as `422 reauth_required`). The user connects again.
 - Connecting the number itself (popup + QR code on the phone) is the human's step. Testing it in development needs a public https URL (a tunnel) allowed on the partner account.
 
 ## Sending
@@ -139,6 +143,6 @@ public function toZapmizer(object $notifiable)
 
 ## Inbox routes (reference)
 
-- `POST zapmizer.inbox.session` (`/zapmizer/inbox/session`, `web` + `auth`, `throttle:30,1`): `200 {url, origin, resume_url, resume_until}`, or `{code}`: `409 not_connected`, `403 no_connectable`, `422 reauth_required`, `429 rate_limited`, `503 unavailable`, or Zapmizer's own code.
+- `POST zapmizer.inbox.session` (`/zapmizer/inbox/session`, `web` + `auth`, `throttle:30,1`): `200 {url, origin, resume_url, resume_until}`, or `{code}`: `409 not_connected`, `403 no_connectable`, `422 reauth_required` (also for Zapmizer's `403 missing_ability`/`not_a_partner_connection`), `429 rate_limited`, `503 unavailable`, or Zapmizer's own code.
 - `GET zapmizer.inbox.keepalive` (`/zapmizer/inbox/keepalive`): `204`.
 - Behind a proxy without TrustProxies, set `ZAPMIZER_INBOX_PARENT_ORIGIN=https://your-app.com`.

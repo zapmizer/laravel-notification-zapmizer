@@ -19,23 +19,28 @@ Instale a lib zapmizer/laravel-notification-zapmizer (2.0 beta) neste app, com o
 
 Pergunte uma coisa por vez, e só o que você não conseguir descobrir lendo o app.
 
-1. **Credenciais de parceiro**: `ZAPMIZER_PARTNER_ID` (só dígitos) e `ZAPMIZER_PARTNER_SECRET`. A Zapmizer emite as duas para a aplicação parceira. Nunca invente valores, não as coloque em código nem em commit: elas vão só no `.env`. Sem elas o connect não abre.
-2. **Host liberado na conta de parceiro**: o host do `APP_URL` precisa estar na lista de hosts da conta de parceiro na Zapmizer, porque é ele que vai no `redirect_uri` e no `webhook_url` do connect e no `parent_origin` da caixa. Quem libera é a equipe da Zapmizer. Em produção a Zapmizer só aceita `https`, e o `redirect_uri` e o `webhook_url` precisam de um endereço público (`localhost` não serve).
-3. **Quem é dono do número**: o usuário logado (`App\Models\User`, o padrão) ou outro model, como o time. Se o app tem times (Jetstream, `currentTeam`), pergunte. Sem times, use o usuário.
+1. **URL da API da conta de parceiro** (`ZAPMIZER_BASE_URI`): `https://app.zapmizer.com/api/` ou `https://app.parlichat.com/api/`, ou outra (um ambiente local, por exemplo). A conta de parceiro, as credenciais e a [marca do embed](#a-marca-do-embed) são de um deploy só. Pergunte junto das credenciais.
+2. **Credenciais de parceiro**: `ZAPMIZER_PARTNER_ID` (só dígitos) e `ZAPMIZER_PARTNER_SECRET`. A Zapmizer emite as duas para a aplicação parceira. Nunca invente valores, não as coloque em código nem em commit: elas vão só no `.env`. Sem elas o connect não abre.
+3. **Host liberado na conta de parceiro**: o host do `APP_URL` precisa estar na lista de hosts da conta de parceiro na Zapmizer, porque é ele que vai no `redirect_uri` e no `webhook_url` do connect e no `parent_origin` da caixa. Quem libera é a equipe da Zapmizer. Em produção a Zapmizer só aceita `https`, e o `redirect_uri` e o `webhook_url` precisam de um endereço público (`localhost` não serve).
+4. **Quem é dono do número**: o usuário logado (`App\Models\User`, o padrão) ou outro model, como o time. Se o app tem times (Jetstream, `currentTeam`), pergunte. Sem times, use o usuário.
 
 ## Roteiro
 
 ### 1. Instalar o pacote
 
 ```bash
-composer require "zapmizer/laravel-notification-zapmizer:^2.0@beta"
+composer require "zapmizer/laravel-notification-zapmizer:^2.0.0-beta.2@beta"
 ```
 
 ### 2. Rodar o instalador
 
+A `ZAPMIZER_BASE_URI` vem antes do instalador, porque é dela que ele tira a marca do embed (`VITE_ZAPMIZER_BRAND`). Passe-a em `--base-uri` (ou ponha no `.env` antes):
+
 ```bash
-php artisan zapmizer:install --model=App\\Models\\User --inbox --no-interaction
+php artisan zapmizer:install --base-uri=https://app.parlichat.com/api/ --model=App\\Models\\User --inbox --no-interaction
 ```
+
+- `--base-uri`: a URL da API da conta de parceiro, terminando em `/api`. Grava `ZAPMIZER_BASE_URI` quando a chave falta no `.env`. Uma chave que já tem valor nunca é sobrescrita: um `--base-uri` diferente dela faz o comando avisar e sair com erro (troque à mão, se for o caso). Sem a flag e sem a chave, ele grava `https://app.zapmizer.com/api/` e pede, nos próximos passos, que você confirme o deploy com o humano.
 
 - `--model`: o model dono do número. Aceita o nome curto (`--model=Team` procura `App\Models\Team` e depois `App\Team`).
 - `--inbox`: liga a caixa de entrada e publica os componentes Vue. Tire-o se o app não usa Vue (veja [Sem Inertia/Vue](#sem-inertiavue)).
@@ -48,9 +53,9 @@ O comando é idempotente: rodar de novo só faz o que falta. Sem `--no-interacti
 | --- | --- |
 | config | `config/zapmizer.php`, se ainda não existe |
 | migration | `database/migrations/*_create_zapmizer_connections_table.php`, uma vez só |
-| `.env` e `.env.example` | acrescenta só as chaves ausentes: `ZAPMIZER_BASE_URI`, `ZAPMIZER_API_VERSION=2025-06-27`, `ZAPMIZER_PARTNER_ID=` e `ZAPMIZER_PARTNER_SECRET=` vazios, `VITE_ZAPMIZER_BRAND` (a [marca do embed](#a-marca-do-embed)) e `ZAPMIZER_INBOX_ENABLED=true` com `--inbox` |
+| `.env` e `.env.example` | acrescenta só as chaves ausentes (as presentes, inclusive as credenciais, ficam como estão): `ZAPMIZER_BASE_URI`, `ZAPMIZER_API_VERSION=2025-06-27`, `ZAPMIZER_PARTNER_ID=` e `ZAPMIZER_PARTNER_SECRET=` vazios, `VITE_ZAPMIZER_BRAND` (a [marca do embed](#a-marca-do-embed)) e `ZAPMIZER_INBOX_ENABLED=true` com `--inbox` |
 | `--model` | `implements Connectable` e `use ConnectsZapmizer;` no model, com os `use` no topo |
-| `--inbox` | os componentes em `resources/js` (os mesmos de `vendor:publish --tag=zapmizer-wizard`), se o `package.json` tem `vue` |
+| `--inbox` | os componentes em `resources/js` (os mesmos de `vendor:publish --tag=zapmizer-wizard --tag=zapmizer-inbox`), se o `package.json` tem `vue`. Sem `vue`, nada é publicado e os próximos passos apontam para o [caminho Blade](#sem-inertiavue) |
 
 No fim ele imprime os **próximos passos** do app: siga-os.
 
@@ -112,6 +117,8 @@ pnpm add github:zapmizer/embed#v0.1.2 axios lucide-vue-next      # pnpm-lock.yam
 yarn add github:zapmizer/embed#v0.1.2 axios lucide-vue-next      # yarn.lock
 ```
 
+O `@zapmizer/embed/vue` pede **Vue 3.3 ou mais novo**: com um `vue` mais antigo no `package.json`, suba-o antes (o `zapmizer:check` avisa).
+
 Monte o `InboxScreen` numa página autenticada. Num app Inertia (Breeze ou Jetstream com Vue):
 
 ```php
@@ -140,7 +147,7 @@ import InboxScreen from '@/components/zapmizer/InboxScreen.vue';
 - Use o layout autenticado que o app já tem; o caminho e o nome mudam de app para app (o Breeze usa `resources/js/Pages` e `@/Layouts/AuthenticatedLayout.vue`; os starter kits do Laravel 12 em diante, `resources/js/pages` e `@/layouts/AppLayout.vue`).
 - `person` é quem atende, estável e por pessoa: `String(user.id)`, ou `` `${user.id}:${team.id}` `` quando a conexão é do time (a troca de time não reabre a caixa do outro).
 - A caixa ocupa a altura do pai (no mínimo 560 px): dê altura ao contêiner.
-- Sem conexão, o componente mostra o botão de conectar. Conectou, a caixa abre. Uma conexão revogada volta ao botão.
+- Sem conexão, o componente mostra o botão de conectar. Conectou, a caixa abre. Uma conexão revogada, ou anterior à caixa (`missing_ability`), volta ao botão.
 - Com o Ziggy no app, as URLs saem do `route()`. Sem ele, de `resources/js/composables/zapmizerRoute.ts`, com o prefixo padrão `/zapmizer`.
 
 Logout, nas duas pontas ([logout-e-multiaba.md](https://github.com/zapmizer/embed/blob/v0.1.2/docs/logout-e-multiaba.md) do embed):
@@ -155,6 +162,21 @@ listenToZapmizerLogout();
 
 // Antes do POST /logout, venha ele do menu ou de um router.post().
 router.on('before', (event) => {
+  if (event.detail.visit.method === 'post' && event.detail.visit.url.pathname === '/logout') {
+    endZapmizerEmbeds();
+  }
+});
+```
+
+Com o Inertia 0.x (comum no Laravel 8 e 9: `@inertiajs/inertia` e `@inertiajs/inertia-vue3`), o evento é o mesmo, no objeto `Inertia`:
+
+```js
+import { Inertia } from '@inertiajs/inertia';
+import { endZapmizerEmbeds, listenToZapmizerLogout } from '@/composables/zapmizerEmbed';
+
+listenToZapmizerLogout();
+
+Inertia.on('before', (event) => {
   if (event.detail.visit.method === 'post' && event.detail.visit.url.pathname === '/logout') {
     endZapmizerEmbeds();
   }
@@ -190,20 +212,21 @@ php artisan zapmizer:check --json   # para agentes
 php artisan zapmizer:check --offline
 ```
 
-Sai com código diferente de zero quando algo crítico falha. A única chamada externa é `GET /api/partner/users/zapmizer-check` com a chave de parceiro: ela só lê, e a Zapmizer responde `401` para uma chave que não aceita e `200` ou `404` para uma que aceita. Sem rede, ou com `--offline`, essa checagem é pulada com aviso.
+Sai com código diferente de zero quando algo crítico falha. A única chamada externa é `GET {ZAPMIZER_BASE_URI}/partner/users/zapmizer-check` com a chave de parceiro, que só lê. A Zapmizer responde `401` para uma chave que não aceita; aceitando, responde `200` com o cliente ou o `404` de cliente desconhecido, `{"message": "Record not found.", "details": "Record not found."}`. Só esses dois provam a chave: um 404 de rota (uma `base_uri` sem `/api`, ou outro servidor) falha com a dica de conferir a `ZAPMIZER_BASE_URI`. Sem rede, ou com `--offline`, essa checagem é pulada com aviso. A evidência está no servidor: `ResolvesPartnerUser` faz `abort_if(..., 404, 'Record not found.')`, e o handler de 404 de `api/*` (`bootstrap/app.php`) responde `message: "Record not found."` com a mensagem original em `details`.
 
 | `id` | Confere | Crítico |
 | --- | --- | --- |
 | `app_key` | `APP_KEY` definida (o token das conexões é gravado cifrado) | sim |
 | `config` | `config/zapmizer.php` publicada | não |
-| `base_uri` | `ZAPMIZER_BASE_URI` é uma URL http(s) absoluta | sim |
+| `base_uri` | `ZAPMIZER_BASE_URI` é uma URL http(s) absoluta terminando em `/api` | sim |
 | `partner_credentials` | `ZAPMIZER_PARTNER_ID` (só dígitos) e `ZAPMIZER_PARTNER_SECRET` preenchidos | sim |
-| `partner_api` | a Zapmizer aceita as credenciais | sim no `401`; aviso sem rede, em `5xx` ou `429` |
+| `partner_api` | a Zapmizer aceita as credenciais (`200` com o cliente ou `404 Record not found.`) | sim no `401`/`403`, num 404 de rota ou numa resposta que não é a API; aviso sem rede, em `5xx` ou `429` |
 | `migration` | a tabela `zapmizer_connections` existe | sim |
 | `connectable` | o model que o resolver usa implementa `Connectable` | sim |
 | `connect_routes` | rotas do connect e do webhook registradas | sim |
 | `inbox_routes` | rotas da caixa registradas, com `ZAPMIZER_INBOX_ENABLED=true` | sim |
 | `embed_package` | `@zapmizer/embed` no `package.json`, com tag fixa | sim sem o pacote; aviso sem tag |
+| `vue_version` | aparece só com a caixa ligada e um `vue` < 3.3 no `package.json` | não (aviso) |
 | `embed_brand` | `VITE_ZAPMIZER_BRAND` do `.env` igual à marca da config (a do deploy da `ZAPMIZER_BASE_URI`) | sim, com a caixa ligada |
 | `app_url` | `APP_URL` absoluto; aviso com `http` ou host local | sim só se não for URL |
 | `parent_origin` | `ZAPMIZER_INBOX_PARENT_ORIGIN`, quando definido, é uma origem | sim |
@@ -225,63 +248,210 @@ No JSON, cada item traz `id`, `status` (`ok`, `fail`, `warn` ou `skip`), `messag
 | O connect responde `partner_unauthorized` (503) | Igual ao anterior. |
 | A caixa mostra "Este endereço ainda não foi liberado" (`origin_not_allowed`) ou o connect falha com host não permitido | O host não está liberado na conta de parceiro. Peça ao humano para pedir a liberação à Zapmizer. |
 | A caixa fica em "Demorou demais para abrir" (`ready_timeout`) | Confira a [marca do embed](#a-marca-do-embed): `zapmizer:check` (`embed_brand`) e rebuild do front. |
-| A caixa responde `missing_ability` (403) | A conexão foi feita antes de a caixa existir. O usuário precisa conectar de novo. |
+| A caixa volta ao botão de conectar com "A conexão com o WhatsApp precisa ser refeita" | O token foi revogado, não decifra mais (APP_KEY trocada) ou é de uma conexão anterior à caixa (`missing_ability`, `not_a_partner_connection`): o usuário conecta de novo. |
+| `partner_api` falha com "a rota de parceiro não existe" | A `ZAPMIZER_BASE_URI` não é a API (falta o `/api`?). Confirme o deploy com o humano. |
 | O instalador não reconheceu o model | Cole o trecho que ele imprimiu e rode o instalador de novo. |
 | O app não tem Vue | Siga [Sem Inertia/Vue](#sem-inertiavue) e confirme com o humano onde a caixa entra. |
 | Qualquer `fail` que você não entende | Mostre a saída de `zapmizer:check --json` ao humano. |
 
 ## Sem Inertia/Vue
 
-As rotas da caixa (`zapmizer.inbox.session` e `zapmizer.inbox.keepalive`) servem a qualquer front. Numa página Blade, com o Vite do app:
+As rotas da lib (connect e caixa) servem a qualquer front. Numa página Blade, com o Vite do app e só o `@zapmizer/embed` instalado (`npm install github:zapmizer/embed#v0.1.2`, ou o gerenciador do lockfile), são três peças: a página, o script da página e o logout no layout.
+
+A página:
 
 ```blade
-{{-- resources/views/atendimento.blade.php --}}
+{{-- resources/views/atendimento.blade.php, numa rota com o middleware auth --}}
 <meta name="csrf-token" content="{{ csrf_token() }}">
-<div id="caixa" style="position: relative; height: 80vh"
+
+<div id="zapmizer"
+     data-brand="{{ \NotificationChannels\Zapmizer\Support\EmbedBrand::resolve() }}"
      data-person="{{ auth()->id() }}"
-     data-session="{{ route('zapmizer.inbox.session') }}"
-     data-keepalive="{{ route('zapmizer.inbox.keepalive') }}"
-     data-brand="{{ \NotificationChannels\Zapmizer\Support\EmbedBrand::resolve() }}"></div>
-<p id="caixa-estado"></p>
-@vite('resources/js/atendimento.js')
+     data-show-url="{{ route('zapmizer.connect.show') }}"
+     data-start-url="{{ route('zapmizer.connect.start') }}"
+     data-session-url="{{ route('zapmizer.inbox.session') }}"
+     data-keepalive-url="{{ route('zapmizer.inbox.keepalive') }}">
+  <div data-connect hidden>
+    <p data-connect-message role="alert"></p>
+    <button type="button" data-connect-start>Conectar o WhatsApp</button>
+    <button type="button" data-connect-recheck>Já conectei</button>
+  </div>
+  <div data-inbox hidden style="position: relative; height: 80vh"></div>
+  <p data-inbox-message role="status"></p>
+</div>
+
+@vite('resources/js/zapmizer.js')
 ```
 
+O script (não precisa ler nenhum código da lib):
+
 ```js
-// resources/js/atendimento.js
+// resources/js/zapmizer.js
 import { createInbox } from '@zapmizer/embed/inbox';
 import { defaultMessages } from '@zapmizer/embed/errors';
 
-const el = document.getElementById('caixa');
+const root = document.getElementById('zapmizer');
+const { brand, person, showUrl, startUrl, sessionUrl, keepaliveUrl } = root.dataset;
+const connectBox = root.querySelector('[data-connect]');
+const connectMessage = root.querySelector('[data-connect-message]');
+const inboxBox = root.querySelector('[data-inbox]');
+const inboxMessage = root.querySelector('[data-inbox-message]');
+const JSON_HEADERS = { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' };
 const csrf = () => document.querySelector('meta[name="csrf-token"]').content;
+let inbox = null;
 
-createInbox({
-  container: el,
-  brand: el.dataset.brand, // 'zapmizer', ou 'parli' no deploy da Parli: veja "A marca do embed"
-  person: el.dataset.person,
-  openSession: async () => {
-    const response = await fetch(el.dataset.session, {
-      method: 'POST',
-      headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrf() },
-      body: '{}',
-    });
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw { status: response.status, code: body.code ?? null, retryAfter: Number(response.headers.get('Retry-After')) || undefined };
-    return body;
-  },
-  keepAlive: async () => {
-    const response = await fetch(el.dataset.keepalive, { headers: { Accept: 'application/json' } });
-    if (!response.ok) throw { status: response.status };
-  },
-  frame: { configure: (iframe) => Object.assign(iframe.style, { position: 'absolute', inset: '0', width: '100%', height: '100%', border: '0' }) },
-  onState: (state) => {
-    document.getElementById('caixa-estado').textContent = state.status === 'error' ? (defaultMessages[state.code] ?? state.code) : '';
-  },
+// GET zapmizer.connect.show: { connection } ou { connection: null }.
+async function currentConnection() {
+  const response = await fetch(showUrl, { headers: JSON_HEADERS, credentials: 'same-origin' });
+  if (!response.ok) throw new Error(`show ${response.status}`);
+  return (await response.json()).connection;
+}
+
+function showConnect(message = '') {
+  inbox?.destroy();
+  inbox = null;
+  inboxBox.hidden = true;
+  inboxMessage.textContent = '';
+  connectBox.hidden = false;
+  connectMessage.textContent = message;
+}
+
+function showInbox() {
+  connectBox.hidden = true;
+  inboxBox.hidden = false;
+  if (inbox) return;
+
+  inbox = createInbox({
+    container: inboxBox,
+    brand, // a marca do deploy da ZAPMIZER_BASE_URI
+    person,
+    openSession: async () => {
+      const response = await fetch(sessionUrl, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { ...JSON_HEADERS, 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrf() },
+        body: '{}',
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw { status: response.status, code: typeof body.code === 'string' ? body.code : null, retryAfter: Number(response.headers.get('Retry-After')) || undefined };
+      }
+      return body;
+    },
+    keepAlive: async () => {
+      const response = await fetch(keepaliveUrl, { headers: JSON_HEADERS, credentials: 'same-origin' });
+      if (!response.ok) throw { status: response.status };
+    },
+    frame: { configure: (iframe) => Object.assign(iframe.style, { position: 'absolute', inset: '0', width: '100%', height: '100%', border: '0' }) },
+    onState: (state) => {
+      if (state.status === 'error' && (state.code === 'not_connected' || state.action === 'reconnect')) {
+        // Sem conexão, token revogado ou conexão anterior à caixa: conectar de novo.
+        showConnect(defaultMessages[state.code] ?? 'Conecte o WhatsApp para abrir a caixa de entrada.');
+        return;
+      }
+      inboxMessage.textContent = state.status === 'opening' || state.status === 'loading'
+        ? 'Abrindo a caixa de entrada…'
+        : state.status === 'error' ? (defaultMessages[state.code] ?? 'Não foi possível abrir a caixa de entrada.') : '';
+      if (state.status === 'error' && state.action === 'retry') inboxMessage.append(retryButton());
+      if (state.status === 'error' && state.action === 'reload') inboxMessage.append(button('Recarregar a página', () => window.location.reload()));
+    },
+  });
+}
+
+function button(text, onClick) {
+  const element = document.createElement('button');
+  element.type = 'button';
+  element.textContent = text;
+  element.addEventListener('click', onClick);
+  return element;
+}
+
+function retryButton() {
+  return button('Tentar de novo', () => inbox?.retry());
+}
+
+// Confere o estado no servidor e mostra a caixa ou o connect.
+async function refresh(message = '') {
+  try {
+    (await currentConnection()) ? showInbox() : showConnect(message);
+  } catch {
+    showConnect('Não foi possível carregar o estado da integração. Recarregue a página.');
+  }
+}
+
+// Conectar: POST zapmizer.connect.start devolve { url }; ela abre num popup.
+root.querySelector('[data-connect-start]').addEventListener('click', async () => {
+  connectMessage.textContent = '';
+  const response = await fetch(startUrl, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { ...JSON_HEADERS, 'X-CSRF-TOKEN': csrf() },
+  });
+  if (!response.ok) {
+    connectMessage.textContent = response.status === 503
+      ? 'O WhatsApp está indisponível no momento. Tente de novo em instantes.'
+      : 'Não foi possível iniciar a conexão. Tente de novo.';
+    return;
+  }
+  const popup = window.open((await response.json()).url, 'zapmizer-connect', 'width=520,height=720');
+  if (!popup) {
+    connectMessage.textContent = 'O navegador bloqueou a janela: libere popups para este site e tente de novo.';
+    return;
+  }
+  // O popup fechado à mão não manda mensagem: confere o estado quando ele fecha.
+  const watch = setInterval(() => {
+    if (popup.closed) {
+      clearInterval(watch);
+      refresh();
+    }
+  }, 1000);
+});
+
+// "Já conectei": o usuário diz que terminou; quem decide é o servidor.
+root.querySelector('[data-connect-recheck]').addEventListener('click', () => refresh('Ainda não há número conectado.'));
+
+// O popup fala com esta página por postMessage: { source: 'zapmizer-connect', status, message }.
+window.addEventListener('message', (event) => {
+  if (event.origin !== window.location.origin || event.data?.source !== 'zapmizer-connect') return;
+  if (event.data.status === 'ok' || event.data.status === 'webhook_failed') {
+    // webhook_failed também conecta: o número envia, só não recebe pelo webhook.
+    refresh();
+    return;
+  }
+  connectMessage.textContent = event.data.message || 'Não foi possível concluir a conexão. Tente de novo.';
+});
+
+refresh();
+```
+
+O logout, no layout de todas as páginas autenticadas:
+
+```blade
+{{-- no <head> do layout --}}
+<meta name="zapmizer-brand" content="{{ \NotificationChannels\Zapmizer\Support\EmbedBrand::resolve() }}">
+@vite('resources/js/zapmizer-logout.js')
+```
+
+```js
+// resources/js/zapmizer-logout.js
+import { endEmbeds, listenToLogout } from '@zapmizer/embed/logout';
+
+const brand = document.querySelector('meta[name="zapmizer-brand"]')?.content || 'zapmizer';
+
+// O logout de outra aba fecha a caixa desta.
+listenToLogout({ brand });
+
+// Antes do POST /logout: fecha a caixa, apaga a retomada e avisa as outras abas.
+document.addEventListener('submit', (event) => {
+  if (event.target instanceof HTMLFormElement && new URL(event.target.action).pathname === '/logout') {
+    endEmbeds({ brand });
+  }
 });
 ```
 
-- `not_connected` (409) quer dizer que o usuário ainda não conectou: mostre o connect. O botão de conectar faz `POST route('zapmizer.connect.start')` (com o CSRF), abre a `url` da resposta numa janela de 520×720 e espera o `postMessage` com `source: 'zapmizer-connect'` e `status: 'ok'`, conferindo `event.origin === window.location.origin`. Veja o `ConnectButton.vue` em `stubs/inertia-vue` como referência.
-- No logout: `endEmbeds({ brand })` de `@zapmizer/embed/logout` antes do POST, e `listenToLogout({ brand })` em cada página, com a mesma marca.
-- O guia completo do front está na doc do embed: [caixa-de-entrada.md](https://github.com/zapmizer/embed/blob/v0.1.2/docs/caixa-de-entrada.md) e [backend.md](https://github.com/zapmizer/embed/blob/v0.1.2/docs/backend.md).
+- Ponha `resources/js/zapmizer.js` e `resources/js/zapmizer-logout.js` no `input` do `laravel-vite-plugin` em `vite.config.js`.
+- Os `status` do popup que não conectam são `denied`, `plan_limit`, `subscription_required`, `invalid_state`, `exchange_failed`, `rate_limited`, `team_already_connected` e `no_connectable`; o `message` que vem junto já é um texto para a pessoa.
+- O guia do front do embed: [caixa-de-entrada.md](https://github.com/zapmizer/embed/blob/v0.1.2/docs/caixa-de-entrada.md) e [backend.md](https://github.com/zapmizer/embed/blob/v0.1.2/docs/backend.md).
 
 ## As rotas da caixa
 
@@ -294,7 +464,10 @@ createInbox({
 - A sessão abre para a conexão do model que o `zapmizer.connect.resolver` devolve, a mesma do connect. Quem atende é o usuário logado: `user.id` é o `getAuthIdentifier()` e `user.name` o atributo `name` (até 100 caracteres).
 - `parent_origin` é a origem da requisição (`getSchemeAndHttpHost()`). Atrás de um proxy que o app não confia (sem `TrustProxies`), ela sai `http://` ou com o host interno, e a Zapmizer responde `origin_not_allowed`: defina `ZAPMIZER_INBOX_PARENT_ORIGIN=https://seu-app.com`.
 - O corpo do POST aceita só `theme` (`light` ou `dark`). Outro campo é ignorado.
-- As respostas de erro seguem a [tabela do embed.md](embed.md#4-a-resposta) (a `EmbedSessionResponse`), mais duas da lib: `403 {"code": "no_connectable"}` quando o resolver não acha o que abrir, e `409 {"code": "not_connected"}` quando o model ainda não tem conexão.
+- As respostas de erro seguem a [tabela do embed.md](embed.md#4-a-resposta) (a `EmbedSessionResponse`), com estas diferenças:
+  - `403 {"code": "no_connectable"}`: o resolver não acha o que abrir, inclusive quando devolve um model que não é `Connectable`;
+  - `409 {"code": "not_connected"}`: o model ainda não tem conexão;
+  - `422 {"code": "reauth_required"}` também para o `403 missing_ability` e o `403 not_a_partner_connection` da Zapmizer (o token não tem `inbox:attend`, ou não veio do connect: conexões anteriores à caixa) e para um token que não decifra mais. Os dois 403 só se resolvem com um connect novo, então o front mostra o botão de conectar (a ação `reconnect` do `@zapmizer/embed`). O log `zapmizer: inbox session refused.` guarda o código original. No servidor: `EmbedSessionController` (`not_a_partner_connection`, `MissingAbilityException` sem `inbox:attend`) e o handler de `AccessDeniedHttpException` em `bootstrap/app.php` (`error: missing_ability`). O `origin_not_allowed` (host não liberado) segue como `403`: não é caso de reconectar.
 - Desligue com `ZAPMIZER_INBOX_ENABLED=false`. `ZAPMIZER_ROUTES_ENABLED=false` desliga estas junto com as do connect.
 
 ## Webhook (opcional)

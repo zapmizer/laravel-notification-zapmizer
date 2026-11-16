@@ -57,4 +57,17 @@ class AgentDocsTest extends TestCase
             }
         }
     }
+
+    public function testTheDocsRequireTheBetaThatHasTheInstaller()
+    {
+        foreach (['README.md', 'llms.txt', 'docs/instalar.md', 'resources/boost/skills/zapmizer-whatsapp/SKILL.md'] as $file) {
+            preg_match_all('/composer require "zapmizer\/laravel-notification-zapmizer:([^"]+)"/', file_get_contents(self::ROOT . '/' . $file), $constraints);
+
+            $this->assertNotEmpty($constraints[1], $file);
+
+            foreach ($constraints[1] as $constraint) {
+                $this->assertSame('^2.0.0-beta.2@beta', $constraint, $file);
+            }
+        }
+    }
 }

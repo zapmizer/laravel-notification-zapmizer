@@ -10,9 +10,16 @@ use NotificationChannels\Zapmizer\Messages\MessageStatus;
  */
 trait HasMessageStatus
 {
+    /**
+     * The `message_status` number these shortcuts read; null when unknown.
+     */
+    abstract public function messageStatusCode(): ?int;
+
     public function isFailed(): bool
     {
-        return $this->status !== null && MessageStatus::isFailure($this->status);
+        $status = $this->messageStatusCode();
+
+        return $status !== null && MessageStatus::isFailure($status);
     }
 
     /**
@@ -20,12 +27,16 @@ trait HasMessageStatus
      */
     public function isDelivered(): bool
     {
-        return $this->status !== null && MessageStatus::reached($this->status, MessageStatus::DELIVERED);
+        $status = $this->messageStatusCode();
+
+        return $status !== null && MessageStatus::reached($status, MessageStatus::DELIVERED);
     }
 
     public function isRead(): bool
     {
-        return $this->status !== null && MessageStatus::reached($this->status, MessageStatus::READ);
+        $status = $this->messageStatusCode();
+
+        return $status !== null && MessageStatus::reached($status, MessageStatus::READ);
     }
 
     /**
@@ -33,6 +44,8 @@ trait HasMessageStatus
      */
     public function isFinal(): bool
     {
-        return $this->status !== null && MessageStatus::isFinal($this->status);
+        $status = $this->messageStatusCode();
+
+        return $status !== null && MessageStatus::isFinal($status);
     }
 }

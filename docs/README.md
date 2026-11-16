@@ -8,3 +8,4 @@ Esta pasta vai junto com o código. Ao abrir pela tag que o app fixou, você lê
 4. [Embutir a conversa e a caixa de entrada](embed.md): o `EmbedSessionResponse`, o `user` do atendente, a resposta ao `@zapmizer/embed` e os testes.
 5. [Verificação de número do WhatsApp](verify-number.md): `MustVerifyWhatsapp`, a página hospedada, a confirmação do código e o webhook com o resultado (em inglês).
 6. [Transporte HTTP, timeouts e testes](transporte.md): o `Http` do Laravel como transporte, os timeouts, o download de mídia, o fake nos testes e o transporte próprio.
+7. [Eventos do webhook](webhook.md): os eventos tipados do catálogo (`message_status`, `connection`, reações, grupos...), as regras de status e de conexão, a deduplicação opcional e as subclasses do controller.

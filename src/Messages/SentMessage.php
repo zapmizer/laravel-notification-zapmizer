@@ -45,6 +45,11 @@ final class SentMessage
     ) {
     }
 
+    public function messageStatusCode(): ?int
+    {
+        return $this->status;
+    }
+
     /**
      * @param array<string, mixed> $payload
      */

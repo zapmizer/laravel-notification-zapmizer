@@ -6,6 +6,7 @@ use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 use NotificationChannels\Zapmizer\InboundMessage;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
+use NotificationChannels\Zapmizer\Webhook\Envelope;
 
 /**
  * Class MessageReceived.
@@ -18,9 +19,11 @@ use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
  * when the delivery was signed with the application's own secret
  * (`zapmizer.webhook.secret`, single-tenant setup).
  *
- * Zapmizer retries a delivery up to 3 times, and the package does not
- * deduplicate: a listener with side effects must be idempotent on
- * `$message->id`.
+ * `$envelope` has the delivery's `id` and `created_at` (null when built by
+ * hand). Zapmizer retries a delivery up to 3 times, always with the same
+ * `id`; the package only drops the repeats with
+ * `zapmizer.webhook.deduplicate` on, so a listener with side effects must
+ * otherwise be idempotent on `$message->id`.
  */
 class MessageReceived
 {
@@ -33,6 +36,7 @@ class MessageReceived
         public InboundMessage $message,
         public ?ZapmizerConnection $connection,
         public array $payload,
+        public ?Envelope $envelope = null,
     ) {
     }
 }

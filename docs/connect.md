@@ -918,6 +918,8 @@ The callback and `destroy` no longer call `/webhooks` (rotation, remote deletion
 
 ## Upgrading from 0.1.x
 
+Upgrading straight to 2.0? Read first "Upgrade das versões 0.0, 0.1 e 0.2" in the [CHANGELOG](../CHANGELOG.md) (Portuguese): the send now returns `SentMessage`, `CouldNotSendNotification` is gone (a `catch` of it stops matching silently), `setHttpClient()` is gone and the package routes are opt-in. The notes below are the 0.x steps.
+
 **Breaking** (0.x: a minor bump is the breaking bump). The pairing moved to Zapmizer's hosted page, and the wizard on your side went with it.
 
 - **Requires a Zapmizer with the hosted pairing** (for this version, 1.148.10 or later: section 1). Against an older Zapmizer the callback still lands with the token, but with no number: the connection is stored inactive and there is no longer a wizard to pair it. With this release, a token exchange that does not answer `user_id`/`team_id` (Zapmizer before 1.148.8) makes the callback report `exchange_failed` and store nothing.
@@ -931,6 +933,8 @@ The callback and `destroy` no longer call `/webhooks` (rotation, remote deletion
 - Not changed: the table, the model, the trait, the signed webhook, `registerWebhook()` / `rotateWebhookSecret()` / `deleteRemoteWebhook()`, `destroy`, the resolver contract, `team_already_connected`.
 
 ## Upgrading from 0.0.x
+
+Upgrading straight to 2.0? Read first "Upgrade das versões 0.0, 0.1 e 0.2" in the [CHANGELOG](../CHANGELOG.md) (Portuguese): the send now returns `SentMessage`, `CouldNotSendNotification` is gone (a `catch` of it stops matching silently), `setHttpClient()` is gone and the package routes are opt-in. The notes below are the 0.x steps.
 
 The webhook route changed behaviour. Read this even if you never touch the connect flow.
 

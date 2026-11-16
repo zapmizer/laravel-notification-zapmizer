@@ -50,6 +50,25 @@ class MessageReceivedEnvelopeTest extends TestCase
             && $event->envelope->wid === null);
     }
 
+    public function testTheEnvelopeCarriesTheWebhookVersion()
+    {
+        Event::fake([MessageReceived::class]);
+        $this->connectedTeam('secret-a');
+        $envelope = $this->catalogEnvelope('message', $this->messageEnvelope()['data'], ['version' => '2024-02-27']);
+
+        $this->deliverSigned($envelope, 'secret-a')->assertOk()->assertSeeText('Webhook Handled');
+
+        Event::assertDispatched(MessageReceived::class, fn (MessageReceived $event) => $event->envelope->version === '2024-02-27');
+    }
+
+    public function testAnEnvelopeWithoutVersionReadsAsNull()
+    {
+        $this->assertNull(Envelope::fromPayload(['name' => 'message'])->version);
+        $this->assertNull(Envelope::fromPayload(['name' => 'message', 'version' => ''])->version);
+        $this->assertNull(Envelope::fromPayload(['name' => 'message', 'version' => 20240227])->version);
+        $this->assertSame('2026-10-20', Envelope::fromPayload(['name' => 'message_received', 'version' => '2026-10-20'])->version);
+    }
+
     public function testItStillBuildsWithTheThreeArgumentsOfBefore()
     {
         $message = InboundMessage::fromEnvelope($this->messageEnvelope());

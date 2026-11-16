@@ -29,6 +29,7 @@ use NotificationChannels\Zapmizer\Test\Fixtures\HandlesStatusWebhookController;
 use NotificationChannels\Zapmizer\Test\Fixtures\SignsWebhookDeliveries;
 use NotificationChannels\Zapmizer\Test\Fixtures\WithoutCatalogEventsWebhookController;
 use NotificationChannels\Zapmizer\Test\TestCase;
+use NotificationChannels\Zapmizer\Webhook\ConnectionState;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 class WebhookCatalogEventsTest extends TestCase
@@ -377,5 +378,14 @@ class WebhookCatalogEventsTest extends TestCase
 
             return true;
         });
+    }
+
+    public function testAWrongNumberDisconnectionComesWithItsKind()
+    {
+        $state = ConnectionState::fromData(['state' => 'disconnected', 'kind' => 'wrong_number', 'reason' => 'WRONG_NUMBER']);
+
+        $this->assertTrue($state->isDisconnected());
+        $this->assertSame(ConnectionState::KIND_WRONG_NUMBER, $state->kind);
+        $this->assertSame('wrong_number', ConnectionState::KIND_WRONG_NUMBER);
     }
 }

@@ -6,12 +6,15 @@ use Illuminate\Support\Carbon;
 use NotificationChannels\Zapmizer\Support\Payload;
 
 /**
- * The envelope every catalog webhook comes in: `{id, created_at, wid, name,
- * data}`. `id` is the same on every retry of a delivery (deduplicate on it).
+ * The envelope every catalog webhook comes in: `{id, version, created_at,
+ * wid, name, data}`. `id` is the same on every retry of a delivery (deduplicate on it).
  * `createdAt` is when Zapmizer generated the event (UTC) — for `connection`,
  * apply the state with the most recent one. `wid` is the number that
  * generated the event, `null` on `connection` events from before the number
- * is ready.
+ * is ready. `version` is the webhook's version (`2024-02-27`, the one this
+ * package reads; `2026-10-20` is the message contract, whose
+ * `message_received`/`message_sent` it does not), `null` from a Zapmizer
+ * before 1.148.17.
  *
  * Fields missing or of the wrong type read as null.
  */
@@ -22,6 +25,7 @@ final class Envelope
         public readonly string $name,
         public readonly ?Carbon $createdAt,
         public readonly ?string $wid,
+        public readonly ?string $version = null,
     ) {
     }
 
@@ -35,6 +39,7 @@ final class Envelope
             name: (string) Fields::string($payload, 'name'),
             createdAt: self::parseTime(Fields::identifier($payload, 'created_at')),
             wid: Fields::identifier($payload, 'wid'),
+            version: Fields::identifier($payload, 'version'),
         );
     }
 

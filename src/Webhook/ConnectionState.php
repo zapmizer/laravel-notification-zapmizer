@@ -9,7 +9,9 @@ namespace NotificationChannels\Zapmizer\Webhook;
  *
  * `kind` only comes with `disconnected`: `banned` (blocked by WhatsApp),
  * `logged_out` (needs a new QR), `conflict` (another WhatsApp Web session),
- * `connection_lost` (turning it back on fixes it). A value new to the
+ * `connection_lost` (turning it back on fixes it), `wrong_number` (the QR
+ * was read by another number: the connection was refused and the number
+ * asks for a QR again). A value new to the
  * package comes through as-is. `reason` is the drop reason as WhatsApp gave
  * it. The `off` state only exists on the API, never on the webhook.
  */
@@ -30,6 +32,8 @@ final class ConnectionState
     public const KIND_CONFLICT = 'conflict';
 
     public const KIND_CONNECTION_LOST = 'connection_lost';
+
+    public const KIND_WRONG_NUMBER = 'wrong_number';
 
     /**
      * @param array<string, mixed> $raw The webhook's `data`.

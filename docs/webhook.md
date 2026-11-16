@@ -32,7 +32,7 @@ Os eventos ficam em `NotificationChannels\Zapmizer\Events` e estendem `WebhookEv
 
 Todo evento tipado também tem:
 
-- `$event->envelope`: `id` (o mesmo em todas as tentativas da entrega), `name`, `createdAt` (`Carbon`, quando a Zapmizer gerou o evento) e `wid` (o número que gerou o evento, `null` em alguns `connection`);
+- `$event->envelope`: `id` (o mesmo em todas as tentativas da entrega), `name`, `createdAt` (`Carbon`, quando a Zapmizer gerou o evento), `wid` (o número que gerou o evento, `null` em alguns `connection`) e `version` (a versão do webhook, `null` em Zapmizer anterior à 1.148.17; veja "Versão do webhook" abaixo);
 - `$event->connection`: a `ZapmizerConnection` cujo segredo assinou a entrega, `null` no single-tenant;
 - `$event->payload`: o corpo decodificado.
 
@@ -45,6 +45,10 @@ O `created_at` só é lido em ISO 8601 estrito, com fuso (`2025-10-17T12:00:00.0
 Cada evento depende de um campo que o identifica: `wapp_message_id`, `call_id`, `old_wid` e `new_wid`, `group_wid`, `state` ou `ack`. Se esse campo falta, vem vazio ou tem tipo errado, o evento tipado não sai, e o resto da entrega segue igual (`WebhookReceived`, 2xx). Nos outros campos, um tipo errado vira `null`, `false` ou `[]`. Um valor novo de enum num campo secundário (`kind`, `scope`, `source`, `change`) chega como veio, sem precisar de release da lib.
 
 Um `name` fora do catálogo não dispara nada novo.
+
+### Versão do webhook
+
+Cada webhook da Zapmizer tem uma versão, fixada na criação, que vem em `version` no envelope. Esta versão da lib lê a **`2024-02-27`**: o catálogo acima e o `message`, que vira `MessageReceived`. Na `2026-10-20` (o contrato de mensagens) as mensagens chegam como `message_received` e `message_sent`, que esta versão não lê. Uma entrega dessas continua respondida com 200 (`Webhook Received`), não dispara `MessageReceived` e loga um warning por entrega (`zapmizer: the webhook delivers in version 2026-10-20 (the message contract), …`, com `name`, `version`, `connection_id` e `wid`). Troque o webhook para a versão `2024-02-27` na tela de Webhooks da Zapmizer (o token do connect não pode mexer em `/webhooks`). O webhook que o connect cria já nasce em `2024-02-27`, mas um webhook que o time já tinha na mesma URL é reaproveitado com a versão dele; veja "The webhook version" em [connect.md](connect.md#the-webhook-version).
 
 ## `message_status`
 
@@ -105,7 +109,7 @@ Event::listen(function (ConnectionStateChanged $event) {
 ```
 
 - `state`: `qr_pending`, `connecting`, `connected` ou `disconnected` (`ConnectionState::*`, `isConnected()`, `isDisconnected()`). O `off` só existe na API, nunca no webhook. Um estado desconhecido não dispara o evento.
-- `kind` só vem com `disconnected`: `banned` (bloqueado pelo WhatsApp), `logged_out` (precisa de QR novo), `conflict` (outra sessão do WhatsApp Web) ou `connection_lost` (religar resolve). Na API, o mesmo campo se chama `disconnect_kind`. `reason` é o motivo como o WhatsApp informou.
+- `kind` só vem com `disconnected`: `banned` (bloqueado pelo WhatsApp), `logged_out` (precisa de QR novo), `conflict` (outra sessão do WhatsApp Web), `connection_lost` (religar resolve) ou `wrong_number` (o QR foi lido por outro número, a conexão foi recusada e o número volta a pedir QR). As constantes são `ConnectionState::KIND_*`. Na API, o mesmo campo se chama `disconnect_kind`. `reason` é o motivo como o WhatsApp informou.
 - **`wid` nulo.** Vem nulo em `qr_pending` e `connecting` (antes de o número ficar pronto, inclusive ao religar) e pode vir em outros. O evento sai mesmo assim, com `isAttributable()` falso. Nesse caso não mude o estado da conexão por ele: confirme pela API.
 - **O mais recente vale.** Cada ocorrência tem `id` próprio (duas quedas seguidas são dois eventos), e eles podem chegar fora de ordem. Aplique só o evento cujo `envelope->createdAt` é mais novo que o último aplicado.
 - A lib não guarda o estado da conexão: as colunas do exemplo são do app.

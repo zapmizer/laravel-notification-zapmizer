@@ -4,7 +4,7 @@ namespace NotificationChannels\Zapmizer\Test\Unit;
 
 use Illuminate\Support\Facades\Event;
 use NotificationChannels\Zapmizer\Events\MessageReceived;
-use NotificationChannels\Zapmizer\InboundMessage;
+use NotificationChannels\Zapmizer\Messages\Message;
 use NotificationChannels\Zapmizer\Test\Concerns\AssertsContract;
 use NotificationChannels\Zapmizer\Test\Fixtures\BuildsCatalogDeliveries;
 use NotificationChannels\Zapmizer\Test\Fixtures\CreatesConnectionTables;
@@ -36,6 +36,22 @@ class MessageReceivedEnvelopeTest extends TestCase
             && $event->envelope->name === 'message'
             && $event->envelope->wid === '5581911110000@c.us'
             && $event->envelope->createdAt?->toIso8601String() === '2025-10-17T12:00:00+00:00');
+    }
+
+    public function testMessageReceivedOfTheContractCarriesTheEnvelope()
+    {
+        Event::fake([MessageReceived::class]);
+        $this->connectedTeam('secret-a');
+        $envelope = $this->contractEnvelope('message_received', ['id' => 'AAA']);
+        $this->assertMatchesSchema(self::catalogSchema('message_received'), $envelope);
+
+        $this->deliverSigned($envelope, 'secret-a')->assertOk()->assertSeeText('Webhook Handled');
+
+        Event::assertDispatched(MessageReceived::class, fn (MessageReceived $event) => $event->envelope->id === $envelope['id']
+            && $event->envelope->name === 'message_received'
+            && $event->envelope->version === '2026-10-20'
+            && $event->envelope->wid === '5581911110000@c.us'
+            && $event->message->id === 'AAA');
     }
 
     public function testAnEnvelopeWithoutIdReadsAsNull()
@@ -71,7 +87,7 @@ class MessageReceivedEnvelopeTest extends TestCase
 
     public function testItStillBuildsWithTheThreeArgumentsOfBefore()
     {
-        $message = InboundMessage::fromEnvelope($this->messageEnvelope());
+        $message = Message::fromLegacy($this->messageEnvelope()['data'][0]);
         $event = new MessageReceived($message, null, ['name' => 'message']);
 
         $this->assertNull($event->envelope);
@@ -89,19 +105,20 @@ class MessageReceivedEnvelopeTest extends TestCase
             ->assertOk()
             ->assertSeeText('Webhook Handled');
 
-        Event::assertDispatched(MessageReceived::class, fn (MessageReceived $event) => $event->message->sentAt->equalTo(now()));
+        Event::assertDispatched(MessageReceived::class, fn (MessageReceived $event) => $event->message->sentAt()->equalTo(now()));
     }
 
     public function testATimestampOutOfRangeDoesNotThrowWhenBuildingByHand()
     {
         $this->travelTo(now()->startOfSecond());
 
-        foreach ([PHP_INT_MAX, '99999999999999999999', -5] as $timestamp) {
-            $message = InboundMessage::fromMessage(['timestamp' => $timestamp] + $this->messageEnvelope()['data'][0]);
+        foreach ([PHP_INT_MAX, '99999999999999999999', -5, 0, 'x'] as $timestamp) {
+            $message = Message::fromLegacy(['timestamp' => $timestamp] + $this->messageEnvelope()['data'][0]);
 
-            $this->assertTrue($message->sentAt->equalTo(now()), (string) $timestamp);
+            $this->assertTrue($message->sentAt()->equalTo(now()), (string) $timestamp);
         }
 
-        $this->assertSame(1760659200, InboundMessage::fromMessage(['timestamp' => 1760659200] + $this->messageEnvelope()['data'][0])->sentAt->getTimestamp());
+        $this->assertSame(1760659200, Message::fromLegacy(['timestamp' => 1760659200] + $this->messageEnvelope()['data'][0])->sentAt()->getTimestamp());
+        $this->assertTrue(Message::fromContract(['id' => 'X', 'timestamp' => 1e30])->sentAt()->equalTo(now()));
     }
 }

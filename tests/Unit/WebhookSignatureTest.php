@@ -6,13 +6,15 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Log;
 use NotificationChannels\Zapmizer\Events\MessageReceived;
+use NotificationChannels\Zapmizer\Events\MessageSent;
 use NotificationChannels\Zapmizer\Events\WebhookHandled;
 use NotificationChannels\Zapmizer\Events\WebhookReceived;
-use NotificationChannels\Zapmizer\InboundMessage;
+use NotificationChannels\Zapmizer\Messages\Message;
 use Illuminate\Support\Facades\Route;
 use NotificationChannels\Zapmizer\Events\WhatsappVerified as WhatsappVerifiedEvent;
 use NotificationChannels\Zapmizer\Http\Middleware\VerifyWebhookSignature;
 use NotificationChannels\Zapmizer\Models\WhatsappVerified;
+use NotificationChannels\Zapmizer\Test\Concerns\AssertsContract;
 use NotificationChannels\Zapmizer\Test\Fixtures\CapturesConnectionWebhookController;
 use NotificationChannels\Zapmizer\Test\Fixtures\CreatesConnectionTables;
 use NotificationChannels\Zapmizer\Test\Fixtures\SignsWebhookDeliveries;
@@ -22,7 +24,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 
 class WebhookSignatureTest extends TestCase
 {
-    use CreatesConnectionTables, SignsWebhookDeliveries;
+    use AssertsContract, CreatesConnectionTables, SignsWebhookDeliveries;
 
     protected function defineEnvironment($app)
     {
@@ -58,11 +60,11 @@ class WebhookSignatureTest extends TestCase
 
         Event::assertDispatched(MessageReceived::class, function (MessageReceived $event) use ($connection) {
             return $event->connection->is($connection)
-                && $event->message instanceof InboundMessage
-                && $event->message->id === 'false_5581999998888@c.us_ABC'
-                && $event->message->fromPhone === '5581999998888'
-                && $event->message->to === '5581911110000@c.us'
-                && $event->message->body === 'hello'
+                && $event->message instanceof Message
+                && $event->message->id === 'ABC'
+                && $event->message->chat === '5581999998888@c.us'
+                && $event->message->chatPhone() === '5581999998888'
+                && $event->message->text === 'hello'
                 && $event->payload['name'] === 'message';
         });
         Event::assertDispatched(WebhookReceived::class, fn (WebhookReceived $event) => $event->connection->is($connection));
@@ -84,20 +86,34 @@ class WebhookSignatureTest extends TestCase
     public static function messageVariants(): array
     {
         return [
-            'group' => ['120363000000000000@g.us', [], fn (InboundMessage $m) => $m->isGroup],
-            'fromMe' => ['5581999998888@c.us', ['fromMe' => true], fn (InboundMessage $m) => $m->fromMe],
-            'unresolved lid' => ['84474155032797@lid', [], fn (InboundMessage $m) => $m->hasUnresolvedSender],
-            'lid resolved via _data.from' => [
+            'group' => ['120363000000000000@g.us', ['author' => '5581977776666@c.us'], fn (Message $m) => $m->isGroup() && $m->senderPhone() === '5581977776666'],
+            'fromMe' => ['5581911110000@c.us', ['fromMe' => true, 'to' => '5581999998888@c.us'], fn (Message $m) => $m->fromMe && $m->chat === '5581999998888@c.us'],
+            'lid' => ['84474155032797@lid', [], fn (Message $m) => $m->chat === '84474155032797@lid' && $m->chatPhone() === null],
+            // Zapmizer reads `from` first and only falls back to `_data.from`
+            // when it is missing: the contract keeps the `@lid`.
+            'lid with the number in _data.from' => [
                 '84474155032797@lid',
                 ['_data' => ['from' => ['_serialized' => '5581999998888@c.us']]],
-                fn (InboundMessage $m) => !$m->hasUnresolvedSender && $m->fromPhone === '5581999998888',
+                fn (Message $m) => $m->chat === '84474155032797@lid',
             ],
             'media' => [
                 '5581999998888@c.us',
                 ['type' => 'image', 'hasMedia' => true, '_data' => ['mimetype' => 'image/jpeg', 'size' => 99]],
-                fn (InboundMessage $m) => $m->hasMedia && $m->mediaMetadata === ['mimetype' => 'image/jpeg', 'size' => 99],
+                fn (Message $m) => $m->hasMedia() && $m->media->mime === 'image/jpeg' && $m->media->size === 99 && $m->type === 'image',
             ],
         ];
+    }
+
+    public function testANoticeOfWhatsappFiresNothing()
+    {
+        Event::fake([MessageReceived::class]);
+        $this->connectedTeam('secret-a');
+
+        $this->deliverSigned($this->messageEnvelope('120363000000000000@g.us', ['type' => 'gp2']), 'secret-a')
+            ->assertOk()
+            ->assertSeeText('Webhook Received');
+
+        Event::assertNotDispatched(MessageReceived::class);
     }
 
     public function testInvalidSignatureIsRefusedWithoutDispatching()
@@ -301,15 +317,109 @@ class WebhookSignatureTest extends TestCase
         Log::shouldHaveReceived('warning')->withArgs(fn (string $message) => str_contains($message, 'connection inactive'));
     }
 
-    public function testUnrecognizedMessageShapeIsAcknowledgedButNotHandled()
+    public function testAMessageItCannotReadComesAsUnknownWithTheOriginal()
     {
+        // As Zapmizer does in the contract: nothing is dropped in silence.
         Event::fake([MessageReceived::class]);
         $this->connectedTeam('secret-a');
 
         $this->deliverSigned(['name' => 'message', 'data' => [['from' => 'x@c.us']]], 'secret-a')
             ->assertOk()
+            ->assertSeeText('Webhook Handled');
+
+        Event::assertDispatched(MessageReceived::class, fn (MessageReceived $event) => $event->message->type === 'unknown'
+            && $event->message->id === ''
+            && $event->message->chat === 'x@c.us'
+            && $event->message->raw === ['from' => 'x@c.us']);
+    }
+
+    /**
+     * @return array<string, array{0: array<string, mixed>}>
+     */
+    public static function unreadableMessages(): array
+    {
+        return [
+            'message without data' => [['name' => 'message']],
+            'message with a list of strings' => [['name' => 'message', 'data' => ['x']]],
+            'message_received without an id' => [['name' => 'message_received', 'version' => '2026-10-20', 'data' => ['chat' => 'x@c.us']]],
+            'message_sent with a list' => [['name' => 'message_sent', 'version' => '2026-10-20', 'data' => 'x']],
+        ];
+    }
+
+    /** @dataProvider unreadableMessages */
+    #[DataProvider('unreadableMessages')]
+    public function testAMessageEventThatIsNotAMessageIsAcknowledgedWithAWarning(array $envelope)
+    {
+        Event::fake([MessageReceived::class, MessageSent::class]);
+        Log::spy();
+        $connection = $this->connectedTeam('secret-a')->zapmizerConnection;
+
+        $this->deliverSigned($envelope + ['wid' => '5581911110000@c.us'], 'secret-a')
+            ->assertOk()
             ->assertSeeText('Webhook Received');
 
+        Event::assertNotDispatched(MessageReceived::class);
+        Event::assertNotDispatched(MessageSent::class);
+        Log::shouldHaveReceived('warning')->once()->withArgs(fn (string $message, array $context) => $message === 'zapmizer: a message event could not be read, and nothing fired.'
+            && $context['name'] === $envelope['name']
+            && $context['connection_id'] === $connection->getKey()
+            && $context['wid'] === '5581911110000@c.us');
+    }
+
+    /**
+     * @return array<string, array{0: mixed}>
+     */
+    public static function unknownVersions(): array
+    {
+        return ['newer' => ['2027-01-01'], 'not a date' => ['v3'], 'missing' => [null]];
+    }
+
+    /** @dataProvider unknownVersions */
+    #[DataProvider('unknownVersions')]
+    public function testAMessageInAnUnknownVersionIsReadAndLogged(?string $version)
+    {
+        // The webhook cannot be asked again: dropping it would lose the message.
+        Event::fake([MessageReceived::class]);
+        Log::spy();
+        $this->connectedTeam('secret-a');
+        $envelope = $this->contractEnvelope('message_received', ['id' => 'AAA', 'brand_new' => true]);
+        $envelope['version'] = $version;
+
+        $this->deliverSigned($envelope, 'secret-a')->assertOk()->assertSeeText('Webhook Handled');
+
+        Event::assertDispatched(MessageReceived::class, fn (MessageReceived $event) => $event->message->id === 'AAA');
+        Log::shouldHaveReceived('warning')->once()->withArgs(fn (string $message, array $context) => str_contains($message, 'version ' . ($version ?? '(none)') . ', which this version of the package does not know: read as 2026-10-20')
+            && ($context['version'] ?? null) === $version);
+    }
+
+    public function testAMessageInAnUnknownVersionThatCannotBeReadOnlyWarns()
+    {
+        Event::fake([MessageReceived::class]);
+        Log::spy();
+        $this->connectedTeam('secret-a');
+
+        $this->deliverSigned(['name' => 'message_received', 'version' => '2027-01-01', 'data' => ['message' => ['id' => 'AAA']]], 'secret-a')
+            ->assertOk()
+            ->assertSeeText('Webhook Received');
+
+        Event::assertNotDispatched(MessageReceived::class);
+        Log::shouldHaveReceived('warning')->once()->withArgs(fn (string $message) => str_contains($message, 'it could not be read, and nothing fired'));
+    }
+
+    public function testMessageSentFiresForWhatTheNumberSent()
+    {
+        Event::fake([MessageReceived::class, MessageSent::class]);
+        $connection = $this->connectedTeam('secret-a')->zapmizerConnection;
+        $envelope = $this->contractEnvelope('message_sent', ['id' => 'OUT', 'from_me_other_device' => true, 'text' => 'Segue a foto']);
+        $this->assertMatchesSchema('#/webhooks/message_sent/post/requestBody/content/application~1json/schema', $envelope);
+
+        $this->deliverSigned($envelope, 'secret-a')->assertOk()->assertSeeText('Webhook Handled');
+
+        Event::assertDispatched(MessageSent::class, fn (MessageSent $event) => $event->connection->is($connection)
+            && $event->message->fromMe
+            && $event->message->fromMeOtherDevice
+            && $event->message->sender === '5581911110000@c.us'
+            && $event->envelope->name === 'message_sent');
         Event::assertNotDispatched(MessageReceived::class);
     }
 
@@ -328,7 +438,7 @@ class WebhookSignatureTest extends TestCase
     public function testMessageReceivedCarriesTheMessageFirst()
     {
         $connection = $this->connectedTeam('secret-a')->zapmizerConnection;
-        $message = InboundMessage::fromEnvelope($this->messageEnvelope());
+        $message = Message::fromLegacy($this->messageEnvelope()['data'][0]);
 
         $event = new MessageReceived($message, $connection, ['name' => 'message']);
 

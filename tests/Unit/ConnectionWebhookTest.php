@@ -111,22 +111,20 @@ class ConnectionWebhookTest extends TestCase
         $this->assertSame([], CountsWebhookArguments::$parameters);
     }
 
-    public function testAMessageContractEventWarnsWithTheConnection()
+    public function testAMessageOfTheContractFiresWithTheConnection()
     {
         Log::spy();
         Event::fake([MessageReceived::class]);
         $owner = $this->keyedTeam(self::KA)->zapmizerConnection;
 
-        $this->deliverTo(self::KA, [
-            'id' => 'evt_1', 'version' => '2026-10-20', 'wid' => self::OWNER_WID, 'name' => 'message_received',
-            'data' => ['id' => 'AAA', 'chat' => '5581988887777', 'type' => 'text', 'text' => 'oi'],
-        ], 'whsec_a')
+        $this->deliverTo(self::KA, $this->contractEnvelope('message_received', ['id' => 'AAA'], self::OWNER_WID), 'whsec_a', wid: self::OWNER_WID)
             ->assertOk()
-            ->assertSeeText('Webhook Received');
+            ->assertSeeText('Webhook Handled');
 
-        Event::assertNotDispatched(MessageReceived::class);
-        Log::shouldHaveReceived('warning')->once()->withArgs(fn (string $message, array $context) => str_contains($message, 'version 2026-10-20')
-            && $context === ['name' => 'message_received', 'version' => '2026-10-20', 'connection_id' => $owner->getKey(), 'wid' => self::OWNER_WID]);
+        Event::assertDispatched(MessageReceived::class, fn (MessageReceived $event) => $event->connection?->is($owner)
+            && $event->message->id === 'AAA'
+            && $event->envelope->wid === self::OWNER_WID);
+        Log::shouldNotHaveReceived('warning');
     }
 
     /**

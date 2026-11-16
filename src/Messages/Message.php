@@ -28,7 +28,8 @@ use NotificationChannels\Zapmizer\Support\PhoneNumber;
  *   phone. `fromMeOtherDevice`: sent from another device, such as the phone
  *   (always false in a group).
  * - `timestamp`: when WhatsApp says the message was sent, in seconds (UTC);
- *   0 when the payload did not carry one. `sentAt()` is the same instant.
+ *   0 when the payload did not carry one. `sentAt()` is the same instant
+ *   (now, without a usable timestamp).
  * - `type`: one of `MessageType`, or a type added on Zapmizer's side later.
  * - `text`: the text, the media's caption, the poll's question or the
  *   option chosen in a `button_reply`/`list_reply`.
@@ -143,11 +144,19 @@ final class Message
     }
 
     /**
-     * `timestamp` as a date, in the application's timezone.
+     * `timestamp` as a date, in the application's timezone. Now when the
+     * payload carried no usable timestamp (missing, 0, negative or beyond
+     * year 6000), as the package always did.
      */
     public function sentAt(): CarbonImmutable
     {
-        return CarbonImmutable::createFromTimestamp($this->timestamp, date_default_timezone_get());
+        $timezone = date_default_timezone_get();
+
+        if ($this->timestamp <= 0 || $this->timestamp >= 2 ** 37) {
+            return CarbonImmutable::now($timezone);
+        }
+
+        return CarbonImmutable::createFromTimestamp($this->timestamp, $timezone);
     }
 
     /**

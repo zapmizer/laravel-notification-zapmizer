@@ -29,7 +29,7 @@ final class ContractFields
             return $value;
         }
 
-        return is_float($value) && is_finite($value) && floor($value) === $value ? (int) $value : null;
+        return is_float($value) && floor($value) === $value && abs($value) < 2 ** 62 ? (int) $value : null;
     }
 
     /**

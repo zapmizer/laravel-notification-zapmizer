@@ -11,10 +11,10 @@ use NotificationChannels\Zapmizer\Support\Payload;
  * `createdAt` is when Zapmizer generated the event (UTC) — for `connection`,
  * apply the state with the most recent one. `wid` is the number that
  * generated the event, `null` on `connection` events from before the number
- * is ready. `version` is the webhook's version (`2024-02-27`, the one this
- * package reads; `2026-10-20` is the message contract, whose
- * `message_received`/`message_sent` it does not), `null` from a Zapmizer
- * before 1.148.17.
+ * is ready. `version` is the webhook's version, fixed when it was created:
+ * `2026-10-20` (the message contract: `message_received`/`message_sent`)
+ * or `2024-02-27` (deprecated by Zapmizer: `message`, in WhatsApp Web's
+ * shape); `null` from a Zapmizer before 1.148.17. The package reads both.
  *
  * Fields missing or of the wrong type read as null.
  */

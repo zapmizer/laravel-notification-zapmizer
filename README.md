@@ -23,7 +23,7 @@ Publish the config file:
 php artisan vendor:publish --provider="NotificationChannels\Zapmizer\ZapmizerServiceProvider" --tag=config
 ```
 
-Upgrading from 0.3? Read the "Upgrade da 0.3" list at the top of the [CHANGELOG](CHANGELOG.md) first: this version breaks the 0.3 API, and a published `config/zapmizer.php` does not get the new keys by itself.
+Upgrading from 0.3 or 0.4? Read the "Upgrade da 0.3 e da 0.4" list at the top of the [CHANGELOG](CHANGELOG.md) first: this version breaks the 0.3/0.4 API, and a published `config/zapmizer.php` does not get the new keys by itself.
 
 ## Setting up your Zapmizer account
 

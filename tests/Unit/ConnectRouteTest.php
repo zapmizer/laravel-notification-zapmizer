@@ -31,6 +31,7 @@ use NotificationChannels\Zapmizer\Test\Concerns\DrivesTheConnectRoutes;
 use NotificationChannels\Zapmizer\Test\Fixtures\CreatesConnectionTables;
 use NotificationChannels\Zapmizer\Test\Fixtures\ExternalIdTeam;
 use NotificationChannels\Zapmizer\Test\Fixtures\KeyedConnectController;
+use NotificationChannels\Zapmizer\Test\Fixtures\LegacyPopupErrorsConnectController;
 use NotificationChannels\Zapmizer\Test\Fixtures\PlainModel;
 use NotificationChannels\Zapmizer\Test\Fixtures\PlainUser;
 use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesFirstTeam;
@@ -1360,6 +1361,28 @@ class ConnectRouteTest extends TestCase
             ->assertOk()
             ->assertSee('status: "denied"', false);
 
+        $this->assertNothingHappened();
+    }
+
+    /**
+     * A status the package has no message for (a subclass's POPUP_ERRORS
+     * kept from the 0.4) still closes the popup: the status goes as it is,
+     * with the generic message, instead of a 500 the opener never hears.
+     */
+    public function testAStatusWithoutAMessageFallsBackToTheGenericOne()
+    {
+        Log::spy();
+        $this->app->bind(ConnectController::class, LegacyPopupErrorsConnectController::class);
+        $this->fakeHttp();
+        $this->actingAsUser();
+
+        $this->withSession($this->pendingSession())
+            ->get(route('zapmizer.connect.callback', ['error' => 'qr_unavailable', 'state' => 's']))
+            ->assertOk()
+            ->assertSee('status: "qr_unavailable"', false)
+            ->assertSee('The connection could not be completed. Close this window and try again.');
+
+        Log::shouldHaveReceived('warning')->with('zapmizer: connect result without a message.', ['status' => 'qr_unavailable'])->once();
         $this->assertNothingHappened();
     }
 

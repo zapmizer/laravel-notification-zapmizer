@@ -128,7 +128,7 @@ class LaravelHttpTransportTest extends TestCase
 
     public function testC21RequestExceptionFromBelowBecomesUnavailableInEveryVersion()
     {
-        Http::fake(fn () => throw new RequestException('cut', new PsrRequest('GET', 'http://zap.test'), new PsrResponse(200)));
+        Http::fake(fn () => throw RequestException::create(new PsrRequest('GET', 'http://zap.test'), new PsrResponse(200)));
 
         $this->expectException(ZapmizerUnavailableException::class);
 

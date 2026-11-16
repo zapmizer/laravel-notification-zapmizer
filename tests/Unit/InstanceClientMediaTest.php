@@ -132,7 +132,7 @@ class InstanceClientMediaTest extends TestCase
 
     public function testC30TransportFailureMidDownloadIsUnavailableWithoutFile()
     {
-        $client = $this->client([new RequestException('cut', new Request('GET', 'http://zap.test'), new Response(200))]);
+        $client = $this->client([RequestException::create(new Request('GET', 'http://zap.test'), new Response(200))]);
 
         $this->assertInstanceOf(ZapmizerUnavailableException::class, $this->caught(fn () => $client->media(9, 'ABC', 1700000000)));
         $this->assertSame([], $this->createdPaths());

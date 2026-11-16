@@ -111,6 +111,24 @@ class ConnectionWebhookTest extends TestCase
         $this->assertSame([], CountsWebhookArguments::$parameters);
     }
 
+    public function testAMessageContractEventWarnsWithTheConnection()
+    {
+        Log::spy();
+        Event::fake([MessageReceived::class]);
+        $owner = $this->keyedTeam(self::KA)->zapmizerConnection;
+
+        $this->deliverTo(self::KA, [
+            'id' => 'evt_1', 'version' => '2026-10-20', 'wid' => self::OWNER_WID, 'name' => 'message_received',
+            'data' => ['id' => 'AAA', 'chat' => '5581988887777', 'type' => 'text', 'text' => 'oi'],
+        ], 'whsec_a')
+            ->assertOk()
+            ->assertSeeText('Webhook Received');
+
+        Event::assertNotDispatched(MessageReceived::class);
+        Log::shouldHaveReceived('warning')->once()->withArgs(fn (string $message, array $context) => str_contains($message, 'version 2026-10-20')
+            && $context === ['name' => 'message_received', 'version' => '2026-10-20', 'connection_id' => $owner->getKey(), 'wid' => self::OWNER_WID]);
+    }
+
     /**
      * @return array<string, array{0: array<string, mixed>, 1: Closure}>
      */

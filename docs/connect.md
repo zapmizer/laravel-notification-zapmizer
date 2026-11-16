@@ -315,7 +315,7 @@ It accepts a 5-minute clock drift (`zapmizer.webhook.tolerance`), refuses with *
 
 ### The `MessageReceived` event
 
-The `message` event is translated to an `InboundMessage` and dispatched — nothing is persisted:
+The `message` event is translated to an `InboundMessage` and dispatched — nothing is persisted. It is the event of webhook version **`2024-02-27`**: a webhook in `2026-10-20` (Zapmizer's message contract) sends `message_received`/`message_sent` instead, which this version does not read. Such a delivery is still acknowledged with 200 `Webhook Received`, fires no `MessageReceived`, and logs a warning (`zapmizer: the webhook delivers in version 2026-10-20 (the message contract), …`, with `name`, `version`, `connection_id` and `wid`): recreate that webhook in version `2024-02-27`.
 
 ```php
 use NotificationChannels\Zapmizer\Events\MessageReceived;

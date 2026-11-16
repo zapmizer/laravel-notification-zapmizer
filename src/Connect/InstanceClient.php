@@ -33,18 +33,16 @@ class InstanceClient
     use BuildsZapmizerRequests;
 
     /**
-     * The version of Zapmizer's message contract, which `syncMessages()`
-     * always asks for (`api-version`), whatever `zapmizer.api_version` says.
+     * The version of Zapmizer's message contract, which `syncMessages()` and
+     * `createWebhook()` always ask for, whatever `zapmizer.api_version` says.
      */
     public const MESSAGE_CONTRACT_VERSION = Message::CONTRACT_VERSION;
 
     /**
-     * The `api-version` `createWebhook()` still sends until it moves to
-     * the contract.
+     * The webhook version before the message contract: messages come as
+     * `message`, in WhatsApp Web's shape, translated by the package.
+     * Deprecated by Zapmizer, with the shutdown date still to be announced.
      */
-    public const LEGACY_MESSAGE_API_VERSION = '2025-06-27';
-
-    /** The webhook version whose `message` event this version reads. */
     public const LEGACY_WEBHOOK_VERSION = '2024-02-27';
 
     protected Transport $transport;
@@ -198,15 +196,18 @@ class InstanceClient
 
     /**
      * Register a webhook receiver. Zapmizer returns the `secret` ONLY in this
-     * response — the caller must persist it.
+     * response — the caller must persist it. The webhook is created in the
+     * message contract (`version` and `api-version` `2026-10-20`); a Zapmizer
+     * before 1.148.17 ignores both and creates it in `2024-02-27`, which the
+     * package reads too.
      *
      * @throws ZapmizerConnectException
      */
     public function createWebhook(string $url): WebhookRegistration
     {
         $response = $this->request('POST', '/webhooks', [
-            'json' => ['url' => $url, 'enabled' => true, 'version' => self::LEGACY_WEBHOOK_VERSION],
-            'api_version' => self::LEGACY_MESSAGE_API_VERSION,
+            'json' => ['url' => $url, 'enabled' => true, 'version' => self::MESSAGE_CONTRACT_VERSION],
+            'api_version' => self::MESSAGE_CONTRACT_VERSION,
         ]);
 
         $this->guardUnauthorized($response);

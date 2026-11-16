@@ -92,9 +92,10 @@ class InstanceClientTest extends TestCase
         $this->assertEquals('whsec_x', $registration->secret);
         $this->assertNull($registration->previousSecret);
         $this->assertEquals(
-            ['url' => 'http://app.test/zapmizer/webhook', 'enabled' => true, 'version' => '2024-02-27'],
+            ['url' => 'http://app.test/zapmizer/webhook', 'enabled' => true, 'version' => '2026-10-20'],
             json_decode((string) $this->history[0]['request']->getBody(), true)
         );
+        $this->assertSame('2026-10-20', $this->history[0]['request']->getHeaderLine('api-version'));
     }
 
     public function testRotateWebhookSecretReturnsBoth()

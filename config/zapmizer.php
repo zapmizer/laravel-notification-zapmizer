@@ -9,8 +9,10 @@ return [
     'from_number' => env('ZAPMIZER_FROM_NUMBER'),
     // Zapmizer versions its contract by header. Sent as `api-version` by
     // every client (single-tenant and connected models) when set; leave
-    // null for the legacy shape. Not 2026-10-20 with this version: only
-    // syncMessages() and createWebhook() pin 2025-06-27 on their own.
+    // null for the legacy shape. It decides the shape of sending
+    // (2025-06-27 or later to track it) and of the calls that do not read
+    // messages: syncMessages() and createWebhook() always ask for the
+    // message contract (2026-10-20) on their own.
     'api_version' => env('ZAPMIZER_API_VERSION'),
     // Country code prepended to numbers typed in national format (10 or 11
     // digits). The Brazilian ninth-digit tolerance only applies to 55.
@@ -45,6 +47,13 @@ return [
         // Revoke the token a connection held before when a new connect replaces it
         // (DELETE /connect/token), so the model keeps a single grant on Zapmizer.
         'revoke_previous_token' => env('ZAPMIZER_CONNECT_REVOKE_PREVIOUS_TOKEN', false),
+        // The version of the webhook the connect creates, sent as the
+        // session's `webhook_version` (Zapmizer 1.148.17 or later; an older
+        // one ignores it). 2026-10-20 delivers messages in Zapmizer's message
+        // contract; 2024-02-27 (deprecated) still works, translated. Empty
+        // leaves it to the partner account's default. A published
+        // config/zapmizer.php must get this key added by hand.
+        'webhook_version' => env('ZAPMIZER_WEBHOOK_VERSION', '2026-10-20'),
     ],
 
     'webhook' => [

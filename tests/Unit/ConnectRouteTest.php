@@ -258,7 +258,7 @@ class ConnectRouteTest extends TestCase
 
         $body = $this->sentBody(0);
         $this->assertSame(['redirect_uri', 'state', 'webhook_url', 'expires_in', 'external_id', 'webhook_version'], array_keys($body));
-        $this->assertSame('2024-02-27', $body['webhook_version']);
+        $this->assertSame('2026-10-20', $body['webhook_version']);
         $this->assertSame('http://localhost/zapmizer/connect/callback', $body['redirect_uri']);
         $this->assertSame($pending['state'], $body['state']);
         // Zapmizer registers the receiver during the pairing: the route goes
@@ -718,25 +718,37 @@ class ConnectRouteTest extends TestCase
         $this->assertNoWebhookCalls();
     }
 
-    public function testAWebhookInAnotherVersionConnectsAndWarnsThatMessagesWillNotFire()
+    public function testTheStartAsksForTheConfiguredWebhookVersion()
+    {
+        config()->set('zapmizer.connect.webhook_version', '2024-02-27');
+        $this->fakeHttp($this->sessionCreated());
+        $this->actingAsUser();
+
+        $this->startConnect()->assertOk();
+
+        $this->assertSame('2024-02-27', $this->sentBody(0)['webhook_version']);
+    }
+
+    public function testAWebhookLeftInTheLegacyVersionConnectsAndSaysSo()
     {
         Log::spy();
-        $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer(['webhook_version' => '2026-10-20']));
+        $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer(['webhook_version' => '2024-02-27']));
         $this->actingAsUser();
 
         $this->connect()->assertSee('status: "ok"', false);
 
         $connection = $this->team()->zapmizerConnection;
         $this->assertTrue($connection->is_active);
-        Log::shouldHaveReceived('warning')->withArgs(fn (string $message, array $context) => str_contains($message, 'delivers in version 2026-10-20')
-            && str_contains($message, 'MessageReceived will not fire for this connection')
-            && str_contains($message, '2024-02-27')
-            && $context === ['connection_id' => $connection->id, 'webhook_id' => $connection->webhook_id, 'webhook_version' => '2026-10-20'])->once();
+        Log::shouldNotHaveReceived('warning');
+        Log::shouldHaveReceived('info')->withArgs(fn (string $message, array $context) => str_contains($message, 'delivers in version 2024-02-27, which Zapmizer deprecated')
+            && str_contains($message, 'still reach MessageReceived')
+            && str_contains($message, 'another webhook_url')
+            && $context === ['connection_id' => $connection->id, 'webhook_id' => $connection->webhook_id, 'webhook_version' => '2024-02-27'])->once();
     }
 
-    /** @dataProvider readableWebhookVersions */
-    #[DataProvider('readableWebhookVersions')]
-    public function testAWebhookInTheLegacyVersionOrWithoutOneDoesNotWarn(array $overrides)
+    /** @dataProvider contractWebhookVersions */
+    #[DataProvider('contractWebhookVersions')]
+    public function testAWebhookInTheContractOrWithoutOneSaysNothing(array $overrides)
     {
         Log::spy();
         $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer($overrides));
@@ -745,14 +757,14 @@ class ConnectRouteTest extends TestCase
         $this->connect()->assertSee('status: "ok"', false);
 
         Log::shouldNotHaveReceived('warning');
+        Log::shouldNotHaveReceived('info');
     }
 
-    public static function readableWebhookVersions(): array
+    public static function contractWebhookVersions(): array
     {
         return [
-            '2024-02-27' => [['webhook_version' => '2024-02-27']],
-            'null' => [['webhook_version' => null]],
-            'absent (Zapmizer before 1.148.17)' => [[]],
+            '2026-10-20' => [['webhook_version' => '2026-10-20']],
+            'null (no webhook, or Zapmizer before 1.148.17)' => [['webhook_version' => null]],
         ];
     }
 

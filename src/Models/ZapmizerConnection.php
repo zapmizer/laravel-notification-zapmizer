@@ -229,7 +229,7 @@ class ZapmizerConnection extends Model
     public function syncMessages(?string $cursor = null, ?int $since = null, ?int $limit = null): SyncedMessages
     {
         if (blank($this->bot_instance_id)) {
-            throw new ZapmizerUnauthorizedException('There is no paired Zapmizer instance for this connection.');
+            throw ZapmizerConnectException::notPaired();
         }
 
         return $this->instanceClient()->syncMessages((int) $this->bot_instance_id, $cursor, $since, $limit);

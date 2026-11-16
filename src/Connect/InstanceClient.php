@@ -162,6 +162,32 @@ class InstanceClient
         return $this->mediaFrom($response);
     }
 
+    /**
+     * Every message of the number stored after `$cursor` (the `cursor`
+     * of the previous page). On the very first call, without a cursor, pass
+     * `$since` (seconds) so the whole history is not walked. Only for numbers
+     * by QR (a 422 otherwise, a `ZapmizerApiException`); 429 is over the limit of
+     * 30 requests a minute (`ZapmizerRateLimitedException`).
+     *
+     * @throws ZapmizerConnectException
+     */
+    public function syncMessages(int $botInstanceId, ?string $cursor = null, ?int $since = null, ?int $limit = null): SyncedMessages
+    {
+        $response = $this->request('GET', '/whatsapp-messages', [
+            'query' => array_filter([
+                'bot_instance_id' => $botInstanceId,
+                'cursor' => $cursor,
+                'since' => $cursor === null ? $since : null,
+                'limit' => $limit,
+            ], fn ($value) => $value !== null),
+        ]);
+
+        $this->guardUnauthorized($response);
+        $this->guardFailure($response);
+
+        return SyncedMessages::fromResponse($this->decode($response), $cursor);
+    }
+
     protected function temporaryMediaPath(): ?string
     {
         $path = @tempnam(sys_get_temp_dir(), 'zapmizer-media-');

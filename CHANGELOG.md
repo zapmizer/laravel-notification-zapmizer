@@ -79,6 +79,18 @@ Outras mudanças que podem quebrar:
 - `new Zapmizer($token, $guzzle, $uri, $version)` → `new Zapmizer($token, null, $uri, $version)` (o transporte vem do container) ou com um `Contracts\Transport`; `$zapmizer->setHttpClient($guzzle)` não existe mais. Sem o provider, `BindingResolutionException`; config de transporte inválida falha no construtor, como os clientes Connect.
 - `catch (CouldNotSendNotification $e)` → `catch (ZapmizerException $e)` ou as classes da tabela "De/para do envio". Quem lia o status do `getPrevious()` (`ClientException`) passa a usar `$e->status()` de `ZapmizerApiException`.
 
+# 0.4.1
+
+Só documentação. `syncMessages()` devolve as mensagens **gravadas** depois do cursor: as que chegam no sync de uma reconexão entram, mas a edição de uma mensagem que já existia não volta (o Zapmizer pagina pela chave primária). O texto da 0.4.0 dizia "editadas, apagadas".
+
+# 0.4.0
+
+Sem breaking. **Recuperar mensagens exige o Zapmizer com `GET /api/whatsapp-messages`.**
+
+- **Sincronizar as mensagens do número.** `ZapmizerConnection::syncMessages($cursor = null, $since = null, $limit = null): Connect\SyncedMessages` lê tudo o que mudou nas mensagens do número desde o cursor (recebidas e enviadas, editadas, apagadas, as do sync na reconexão), cada uma traduzida como no webhook (`InboundMessage::fromMessage()`, motor wwebjs ou Rust). O Zapmizer não filtra nem deduplica: pule `fromMe` e deduplique por `$message->id`. `SyncedMessages` traz `messages`, `payloads` (o objeto cru, na mesma ordem), `cursor` (opaco; mantém o anterior quando nada veio) e `hasMore`. Entrada sem id é descartada sem travar a página. Sem `bot_instance_id` lança `ZapmizerUnauthorizedException`. Veja "Recovering what the webhook missed" em `docs/connect.md`.
+- `Connect\InstanceClient::syncMessages(int $botInstanceId, ?string $cursor = null, ?int $since = null, ?int $limit = null)`.
+- Laravel do 8.83 ao 13, com PHP 8.1.
+
 # 0.3.1
 
 Sem breaking.

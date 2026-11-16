@@ -84,7 +84,7 @@ class PartnerClientTest extends TestCase
         $this->assertFalse($request->hasHeader('Authorization'));
         $this->assertEquals('application/json', $request->getHeaderLine('Accept'));
         $this->assertEquals(
-            ['redirect_uri' => 'http://app.test/zapmizer/connect/callback', 'state' => 'state-123', 'webhook_url' => 'http://app.test/zapmizer/webhook'],
+            ['redirect_uri' => 'http://app.test/zapmizer/connect/callback', 'state' => 'state-123', 'webhook_url' => 'http://app.test/zapmizer/webhook', 'webhook_version' => '2024-02-27'],
             json_decode((string) $request->getBody(), true)
         );
     }
@@ -237,7 +237,7 @@ class PartnerClientTest extends TestCase
 
         $client->createSession('', 'state', '');
 
-        $this->assertSame(['redirect_uri' => '', 'state' => 'state', 'webhook_url' => ''], json_decode((string) $this->history[0]['request']->getBody(), true));
+        $this->assertSame(['redirect_uri' => '', 'state' => 'state', 'webhook_url' => '', 'webhook_version' => '2024-02-27'], json_decode((string) $this->history[0]['request']->getBody(), true));
     }
 
     public function testAnUnreadableExpiryOfTheSessionIsLoggedWithTheExternalId()

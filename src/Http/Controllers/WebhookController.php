@@ -4,6 +4,7 @@ namespace NotificationChannels\Zapmizer\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use NotificationChannels\Zapmizer\Events\CallReceived;
 use NotificationChannels\Zapmizer\Events\ConnectionStateChanged;
@@ -61,6 +62,12 @@ use Throwable;
 class WebhookController extends Controller
 {
     /**
+     * The events of the message contract (webhook version `2026-10-20`),
+     * which take the place of `message` and this version does not read.
+     */
+    public const MESSAGE_CONTRACT_EVENTS = ['message_received', 'message_sent'];
+
+    /**
      * The delivery being handled.
      */
     protected ?Request $request = null;
@@ -75,6 +82,8 @@ class WebhookController extends Controller
         abort_unless(is_array($payload), 400, 'Malformed webhook payload.');
 
         $this->request = $request;
+
+        $this->warnAboutTheMessageContract($payload);
 
         $deduplicator = $this->deduplicator();
 
@@ -190,6 +199,26 @@ class WebhookController extends Controller
         MessageReceived::dispatch($message, $this->connection(), $payload, Envelope::fromPayload($payload));
 
         return $this->successMethod();
+    }
+
+    /**
+     * A webhook in version `2026-10-20` delivers messages as
+     * `message_received`/`message_sent` and never as `message`, so
+     * MessageReceived never fires. The delivery is still acknowledged (200,
+     * as any unknown event), but it says so in the log, once per delivery.
+     */
+    protected function warnAboutTheMessageContract(array $payload): void
+    {
+        if (!in_array($payload['name'] ?? null, self::MESSAGE_CONTRACT_EVENTS, true)) {
+            return;
+        }
+
+        Log::warning('zapmizer: the webhook delivers in version 2026-10-20 (the message contract), which this version of the package does not read: MessageReceived does not fire. Recreate the webhook in version 2024-02-27.', array_filter([
+            'name' => $payload['name'],
+            'version' => is_string($payload['version'] ?? null) ? $payload['version'] : null,
+            'connection_id' => $this->connection()?->getKey(),
+            'wid' => is_string($payload['wid'] ?? null) ? $payload['wid'] : null,
+        ], fn ($value) => $value !== null));
     }
 
     /**

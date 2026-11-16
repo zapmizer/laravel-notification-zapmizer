@@ -20,6 +20,10 @@ use NotificationChannels\Zapmizer\Support\Payload;
  * reused a webhook the team already had for that URL (the secret is only
  * ever handed out once, on creation): a null secret with a non-null id is
  * a reused webhook, whose secret is the one stored on the first connect.
+ *
+ * `webhookVersion` is the version that webhook delivers in. A reused webhook
+ * keeps the version it had, whatever the session asked for; null when there
+ * is no webhook or Zapmizer is older than 1.148.17 (which does not send it).
  */
 final class ConnectToken
 {
@@ -32,6 +36,7 @@ final class ConnectToken
         public readonly ?int $botInstanceId = null,
         public readonly ?int $webhookId = null,
         public readonly ?string $webhookSecret = null,
+        public readonly ?string $webhookVersion = null,
     ) {
     }
 
@@ -70,6 +75,7 @@ final class ConnectToken
             botInstanceId: $botInstanceId,
             webhookId: $webhookId,
             webhookSecret: filled($data['webhook_secret'] ?? null) ? (string) $data['webhook_secret'] : null,
+            webhookVersion: is_string($data['webhook_version'] ?? null) && $data['webhook_version'] !== '' ? $data['webhook_version'] : null,
         );
     }
 
@@ -96,6 +102,16 @@ final class ConnectToken
     public function needsWebhookSecret(): bool
     {
         return $this->webhookId !== null && $this->webhookSecret === null;
+    }
+
+    /**
+     * The webhook delivers in a version other than `2024-02-27`: its
+     * messages come as `message_received`/`message_sent`, which this version
+     * does not read, so `MessageReceived` never fires for this connection.
+     */
+    public function hasUnreadableWebhookVersion(): bool
+    {
+        return $this->webhookVersion !== null && $this->webhookVersion !== InstanceClient::LEGACY_WEBHOOK_VERSION;
     }
 
     public function hasNumber(): bool

@@ -108,4 +108,23 @@ return [
         // is the only thing that stops a forged confirmation.
         'webhook_middleware' => [],
     ],
+
+    // The embedded inbox, ready-made: two authenticated web routes under the
+    // package prefix, POST {prefix}/inbox/session (`zapmizer.inbox.session`,
+    // the `openSession` of @zapmizer/embed) and GET {prefix}/inbox/keepalive
+    // (`zapmizer.inbox.keepalive`, 204). The session opens for the connection
+    // of the model `connect.resolver` returns, with the logged-in user as the
+    // attendant. Off by default; `php artisan zapmizer:install --inbox` turns
+    // it on. Off too when `routes.enabled` is false. A published
+    // config/zapmizer.php without this key still gets it (top-level merge).
+    'inbox' => [
+        'enabled' => env('ZAPMIZER_INBOX_ENABLED', false),
+        'middleware' => ['web', 'auth'],
+        // The page's public origin, sent as `parent_origin`. Empty: read from
+        // the request (scheme, host and port). Set it when the app sits behind
+        // a proxy it does not trust (no TrustProxies): the request then sees
+        // http:// or the internal host, and Zapmizer answers
+        // `origin_not_allowed`.
+        'parent_origin' => env('ZAPMIZER_INBOX_PARENT_ORIGIN'),
+    ],
 ];

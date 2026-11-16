@@ -107,6 +107,16 @@ class ZapmizerServiceProvider extends ServiceProvider
             $this->loadRoutesFrom(__DIR__ . '/../routes/web.php');
         });
 
+        if (filter_var(config('zapmizer.inbox.enabled', false), FILTER_VALIDATE_BOOLEAN)) {
+            Route::group([
+                'prefix' => config('zapmizer.routes.prefix', 'zapmizer'),
+                'middleware' => config('zapmizer.inbox.middleware', ['web', 'auth']),
+                'as' => 'zapmizer.',
+            ], function () {
+                $this->loadRoutesFrom(__DIR__ . '/../routes/inbox.php');
+            });
+        }
+
         // The webhook is public and stateless — registered outside the
         // user-facing middleware on purpose. The signature check is on the
         // route itself (routes/webhook.php), not left to the config. The

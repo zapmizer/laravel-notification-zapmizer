@@ -19,8 +19,9 @@ final class InboundMessage
     /**
      * `from` is who the chat is with: the person in a DM, the group in a
      * group. `author` is who wrote — only set in groups, as whatsapp-web.js
-     * does. `fromMe` is never true here: whatsapp-web.js does not emit
-     * `message` for the bot's own sends. `status@broadcast` (a status
+     * does. `fromMe` is never true from the webhook (whatsapp-web.js does not
+     * emit `message` for the bot's own sends), but is from `syncMessages()`,
+     * which returns both directions. `status@broadcast` (a status
      * update) arrives as a DM with an empty `fromPhone`, flagged by
      * `isBroadcast`.
      *

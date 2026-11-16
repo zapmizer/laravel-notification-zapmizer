@@ -886,7 +886,7 @@ The partner client changed, and so did the connect flow ("Connect flow" below).
 - `ConnectToken`: `teamId` is an `int` (never `null`), `userId` was added as the second constructor argument, and an answer without a valid `user_id`/`team_id` throws `unexpectedResponse`. The callback then reports `exchange_failed` and stores nothing (it used to store the connection with a `null` `zapmizer_team_id`).
 - A partner call answered 404 or 409 no longer logs `zapmizer: partner call failed.`.
 
-**Messages.** `InboundMessage` is gone: `MessageReceived`, the new `MessageSent`, `syncMessages()`, `media()` and `awaitMedia()` use `Messages\Message`, in Zapmizer's message contract. The field-by-field map (including the short `id`) is in the CHANGELOG, "Upgrade da 0.3 e da 0.4". The webhook the connect creates is born in `2026-10-20` ([The webhook version](#the-webhook-version)); one in `2024-02-27` keeps working.
+**Messages.** `InboundMessage` is gone: `MessageReceived`, the new `MessageSent`, `syncMessages()` and `ZapmizerConnection::media()`/`awaitMedia()` use `Messages\Message` (`InstanceClient::media($botInstanceId, $messageId, $timestamp)` keeps its scalars), in Zapmizer's message contract. The field-by-field map (including the short `id`) is in the CHANGELOG, "Upgrade da 0.3 e da 0.4". The webhook the connect creates is born in `2026-10-20` ([The webhook version](#the-webhook-version)); one in `2024-02-27` keeps working.
 
 **Connect flow.**
 

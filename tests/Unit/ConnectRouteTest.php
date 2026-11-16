@@ -144,9 +144,9 @@ class ConnectRouteTest extends TestCase
     public function testShowReturnsTheConnectionState()
     {
         $this->fakeHttp();
-        $this->actingAsUser();
+        $user = $this->actingAsUser();
 
-        $this->getJson(route('zapmizer.connect.show'))->assertOk()->assertExactJson(['connection' => null]);
+        $this->getJson(route('zapmizer.connect.show'))->assertOk()->assertExactJson(['connection' => null, 'person' => $user->getKey() . ':' . Team::class . ':' . $this->team()->getKey()]);
 
         $this->authorizedTeam();
 
@@ -157,6 +157,34 @@ class ConnectRouteTest extends TestCase
         // Without `live` nothing reaches Zapmizer and nothing live is claimed.
         $this->assertArrayNotHasKey('state', $response->json('connection'));
         $this->assertCount(0, $this->history);
+    }
+
+    public function testShowGivesThePersonOfTheInboxWhateverTheUserKeyIsCalled()
+    {
+        $this->fakeHttp();
+        // The blind test's app shared `user_id`, not `id`: the person comes
+        // from getAuthIdentifier(), never from a guess at the user's shape.
+        $user = new class() extends \Illuminate\Foundation\Auth\User {
+            protected $primaryKey = 'user_id';
+
+            protected $keyType = 'string';
+        };
+        $user->setAttribute('user_id', 'u-77');
+        $this->actingAs($user);
+
+        $this->getJson(route('zapmizer.connect.show'))->assertOk()->assertJsonPath('person', 'u-77:' . Team::class . ':' . $this->team()->getKey());
+
+        $this->authorizedTeam(['phone_number' => '5581911110000', 'bot_instance_id' => 9, 'connected_at' => now(), 'is_active' => true]);
+        $this->getJson(route('zapmizer.connect.show'))->assertOk()->assertJsonPath('person', 'u-77:' . Team::class . ':' . $this->team()->getKey());
+    }
+
+    public function testThePersonFollowsTheModelTheResolverGives()
+    {
+        $this->fakeHttp();
+        config()->set('zapmizer.connect.resolver', ResolvesAuthenticatedUser::class);
+        $user = $this->actingAsUser();
+
+        $this->getJson(route('zapmizer.connect.show'))->assertOk()->assertJsonPath('person', $user->getKey() . ':' . User::class . ':' . $user->getKey());
     }
 
     public function testShowLiveQueriesThePairedInstance()
@@ -181,9 +209,9 @@ class ConnectRouteTest extends TestCase
     public function testShowLiveWithNothingToQueryClaimsNothing()
     {
         $this->fakeHttp();
-        $this->actingAsUser();
+        $user = $this->actingAsUser();
 
-        $this->getJson(route('zapmizer.connect.show', ['live' => 1]))->assertOk()->assertExactJson(['connection' => null]);
+        $this->getJson(route('zapmizer.connect.show', ['live' => 1]))->assertOk()->assertExactJson(['connection' => null, 'person' => $user->getKey() . ':' . Team::class . ':' . $this->team()->getKey()]);
 
         $this->authorizedTeam(['bot_instance_id' => null]);
 

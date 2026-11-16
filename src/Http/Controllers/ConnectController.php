@@ -102,22 +102,48 @@ class ConnectController extends Controller
      * and `is_online` — a panel showing whether the number is up. The live
      * query also stores a number changed on WhatsApp (syncConnectedNumber()),
      * so it runs before the connection is serialized.
+     *
+     * `person` goes along: the key @zapmizer/embed keeps the inbox's resume
+     * under, and closes the inbox on when it changes (see person()).
      */
     public function show(Request $request): JsonResponse
     {
         try {
-            $connection = $this->connectable($request)->zapmizerConnection;
+            $connectable = $this->connectable($request);
         } catch (NoConnectableException) {
             return $this->code('no_connectable', 403);
         }
 
+        $connection = $connectable->zapmizerConnection;
+        $person = $this->person($request, $connectable);
+
         if ($connection === null || !$request->boolean('live')) {
-            return new JsonResponse(['connection' => $connection]);
+            return new JsonResponse(['connection' => $connection, 'person' => $person]);
         }
 
         $live = $this->liveState($connection);
 
-        return new JsonResponse(['connection' => $connection->toArray() + $live]);
+        return new JsonResponse(['connection' => $connection->toArray() + $live, 'person' => $person]);
+    }
+
+    /**
+     * Who attends, for the `person` of @zapmizer/embed: the logged-in user
+     * (`getAuthIdentifier()`, whatever the primary key is called) and the
+     * model the connection belongs to, `{user}:{morph class}:{key}`. The
+     * embed keeps the resume under `{brand}-inbox:{person}` and closes the
+     * inbox when it changes, so another user, or the same user on another
+     * team, never resumes this one. Null without a user (no resume).
+     */
+    protected function person(Request $request, Model $connectable): ?string
+    {
+        $user = $request->user();
+        $id = is_object($user) && method_exists($user, 'getAuthIdentifier') ? $user->getAuthIdentifier() : null;
+
+        if (!is_scalar($id) || (string) $id === '') {
+            return null;
+        }
+
+        return $id . ':' . $this->connectableKey($connectable);
     }
 
     /**

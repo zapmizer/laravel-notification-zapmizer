@@ -309,6 +309,7 @@ PHP;
             'componentes Vue em resources/js/zapmizer',
             'Instale o front: npm install github:zapmizer/embed#v0.1.3 lucide-vue-next',
             'endZapmizerEmbeds() antes do logout',
+            'Monte <InboxScreen /> (resources/js/zapmizer/InboxScreen.vue; o person vem do servidor, não passe)',
             'Rebuilde o front',
         ]);
 

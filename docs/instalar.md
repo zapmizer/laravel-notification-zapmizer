@@ -140,14 +140,14 @@ import InboxScreen from '@/zapmizer/InboxScreen.vue';
 <template>
   <AuthenticatedLayout>
     <div style="height: calc(100vh - 8rem)">
-      <InboxScreen :person="String($page.props.auth.user.id)" />
+      <InboxScreen />
     </div>
   </AuthenticatedLayout>
 </template>
 ```
 
 - Use o layout autenticado que o app já tem; o caminho e o nome mudam de app para app (o Breeze usa `resources/js/Pages` e `@/Layouts/AuthenticatedLayout.vue`; os starter kits do Laravel 12 em diante, `resources/js/pages` e `@/layouts/AppLayout.vue`).
-- `person` é quem atende, estável e por pessoa: `String(user.id)`, ou `` `${user.id}:${team.id}` `` quando a conexão é do time (a troca de time não reabre a caixa do outro).
+- Não passe `person`: o `InboxScreen` o recebe do servidor, no `GET zapmizer.connect.show` (`{connection, person}`). É quem atende, `{usuário}:{model}:{id}`, montado com o `getAuthIdentifier()` do usuário logado (qualquer que seja o nome da chave primária, `id`, `user_id`, um uuid) e o model que o resolver devolve. O `@zapmizer/embed` guarda a retomada da caixa na chave `<marca>-inbox:<person>` e fecha a caixa quando ele muda: outro usuário, ou o mesmo em outro time, não retoma a caixa deste. Não leia o usuário de `$page.props` para isso. A prop `person` existe só para sobrescrever (`null` desliga a retomada).
 - A caixa ocupa a altura do pai (no mínimo 560 px): dê altura ao contêiner.
 - Sem conexão, o componente mostra o botão de conectar. Conectou, a caixa abre. Uma conexão revogada, ou anterior à caixa (`missing_ability`), volta ao botão.
 - Os componentes ficam todos em `resources/js/zapmizer/`, uma pasta só deles, e se importam entre si por caminho relativo: funcionam com qualquer alias (ou nenhum) e não colidem com as pastas `components/`/`Components/` do app. A página os importa como o app já importa de `resources/js`: `@/zapmizer/...` com o alias `@` (o do `laravel-vite-plugin` e dos starter kits), `~/zapmizer/...` num app com `~`, ou o caminho relativo. Não mova os arquivos nem crie alias por causa deles.
@@ -274,7 +274,6 @@ A página:
 
 <div id="zapmizer"
      data-brand="{{ \NotificationChannels\Zapmizer\Support\EmbedBrand::resolve() }}"
-     data-person="{{ auth()->id() }}"
      data-show-url="{{ route('zapmizer.connect.show') }}"
      data-start-url="{{ route('zapmizer.connect.start') }}"
      data-session-url="{{ route('zapmizer.inbox.session') }}"
@@ -299,7 +298,7 @@ import { createInbox } from '@zapmizer/embed/inbox';
 import { defaultMessages } from '@zapmizer/embed/errors';
 
 const root = document.getElementById('zapmizer');
-const { brand, person, showUrl, startUrl, sessionUrl, keepaliveUrl } = root.dataset;
+const { brand, showUrl, startUrl, sessionUrl, keepaliveUrl } = root.dataset;
 const connectBox = root.querySelector('[data-connect]');
 const connectMessage = root.querySelector('[data-connect-message]');
 const inboxBox = root.querySelector('[data-inbox]');
@@ -308,11 +307,16 @@ const JSON_HEADERS = { Accept: 'application/json', 'X-Requested-With': 'XMLHttpR
 const csrf = () => document.querySelector('meta[name="csrf-token"]').content;
 let inbox = null;
 
-// GET zapmizer.connect.show: { connection } ou { connection: null }.
+// Quem atende, como o servidor diz: a chave da retomada da caixa.
+let person = null;
+
+// GET zapmizer.connect.show: { connection, person }; connection é null sem conexão.
 async function currentConnection() {
   const response = await fetch(showUrl, { headers: JSON_HEADERS, credentials: 'same-origin' });
   if (!response.ok) throw new Error(`show ${response.status}`);
-  return (await response.json()).connection;
+  const body = await response.json();
+  person = body.person ?? null;
+  return body.connection;
 }
 
 function showConnect(message = '') {
@@ -332,7 +336,7 @@ function showInbox() {
   inbox = createInbox({
     container: inboxBox,
     brand, // a marca do deploy da ZAPMIZER_BASE_URI
-    person,
+    person, // do show: o usuário logado e o model da conexão
     openSession: async () => {
       const response = await fetch(sessionUrl, {
         method: 'POST',

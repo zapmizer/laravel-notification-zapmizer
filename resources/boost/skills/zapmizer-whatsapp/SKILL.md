@@ -76,12 +76,12 @@ import InboxScreen from '@/zapmizer/InboxScreen.vue';
 
 <template>
   <div style="height: calc(100vh - 8rem)">
-    <InboxScreen :person="String($page.props.auth.user.id)" />
+    <InboxScreen />
   </div>
 </template>
 ```
 
-   Without a connection it shows the connect button; once connected, the inbox opens. `person` is the stable id of who attends (`${user.id}:${team.id}` when the connection is the team's).
+   Without a connection it shows the connect button; once connected, the inbox opens. Do not pass `person`: the screen gets it from the server (`person` of `GET zapmizer.connect.show`, built from the logged-in user's `getAuthIdentifier()` and the model the resolver returns), so it never depends on how the app shares its user (`id`, `user_id`, ...).
 3. Logout (Inertia 1+/2; with Inertia 0.x use `import { Inertia } from '@inertiajs/inertia'` and `Inertia.on('before', ...)`): call `listenToZapmizerLogout()` once at app boot and `endZapmizerEmbeds()` before the logout request (both in `resources/js/zapmizer/zapmizerEmbed.ts`). With Inertia:
 
 ```ts

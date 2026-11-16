@@ -14,9 +14,9 @@ import { zapmizerRoute } from './zapmizerRoute';
  * para ser refeita, mostra o ConnectButton; conectou, abre a caixa.
  *
  * `person` é quem atende, estável e por pessoa: a chave da retomada
- * (`zapmizer-inbox:${person}`). Use `String(user.id)`, ou
- * `${user.id}:${team.id}` quando a conexão é do time. `null` (deslogou)
- * fecha a caixa.
+ * (`<marca>-inbox:${person}`). Não precisa passar: vem do servidor, no
+ * `show` do connect (o usuário logado e o model da conexão). Passe só para
+ * sobrescrever; `null` fecha a caixa e desliga a retomada.
  *
  * A tela reserva a altura: o componente ocupa 100% do pai, com no mínimo
  * `minHeight`. Para a caixa sobreviver à navegação entre telas, mova o
@@ -24,22 +24,22 @@ import { zapmizerRoute } from './zapmizerRoute';
  */
 const props = withDefaults(
   defineProps<{
-    person: string | null;
+    person?: string | null;
     theme?: 'light' | 'dark';
     sessionUrl?: string;
     keepaliveUrl?: string;
     minHeight?: string;
   }>(),
-  { theme: undefined, sessionUrl: undefined, keepaliveUrl: undefined, minHeight: '560px' },
+  { person: undefined, theme: undefined, sessionUrl: undefined, keepaliveUrl: undefined, minHeight: '560px' },
 );
 
-const { integration, loading, errorMessage, reload } = useZapmizerIntegration();
+const { integration, person: servedPerson, loading, errorMessage, reload } = useZapmizerIntegration();
 
 /** A sessão voltou `not_connected` ou com ação `reconnect` (token revogado, número removido). */
 const needsConnect = ref(false);
 const reauthRequired = ref(false);
 
-const person = computed(() => props.person);
+const person = computed(() => (props.person === undefined ? servedPerson.value : props.person));
 const enabled = computed(() => !loading.value && integration.value !== null && !needsConnect.value);
 
 const inbox = useInboxHost({

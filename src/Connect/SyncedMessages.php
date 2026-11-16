@@ -2,6 +2,7 @@
 
 namespace NotificationChannels\Zapmizer\Connect;
 
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\InboundMessage;
 
 /**
@@ -38,9 +39,18 @@ final class SyncedMessages
      * row must not stall the cursor for the whole number.
      *
      * @param array<string, mixed> $body
+     *
+     * @throws ZapmizerConnectException
      */
     public static function fromResponse(array $body, ?string $cursor): self
     {
+        // The message contract (`api-version` 2026-10-20 and later) carries a
+        // `version` and a shape this class cannot translate: reading it would
+        // drop every entry and still move the cursor past them.
+        if (array_key_exists('version', $body)) {
+            throw ZapmizerConnectException::unexpectedResponse('GET /whatsapp-messages answered in the message contract (version ' . (is_scalar($body['version']) ? $body['version'] : '?') . '), which this version does not read');
+        }
+
         $wid = is_string($body['wid'] ?? null) && $body['wid'] !== '' ? $body['wid'] : null;
         $messages = [];
         $payloads = [];

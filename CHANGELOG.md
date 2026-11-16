@@ -78,6 +78,8 @@ Outras mudanças que podem quebrar:
 - `PartnerClient::checkout(string $externalId, string $redirectUri, ?string $state = null): PartnerCheckout` cria o checkout (`POST /partner/users/{externalId}/checkout`). `Connect\PartnerCheckout` tem `url` e `expiresAt` (`?CarbonImmutable`). 404 → `ZapmizerApiException` com `status()` 404; 409 → `ZapmizerApiException` com `error()` `already_subscribed` ou `payment_incomplete`; 422 do redirect → `errors()['redirect_uri']`.
 - `createSession()` ganha `externalId` (o id do cliente no app, chave das duas chamadas acima) e limita `expires_in` a 900..86400 (`PartnerClient::MAX_EXPIRES_IN`).
 - `ConnectToken` ganha `userId` e `hasNumber()` (`false` quando `phone_number` ou `bot_instance_id` vieram `null`).
+- `createSession()` com `webhookUrl` manda `webhook_version: 2024-02-27` (`InstanceClient::LEGACY_WEBHOOK_VERSION`): o webhook que o connect cria nasce na versão do evento `message`, que a lib lê. Zapmizer anterior à 1.148.17 ignora o campo. Sem `webhookUrl`, nada muda no corpo.
+- `ConnectToken` ganha `webhookVersion` (`?string`, o `webhook_version` do `connect/token`; `null` sem webhook ou em Zapmizer anterior à 1.148.17) e `hasUnreadableWebhookVersion()`.
 - Datas ilegíveis (`expires_at`, `trial_ends_at`) viram `null` e logam `zapmizer: unreadable date.` (warning) com `field`, `value` e `external_id`.
 
 Quebras:
@@ -138,6 +140,7 @@ Quebras: nenhuma de comportamento. Só métodos e classes novos, e o `PartnerCli
 | `?error=subscription_required` → `exchange_failed` | `subscription_required` |
 | status `qr_unavailable` | sai (a Zapmizer não envia desde 1.148.8) |
 | `?error=` respondido antes do `state` | `state` conferido antes; com `state` inválido, `invalid_state` |
+| webhook reaproveitado em outra versão: silêncio | conecta (`ok`) e loga um warning: o webhook entrega em `2026-10-20` e o `MessageReceived` não dispara para essa conexão (troque o webhook para `2024-02-27` na tela de Webhooks) |
 | um callback com `state` errado consumia o pending | o pending só sai quando o `state` bate |
 | token sem número gravado inativo (ou ativo sem instância) | `exchange_failed`, nada gravado, token revogado |
 | `team_already_connected` deixava o token novo valendo | o token novo é revogado |
@@ -198,6 +201,15 @@ Veja "Per-connection webhook URL (opt-in)" em `docs/connect.md`.
 - `$session->expiresAt` (string) → `$session->expiresAt?->toIso8601String()`.
 - `new ConnectSession($url, '2026-…')` com string no `expiresAt` agora dá `TypeError`: passe um `CarbonImmutable` (ou `null`).
 - `new ConnectToken(token: …, teamId: …)` com argumentos nomeados e sem `userId` agora dá `ArgumentCountError`: `userId` é obrigatório.
+
+# 0.4.2
+
+Sem breaking. A partir do Zapmizer 1.148.17, `api-version: 2026-10-20` muda o formato do `GET /whatsapp-messages` e dos webhooks novos para o contrato de mensagens, que esta versão não lê.
+
+- `syncMessages()` manda sempre `api-version: 2025-06-27`, qualquer que seja `zapmizer.api_version`. Antes, com `2026-10-20` na config, toda mensagem vinha no formato novo, era descartada e o cursor avançava: as mensagens se perdiam sem erro.
+- Se a resposta vier no contrato de mensagens mesmo assim, `syncMessages()` lança `ZapmizerConnectException` (`unexpectedResponse`) em vez de devolver uma página vazia.
+- `createWebhook()` (e com ele `registerWebhook()`) cria o webhook na versão `2024-02-27`, a do evento `message` que a lib lê, e manda `api-version: 2025-06-27`. Antes o webhook herdava a versão da config e, com `2026-10-20`, o `MessageReceived` nunca disparava. Zapmizer anterior à 1.148.17 ignora o campo.
+- Webhook cadastrado à mão na tela de Webhooks do Zapmizer: escolha a versão `2024-02-27`. A tela sugere `2026-10-20`, e com ela o evento `message` não chega.
 
 # 0.4.1
 

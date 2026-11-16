@@ -37,9 +37,9 @@ ZAPMIZER_FROM_NUMBER="558181643260"
 
 That is the single-tenant setup: one token and one number for the whole application. To give each model its own number, see the connect guide below.
 
-**API version.** Leave `ZAPMIZER_API_VERSION` unset or at `2025-06-27`; do **not** set it to `2026-10-20` with this version. The package pins the legacy version where Zapmizer's message shape changes (`syncMessages()` and `createWebhook()` always send `api-version: 2025-06-27`, and the webhooks it creates are born in version `2024-02-27`), but sending and every other call follow the config.
+**API version.** Set `ZAPMIZER_API_VERSION=2025-06-27` to track what you send (`2026-10-20` works the same from Zapmizer 1.148.17 on; an older Zapmizer only knows `2025-06-27` for sending). The routes that read messages do not follow it: `syncMessages()` and `createWebhook()` always ask for the message contract, `2026-10-20`.
 
-**Receiving messages (single-tenant).** Create the webhook on Zapmizer's "Webhooks" screen with version **`2024-02-27`** (the screen suggests `2026-10-20`, whose `message_received`/`message_sent` events this version does not read: `MessageReceived` never fires, and the package only logs a warning), point it at `https://your-app/zapmizer/webhook` and put its secret in `ZAPMIZER_WEBHOOK_SECRET`. See [Receiving messages](docs/connect.md#6-receiving-messages-the-signed-webhook).
+**Receiving messages (single-tenant).** Create the webhook on Zapmizer's "Webhooks" screen in version **`2026-10-20`** (the message contract; `2024-02-27` also works, translated into the same `Message`), point it at `https://your-app/zapmizer/webhook` and put its secret in `ZAPMIZER_WEBHOOK_SECRET`. Received messages fire `MessageReceived`, and what the number sends fires `MessageSent`. See [Receiving messages](docs/connect.md#6-receiving-messages-the-signed-webhook).
 
 ## Documentation
 

@@ -84,9 +84,62 @@ class PartnerClientTest extends TestCase
         $this->assertFalse($request->hasHeader('Authorization'));
         $this->assertEquals('application/json', $request->getHeaderLine('Accept'));
         $this->assertEquals(
-            ['redirect_uri' => 'http://app.test/zapmizer/connect/callback', 'state' => 'state-123', 'webhook_url' => 'http://app.test/zapmizer/webhook', 'webhook_version' => '2024-02-27'],
+            ['redirect_uri' => 'http://app.test/zapmizer/connect/callback', 'state' => 'state-123', 'webhook_url' => 'http://app.test/zapmizer/webhook', 'webhook_version' => '2026-10-20'],
             json_decode((string) $request->getBody(), true)
         );
+    }
+
+    /**
+     * @return array<string, array{0: mixed, 1: ?string, 2: ?string}>
+     */
+    public static function webhookVersions(): array
+    {
+        return [
+            'the config' => ['2024-02-27', null, '2024-02-27'],
+            'the argument wins' => ['2024-02-27', '2026-10-20', '2026-10-20'],
+            'a blank config leaves it to the partner account' => ['', null, null],
+            'a null config too' => [null, null, null],
+            'a blank argument too' => ['2026-10-20', ' ', null],
+        ];
+    }
+
+    /** @dataProvider webhookVersions */
+    #[DataProvider('webhookVersions')]
+    public function testTheWebhookVersionComesFromTheConfigOrTheArgument(mixed $config, ?string $argument, ?string $sent)
+    {
+        config()->set('zapmizer.connect.webhook_version', $config);
+        $client = $this->makeClient(new MockHandler([new Response(201, [], json_encode(['url' => 'http://localhost/connect/1']))]));
+
+        $client->createSession('http://app.test/cb', 'state', 'http://app.test/zapmizer/webhook', webhookVersion: $argument);
+
+        $this->assertSame($sent, json_decode((string) $this->history[0]['request']->getBody(), true)['webhook_version'] ?? null);
+    }
+
+    public function testAnUnknownWebhookVersionFailsBeforeAnyCall()
+    {
+        // Zapmizer answers it with a 422, which the connect would report as
+        // zapmizer_unavailable on every attempt.
+        config()->set('zapmizer.connect.webhook_version', '2025-06-27');
+        $client = $this->makeClient(new MockHandler([]));
+
+        try {
+            $client->createSession('http://app.test/cb', 'state', 'http://app.test/zapmizer/webhook');
+            $this->fail('expected an InvalidArgumentException');
+        } catch (\InvalidArgumentException $exception) {
+            $this->assertStringContainsString('zapmizer.connect.webhook_version `2025-06-27`', $exception->getMessage());
+        }
+
+        $this->assertSame([], $this->history);
+    }
+
+    public function testWithoutTheKeyInAPublishedConfigItAsksForTheContract()
+    {
+        config()->set('zapmizer.connect', ['resolver' => config('zapmizer.connect.resolver')]);
+        $client = $this->makeClient(new MockHandler([new Response(201, [], json_encode(['url' => 'http://localhost/connect/1']))]));
+
+        $client->createSession('http://app.test/cb', 'state', 'http://app.test/zapmizer/webhook');
+
+        $this->assertSame('2026-10-20', json_decode((string) $this->history[0]['request']->getBody(), true)['webhook_version']);
     }
 
     public function testCreateSessionWithoutAWebhookSendsNone()
@@ -237,7 +290,7 @@ class PartnerClientTest extends TestCase
 
         $client->createSession('', 'state', '');
 
-        $this->assertSame(['redirect_uri' => '', 'state' => 'state', 'webhook_url' => '', 'webhook_version' => '2024-02-27'], json_decode((string) $this->history[0]['request']->getBody(), true));
+        $this->assertSame(['redirect_uri' => '', 'state' => 'state', 'webhook_url' => '', 'webhook_version' => '2026-10-20'], json_decode((string) $this->history[0]['request']->getBody(), true));
     }
 
     public function testAnUnreadableExpiryOfTheSessionIsLoggedWithTheExternalId()
@@ -885,9 +938,9 @@ class PartnerClientTest extends TestCase
         config()->set('zapmizer.partner.secret', 'secret');
 
         $session = '{"url":"http://zap.test/connect/1","expires_at":"2026-09-07T01:00:00Z"}';
-        $token = '{"token":"1|sanctum","user_id":3,"team_id":7,"team_name":"Acme","phone_number":"5581911110000","bot_instance_id":9,"webhook_id":null,"webhook_secret":null}';
+        $token = '{"token":"1|sanctum","user_id":3,"team_id":7,"team_name":"Acme","phone_number":"5581911110000","bot_instance_id":9,"webhook_id":null,"webhook_secret":null,"webhook_version":null}';
         $subscription = '{"user_id":3,"team_id":7,"external_id":"42","subscribed":false,"quantity":null,"trial_ends_at":"2999-01-01T00:00:00Z","payment_incomplete":false}';
-        $checkout = '{"url":"https://checkout.test/c/1","expires_at":null}';
+        $checkout = '{"url":"https://checkout.test/c/1","expires_at":"2026-09-07T01:00:00Z"}';
         $this->assertMatchesContract('POST', '/connect/sessions', 201, $session);
         $this->assertMatchesContract('POST', '/connect/token', 200, $token);
         $this->assertMatchesContract('GET', '/partner/users/{externalId}', 200, $subscription);

@@ -15,7 +15,7 @@ use NotificationChannels\Zapmizer\Connect\WebhookRegistration;
 use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
-use NotificationChannels\Zapmizer\InboundMessage;
+use NotificationChannels\Zapmizer\Messages\Message;
 use NotificationChannels\Zapmizer\Support\PhoneNumber;
 use NotificationChannels\Zapmizer\Zapmizer;
 use NotificationChannels\Zapmizer\ZapmizerMessage;
@@ -202,11 +202,14 @@ class ZapmizerConnection extends Model
      * waiting: the answer is `attached`, `downloading` (the webhook fired
      * before the bot finished the download — ask again later) or
      * `unavailable` (it will never come). Needs the paired instance: a
-     * connection that lost it has nothing to ask Zapmizer about.
+     * connection that lost it has nothing to ask Zapmizer about. Asks with
+     * the message's `id` and `timestamp`. Numbers by QR only: on the
+     * official number the media does not come through Zapmizer, which
+     * answers 422 (`MediaRejectedException`).
      *
      * @throws ZapmizerConnectException
      */
-    public function media(InboundMessage $message): MediaDownload
+    public function media(Message $message): MediaDownload
     {
         if (blank($this->bot_instance_id)) {
             throw ZapmizerConnectException::notPaired();
@@ -215,7 +218,9 @@ class ZapmizerConnection extends Model
         return $this->instanceClient()->media(
             (int) $this->bot_instance_id,
             $message->id,
-            $message->sentAt->getTimestamp(),
+            // `sentAt()` falls back to now without a usable timestamp: 0
+            // would read as a long-gone message and a future one as a 422.
+            $message->sentAt()->getTimestamp(),
         );
     }
 
@@ -258,7 +263,7 @@ class ZapmizerConnection extends Model
      *
      * @throws ZapmizerConnectException
      */
-    public function awaitMedia(InboundMessage $message, array $waitsSeconds = [2, 5, 10, 20, 30], ?Closure $sleep = null): MediaDownload
+    public function awaitMedia(Message $message, array $waitsSeconds = [2, 5, 10, 20, 30], ?Closure $sleep = null): MediaDownload
     {
         $sleep ??= static fn (int|float $seconds) => usleep((int) ($seconds * 1_000_000));
 
@@ -281,7 +286,7 @@ class ZapmizerConnection extends Model
      * `media()` with the 429 returned instead of thrown, so `awaitMedia()`
      * can wait it out like a `downloading`.
      */
-    private function mediaOrRateLimit(InboundMessage $message): MediaDownload|MediaRateLimitedException
+    private function mediaOrRateLimit(Message $message): MediaDownload|MediaRateLimitedException
     {
         try {
             return $this->media($message);

@@ -1,0 +1,56 @@
+{
+    "raw_from": "whatsapp-rust-sidecar/live-broadcast-list.json",
+    "context": {
+        "bot_wid": "5511900000000@c.us",
+        "device": 0
+    },
+    "message": {
+        "id": "3EB0LISTLIVE",
+        "serialized_id": "false_1760000000@broadcast_3EB0LISTLIVE",
+        "chat": "1760000000@broadcast",
+        "sender": "5511999998888@c.us",
+        "sender_name": "Maria",
+        "from_me": false,
+        "from_me_other_device": false,
+        "timestamp": 1760000300,
+        "type": "text",
+        "text": "promoção da semana",
+        "quoted": null,
+        "forwarded": false,
+        "view_once": false,
+        "mentions": [],
+        "media": null,
+        "location": null,
+        "contacts": null,
+        "poll": null,
+        "reply": null,
+        "link_preview": null,
+        "ack": null,
+        "edited": false,
+        "reactions": [],
+        "received_at": null,
+        "native_type": "chat"
+    },
+    "legacy_payload": {
+        "id": {
+            "id": "3EB0LISTLIVE",
+            "_serialized": "false_1760000000@broadcast_3EB0LISTLIVE",
+            "fromMe": false,
+            "remote": "1760000000@broadcast"
+        },
+        "from": "1760000000@broadcast",
+        "to": "5511900000000@c.us",
+        "author": "5511999998888@c.us",
+        "fromMe": false,
+        "type": "chat",
+        "body": "promoção da semana",
+        "timestamp": 1760000300,
+        "hasMedia": false,
+        "hasQuotedMsg": false,
+        "isForwarded": false,
+        "_data": {
+            "notifyName": "Maria",
+            "isViewOnce": false
+        }
+    }
+}

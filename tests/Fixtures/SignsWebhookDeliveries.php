@@ -33,6 +33,47 @@ trait SignsWebhookDeliveries
     }
 
     /**
+     * A `message_received` (or `message_sent`) envelope of a webhook in
+     * version `2026-10-20`: the message contract, as Zapmizer's openapi.json
+     * describes it.
+     *
+     * @param array<string, mixed> $overrides Of the message (`data`).
+     */
+    protected function contractEnvelope(string $name = 'message_received', array $overrides = [], ?string $wid = '5581911110000@c.us', string $version = '2026-10-20'): array
+    {
+        $fromMe = $name === 'message_sent';
+
+        return [
+            'id' => '0199a3c2-7f1e-7b6a-9d2e-' . random_int(100000000000, 999999999999),
+            'created_at' => '2026-10-20T14:03:11.482Z',
+            'wid' => $wid,
+            'name' => $name,
+            'version' => $version,
+            'data' => array_merge([
+                'id' => '3EB0' . random_int(10000000, 99999999),
+                'chat' => '5581999998888@c.us',
+                'sender' => $fromMe ? $wid : '5581999998888@c.us',
+                'sender_name' => $fromMe ? null : 'Maria Souza',
+                'from_me' => $fromMe,
+                'from_me_other_device' => false,
+                'timestamp' => now()->getTimestamp(),
+                'type' => 'text',
+                'text' => 'hi',
+                'quoted' => null,
+                'forwarded' => false,
+                'view_once' => false,
+                'mentions' => [],
+                'media' => null,
+                'location' => null,
+                'contacts' => null,
+                'poll' => null,
+                'reply' => null,
+                'link_preview' => null,
+            ], $overrides),
+        ];
+    }
+
+    /**
      * Deliver a signed webhook, exactly as Zapmizer does. A `null` wid
      * leaves the X-Wid header out.
      */

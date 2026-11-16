@@ -67,7 +67,7 @@ class SentMessageTest extends TestCase
 
     public function testTheLegacyShapeIsReadFromData()
     {
-        $this->assertMatchesContract('GET', '/messages/{id}', 200, self::LEGACY);
+        $this->assertMatchesContract('GET', '/messages/{message}', 200, self::LEGACY);
 
         $sent = $this->sent(self::LEGACY);
 

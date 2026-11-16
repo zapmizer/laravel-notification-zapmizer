@@ -47,7 +47,7 @@ class MessageTrackingTest extends TestCase
 
     public function testSentMessageReadsTheQrTracking()
     {
-        $this->assertMatchesContract('GET', '/sent-messages/{id}', 200, self::QR);
+        $this->assertMatchesContract('GET', '/sent-messages/{sentMessage}', 200, self::QR);
         $transport = new RecordingTransport(self::answer(self::QR));
 
         $status = $this->client($transport)->sentMessage('9d3c1e2a-5b7f-4c1e-9a8b-1f2e3d4c5b6a');
@@ -78,7 +78,7 @@ class MessageTrackingTest extends TestCase
 
     public function testAFailedQrSendCarriesTheReason()
     {
-        $this->assertMatchesContract('GET', '/sent-messages/{id}', 200, self::QR_FAILED);
+        $this->assertMatchesContract('GET', '/sent-messages/{sentMessage}', 200, self::QR_FAILED);
 
         $status = $this->client(new RecordingTransport(self::answer(self::QR_FAILED)))->sentMessage('9d3c1e2a-5b7f-4c1e-9a8b-1f2e3d4c5b6a');
 
@@ -94,7 +94,7 @@ class MessageTrackingTest extends TestCase
 
     public function testMetaMessageReadsTheOfficialTracking()
     {
-        $this->assertMatchesContract('GET', '/meta-messages/{id}', 200, self::META);
+        $this->assertMatchesContract('GET', '/meta-messages/{metaMessage}', 200, self::META);
         $transport = new RecordingTransport(self::answer(self::META));
 
         $status = $this->client($transport)->metaMessage(42);
@@ -124,7 +124,7 @@ class MessageTrackingTest extends TestCase
 
     public function testAFailedOfficialSendCarriesTheReason()
     {
-        $this->assertMatchesContract('GET', '/meta-messages/{id}', 200, self::META_FAILED);
+        $this->assertMatchesContract('GET', '/meta-messages/{metaMessage}', 200, self::META_FAILED);
 
         $status = $this->client(new RecordingTransport(self::answer(self::META_FAILED)))->metaMessage('43');
 
@@ -136,7 +136,7 @@ class MessageTrackingTest extends TestCase
 
     public function testTheIdIsEncodedInThePath()
     {
-        $this->assertMatchesContract('GET', '/sent-messages/{id}', 200, self::QR);
+        $this->assertMatchesContract('GET', '/sent-messages/{sentMessage}', 200, self::QR);
         $transport = new RecordingTransport(self::answer(self::QR));
 
         $this->client($transport)->sentMessage('a/b?c');
@@ -417,9 +417,9 @@ class MessageTrackingTest extends TestCase
 
     public function testTheFailuresOfTheContractMatchIt()
     {
-        $this->assertMatchesContract('GET', '/sent-messages/{id}', 401, '{"message":"Unauthenticated."}');
-        $this->assertMatchesContract('GET', '/sent-messages/{id}', 404, '{"message":"Not found."}');
-        $this->assertMatchesContract('GET', '/meta-messages/{id}', 401, '{"message":"Unauthenticated."}');
+        $this->assertMatchesContract('GET', '/sent-messages/{sentMessage}', 401, '{"message":"Unauthenticated."}');
+        $this->assertMatchesContract('GET', '/sent-messages/{sentMessage}', 404, '{"message":"Not found."}');
+        $this->assertMatchesContract('GET', '/meta-messages/{metaMessage}', 401, '{"message":"Unauthenticated."}');
     }
 
     public function testTheTrackingDtosSurviveSerialization()

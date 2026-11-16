@@ -50,7 +50,7 @@ trait DrivesTheConnectRoutes
         return json_encode(array_merge([
             'token' => '1|sanctum', 'user_id' => 3, 'team_id' => 7, 'team_name' => 'Acme',
             'phone_number' => '5581911110000', 'bot_instance_id' => 9,
-            'webhook_id' => 42, 'webhook_secret' => 'whsec_new',
+            'webhook_id' => 42, 'webhook_secret' => 'whsec_new', 'webhook_version' => null,
         ], $overrides));
     }
 

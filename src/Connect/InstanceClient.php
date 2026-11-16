@@ -11,6 +11,7 @@ use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
+use NotificationChannels\Zapmizer\Messages\Message;
 use NotificationChannels\Zapmizer\Support\ApiError;
 use NotificationChannels\Zapmizer\Support\JsonResponse;
 use Psr\Http\Message\ResponseInterface;
@@ -32,15 +33,16 @@ class InstanceClient
     use BuildsZapmizerRequests;
 
     /**
-     * The `api-version` the message endpoints are pinned to. From
-     * `2026-10-20` on, Zapmizer answers `/whatsapp-messages` and fires the
-     * webhook in its message contract, a shape this version does not read:
-     * pinning keeps a newer `zapmizer.api_version` from turning every
-     * synced message into nothing and every new webhook silent.
+     * The version of Zapmizer's message contract, which `syncMessages()` and
+     * `createWebhook()` always ask for, whatever `zapmizer.api_version` says.
      */
-    public const LEGACY_MESSAGE_API_VERSION = '2025-06-27';
+    public const MESSAGE_CONTRACT_VERSION = Message::CONTRACT_VERSION;
 
-    /** The webhook version whose `message` event this version reads. */
+    /**
+     * The webhook version before the message contract: messages come as
+     * `message`, in WhatsApp Web's shape, translated by the package.
+     * Deprecated by Zapmizer, with the shutdown date still to be announced.
+     */
     public const LEGACY_WEBHOOK_VERSION = '2024-02-27';
 
     protected Transport $transport;
@@ -194,15 +196,18 @@ class InstanceClient
 
     /**
      * Register a webhook receiver. Zapmizer returns the `secret` ONLY in this
-     * response — the caller must persist it.
+     * response — the caller must persist it. The webhook is created in the
+     * message contract (`version` and `api-version` `2026-10-20`); a Zapmizer
+     * before 1.148.17 ignores both and creates it in `2024-02-27`, which the
+     * package reads too.
      *
      * @throws ZapmizerConnectException
      */
     public function createWebhook(string $url): WebhookRegistration
     {
         $response = $this->request('POST', '/webhooks', [
-            'json' => ['url' => $url, 'enabled' => true, 'version' => self::LEGACY_WEBHOOK_VERSION],
-            'api_version' => self::LEGACY_MESSAGE_API_VERSION,
+            'json' => ['url' => $url, 'enabled' => true, 'version' => self::MESSAGE_CONTRACT_VERSION],
+            'api_version' => self::MESSAGE_CONTRACT_VERSION,
         ]);
 
         $this->guardUnauthorized($response);
@@ -262,7 +267,9 @@ class InstanceClient
      * instance on Meta Cloud, which has no media endpoint) and 429 (over the
      * limit of 60 requests a minute per user and instance).
      *
-     * @param string $messageId `id._serialized` or `id.id` of the message
+     * @param string $messageId The message's `id` (`Message::$id`, WhatsApp's
+     *                          id; `id._serialized` of WhatsApp Web's object
+     *                          is accepted too)
      * @param int $timestamp The message's `timestamp` (seconds) — required:
      *                       the 600 s window Zapmizer keeps downloading in
      *                       is counted from it, and it must not be in the future
@@ -287,9 +294,13 @@ class InstanceClient
     /**
      * Every message of the number stored after `$cursor` (the `cursor`
      * of the previous page). On the very first call, without a cursor, pass
-     * `$since` (seconds) so the whole history is not walked. Only for numbers
-     * by QR (a 422 otherwise, a `ZapmizerApiException`); 429 is over the limit of
-     * 30 requests a minute (`ZapmizerRateLimitedException`).
+     * `$since` (seconds) so the whole history is not walked. Always asks for
+     * the message contract (`api-version: 2026-10-20`), which Zapmizer
+     * answers from 1.148.17 on, for numbers by QR and official ones; an
+     * older Zapmizer answers in WhatsApp Web's shape, which is translated,
+     * and refuses the official number with 422 (a `ZapmizerApiException`).
+     * 429 is over the limit of 30 requests a minute
+     * (`ZapmizerRateLimitedException`). See `SyncedMessages`.
      *
      * @throws ZapmizerConnectException
      */
@@ -302,7 +313,7 @@ class InstanceClient
                 'since' => $cursor === null ? $since : null,
                 'limit' => $limit,
             ], fn ($value) => $value !== null),
-            'api_version' => self::LEGACY_MESSAGE_API_VERSION,
+            'api_version' => self::MESSAGE_CONTRACT_VERSION,
         ]);
 
         $this->guardUnauthorized($response);

@@ -240,7 +240,7 @@ class ZapmizerTest extends TestCase
 
     public function testTheLegacyAnswerIsReadToo()
     {
-        $this->assertMatchesContract('GET', '/messages/{id}', 200, SentMessageTest::LEGACY);
+        $this->assertMatchesContract('GET', '/messages/{message}', 200, SentMessageTest::LEGACY);
         $this->fakeZapmizer(new MockHandler([new Response(200, ['Content-Type' => 'application/json'], SentMessageTest::LEGACY)]));
         $client = new Zapmizer('bot-token', new LaravelHttpTransport(), 'http://localhost/api');
 

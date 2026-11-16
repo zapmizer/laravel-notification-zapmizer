@@ -123,6 +123,7 @@ trait BuildsCatalogDeliveries
             'created_at' => '2025-10-17T12:00:00.000000Z',
             'wid' => '5581911110000@c.us',
             'name' => $name,
+            'version' => '2026-10-20',
             'data' => $data ?? static::catalogData()[$name],
         ], $envelope);
     }

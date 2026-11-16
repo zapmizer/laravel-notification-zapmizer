@@ -4,6 +4,7 @@ namespace NotificationChannels\Zapmizer\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use NotificationChannels\Zapmizer\Events\CallReceived;
@@ -17,6 +18,7 @@ use NotificationChannels\Zapmizer\Events\MessageEdited;
 use NotificationChannels\Zapmizer\Events\MessageReacted;
 use NotificationChannels\Zapmizer\Events\MessageReceived;
 use NotificationChannels\Zapmizer\Events\MessageRevoked;
+use NotificationChannels\Zapmizer\Events\MessageSent;
 use NotificationChannels\Zapmizer\Events\MessageStatusUpdated;
 use NotificationChannels\Zapmizer\Events\MessageTranscribed;
 use NotificationChannels\Zapmizer\Events\PollVoted;
@@ -25,7 +27,8 @@ use NotificationChannels\Zapmizer\Events\WebhookHandled;
 use NotificationChannels\Zapmizer\Events\WebhookReceived;
 use NotificationChannels\Zapmizer\Events\WhatsappVerified as WhatsappVerifiedEvent;
 use NotificationChannels\Zapmizer\Http\Middleware\VerifyWebhookSignature;
-use NotificationChannels\Zapmizer\InboundMessage;
+use NotificationChannels\Zapmizer\Messages\LegacyMessageTranslator;
+use NotificationChannels\Zapmizer\Messages\Message;
 use NotificationChannels\Zapmizer\Models\WhatsappVerified;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
 use NotificationChannels\Zapmizer\Support\PhoneNumber;
@@ -49,7 +52,12 @@ use Throwable;
  * event never downgrades an already-verified number, so redeliveries are
  * harmless.
  *
- * Bot events (`message`, ...) are signed by Zapmizer (`X-Zapmizer-Signature`,
+ * Messages come as `message_received`/`message_sent` (webhook version
+ * `2026-10-20`, Zapmizer's message contract) or as `message` (version
+ * `2024-02-27`, WhatsApp Web's object, translated into the same `Message`):
+ * one listener of `MessageReceived` serves both.
+ *
+ * Bot events (`message_received`, ...) are signed by Zapmizer (`X-Zapmizer-Signature`,
  * HMAC-SHA256 of `"{timestamp}.{raw body}"`). The VerifyWebhookSignature
  * middleware — applied to the route by the package — checks it against the
  * application secret (`zapmizer.webhook.secret`) and every
@@ -61,12 +69,6 @@ use Throwable;
  */
 class WebhookController extends Controller
 {
-    /**
-     * The events of the message contract (webhook version `2026-10-20`),
-     * which take the place of `message` and this version does not read.
-     */
-    public const MESSAGE_CONTRACT_EVENTS = ['message_received', 'message_sent'];
-
     /**
      * The delivery being handled.
      */
@@ -82,8 +84,6 @@ class WebhookController extends Controller
         abort_unless(is_array($payload), 400, 'Malformed webhook payload.');
 
         $this->request = $request;
-
-        $this->warnAboutTheMessageContract($payload);
 
         $deduplicator = $this->deduplicator();
 
@@ -179,18 +179,44 @@ class WebhookController extends Controller
     }
 
     /**
-     * Handle an inbound WhatsApp message.
+     * A message the number received, in the message contract (webhook
+     * version `2026-10-20`): fires MessageReceived.
+     */
+    protected function handleMessageReceived(array $payload): Response
+    {
+        return $this->dispatchContractMessage($payload, MessageReceived::class);
+    }
+
+    /**
+     * A message the number sent — through the API, the bot or the phone —
+     * in the message contract (webhook version `2026-10-20`): fires
+     * MessageSent.
+     */
+    protected function handleMessageSent(array $payload): Response
+    {
+        return $this->dispatchContractMessage($payload, MessageSent::class);
+    }
+
+    /**
+     * A message the number received, from a webhook in version
+     * `2024-02-27`: `data[0]` is WhatsApp Web's message, translated into the
+     * contract's `Message` the way Zapmizer translates it, and fires
+     * MessageReceived. A notice of WhatsApp (someone joining a group, a
+     * deleted message, one not yet decrypted...) is acknowledged and fires
+     * nothing, as Zapmizer does in the contract.
      *
-     * Translates the whatsapp-web.js Message into an InboundMessage and fires
-     * MessageReceived with the connection that received it (null when the
-     * delivery was signed with the application's single-tenant secret).
      * Nothing is persisted — the application listens and decides
-     * (Cashier-style). Payloads we can't make sense of are acknowledged and
-     * not handled.
+     * (Cashier-style).
      */
     protected function handleMessage(array $payload): Response
     {
-        $message = InboundMessage::fromEnvelope($payload, $this->request?->header('X-Wid'));
+        $raw = Arr::get($payload, 'data.0');
+
+        if (!is_array($raw)) {
+            return $this->unreadableMessage($payload);
+        }
+
+        $message = LegacyMessageTranslator::forEvent($raw);
 
         if ($message === null) {
             return $this->missingMethod($payload);
@@ -202,23 +228,72 @@ class WebhookController extends Controller
     }
 
     /**
-     * A webhook in version `2026-10-20` delivers messages as
-     * `message_received`/`message_sent` and never as `message`, so
-     * MessageReceived never fires. The delivery is still acknowledged (200,
-     * as any unknown event), but it says so in the log, once per delivery.
+     * Read `data` as a `Message` and fire `$event` with it. A version the
+     * package does not know (newer than `2026-10-20`, or not a date) is read
+     * all the same — the webhook cannot be asked again, so dropping it would
+     * lose the message — and logged as a warning.
+     *
+     * @param class-string<MessageReceived|MessageSent> $event
      */
-    protected function warnAboutTheMessageContract(array $payload): void
+    protected function dispatchContractMessage(array $payload, string $event): Response
     {
-        if (!in_array($payload['name'] ?? null, self::MESSAGE_CONTRACT_EVENTS, true)) {
+        $this->warnIfHandleMessageIsOverridden($payload);
+        $envelope = Envelope::fromPayload($payload);
+        $data = $payload['data'] ?? null;
+        $message = is_array($data) ? Message::fromContract($data) : null;
+
+        if ($envelope->version !== Message::CONTRACT_VERSION) {
+            Log::warning('zapmizer: the webhook delivers a message in version ' . ($envelope->version ?? '(none)') . ', which this version of the package does not know: ' . ($message === null ? 'it could not be read, and nothing fired.' : 'read as ' . Message::CONTRACT_VERSION . '.'), $this->messageLogContext($payload));
+        }
+
+        if ($message === null) {
+            return $envelope->version === Message::CONTRACT_VERSION ? $this->unreadableMessage($payload) : $this->missingMethod($payload);
+        }
+
+        event(new $event($message, $this->connection(), $payload, $envelope));
+
+        return $this->successMethod();
+    }
+
+    /**
+     * A subclass that overrode `handleMessage()` only sees webhooks in
+     * version `2024-02-27`: in `2026-10-20` (what the connect and
+     * `createWebhook()` create now) messages come as `message_received` and
+     * `message_sent`, and its own code would stop running without a trace.
+     */
+    protected function warnIfHandleMessageIsOverridden(array $payload): void
+    {
+        if ((new \ReflectionMethod($this, 'handleMessage'))->getDeclaringClass()->getName() === self::class) {
             return;
         }
 
-        Log::warning('zapmizer: the webhook delivers in version 2026-10-20 (the message contract), which this version of the package does not read: MessageReceived does not fire. Recreate the webhook in version 2024-02-27.', array_filter([
-            'name' => $payload['name'],
+        Log::warning('zapmizer: ' . static::class . ' overrides handleMessage(), which only runs for webhooks in version 2024-02-27; this delivery is ' . ($payload['name'] ?? '?') . ' (2026-10-20). Override handleMessageReceived()/handleMessageSent() too, or listen to MessageReceived/MessageSent.', $this->messageLogContext($payload));
+    }
+
+    /**
+     * A message event whose `data` is not a message: acknowledged (200, a
+     * retry would bring the same body) and logged as a warning, so it does
+     * not go missing in silence.
+     */
+    protected function unreadableMessage(array $payload): Response
+    {
+        Log::warning('zapmizer: a message event could not be read, and nothing fired.', $this->messageLogContext($payload));
+
+        return $this->missingMethod($payload);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function messageLogContext(array $payload): array
+    {
+        return array_filter([
+            'name' => is_string($payload['name'] ?? null) ? $payload['name'] : null,
             'version' => is_string($payload['version'] ?? null) ? $payload['version'] : null,
+            'id' => is_string($payload['id'] ?? null) ? $payload['id'] : null,
             'connection_id' => $this->connection()?->getKey(),
             'wid' => is_string($payload['wid'] ?? null) ? $payload['wid'] : null,
-        ], fn ($value) => $value !== null));
+        ], fn ($value) => $value !== null);
     }
 
     /**

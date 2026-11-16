@@ -7,6 +7,7 @@ use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Http\Client\Request as HttpRequest;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Connect\InstanceConnection;
 use NotificationChannels\Zapmizer\Connect\MediaDownload;
@@ -91,9 +92,10 @@ class InstanceClientTest extends TestCase
         $this->assertEquals('whsec_x', $registration->secret);
         $this->assertNull($registration->previousSecret);
         $this->assertEquals(
-            ['url' => 'http://app.test/zapmizer/webhook', 'enabled' => true, 'version' => '2024-02-27'],
+            ['url' => 'http://app.test/zapmizer/webhook', 'enabled' => true, 'version' => '2026-10-20'],
             json_decode((string) $this->history[0]['request']->getBody(), true)
         );
+        $this->assertSame('2026-10-20', $this->history[0]['request']->getHeaderLine('api-version'));
     }
 
     public function testRotateWebhookSecretReturnsBoth()
@@ -614,23 +616,98 @@ class InstanceClientTest extends TestCase
         Http::assertNothingSent();
     }
 
-    public function testSyncMessagesTranslatesEachMessageLikeTheWebhook()
+    /**
+     * A message of the contract, as `GET /whatsapp-messages` sends it with
+     * `api-version: 2026-10-20`.
+     *
+     * @return array<string, mixed>
+     */
+    protected function contractMessage(array $overrides = []): array
+    {
+        return array_merge([
+            'id' => '3EB0C4A1B2D3E4F5A6B7',
+            'chat' => '5581988887777@c.us',
+            'sender' => '5581988887777@c.us',
+            'sender_name' => 'Maria Souza',
+            'from_me' => false,
+            'from_me_other_device' => false,
+            'timestamp' => 1792193389,
+            'type' => 'document',
+            'text' => null,
+            'quoted' => null,
+            'forwarded' => false,
+            'view_once' => false,
+            'mentions' => [],
+            'media' => ['mime' => 'application/pdf', 'filename' => 'extrato.pdf', 'size' => 555593, 'duration' => null, 'width' => null, 'height' => null, 'page_count' => 2, 'is_gif' => null],
+            'location' => null,
+            'contacts' => null,
+            'poll' => null,
+            'reply' => null,
+            'link_preview' => null,
+        ], $overrides);
+    }
+
+    public function testSyncMessagesReadsTheMessageContract()
+    {
+        $body = json_encode([
+            'wid' => '5581999990000@c.us',
+            'version' => '2026-10-20',
+            'data' => [
+                ['id' => 11, 'message' => $this->contractMessage()],
+                ['id' => 13, 'message' => $this->contractMessage([
+                    'id' => 'BBB', 'sender' => '5581999990000@c.us', 'sender_name' => null, 'from_me' => true,
+                    'type' => 'text', 'text' => 'recebido', 'media' => null,
+                ])],
+                ['id' => 14, 'message' => $this->contractMessage(['id' => 'CCC', 'type' => 'unknown', 'media' => null, 'raw' => ['type' => 'revoked']])],
+            ],
+            'next_cursor' => '14',
+            'has_more' => true,
+        ]);
+        // Against the contract's branch of `message`: the whole body cannot be
+        // checked, because Zapmizer's openapi.json declares `message` as a
+        // `oneOf` whose other branch (WhatsApp Web's object) is any object,
+        // so a message of the contract matches both and fails `oneOf`.
+        $this->assertMatchesSchema('#/paths/~1whatsapp-messages/get/responses/200/content/application~1json/schema/properties/data/items/properties/message/oneOf/0', $this->contractMessage());
+        $client = $this->makeClient(new MockHandler([new Response(200, [], $body)]));
+
+        $page = $client->syncMessages(9, cursor: '10', limit: 50);
+
+        $this->assertCount(3, $page->messages);
+        $this->assertSame('3EB0C4A1B2D3E4F5A6B7', $page->messages[0]->id);
+        $this->assertSame('5581988887777', $page->messages[0]->chatPhone());
+        $this->assertSame('extrato.pdf', $page->messages[0]->media->filename);
+        $this->assertTrue($page->messages[1]->fromMe);
+        $this->assertSame(['type' => 'revoked'], $page->messages[2]->raw);
+        $this->assertSame('BBB', $page->payloads[1]['id']);
+        $this->assertSame('5581999990000@c.us', $page->wid);
+        $this->assertSame('2026-10-20', $page->version);
+        $this->assertSame('14', $page->cursor);
+        $this->assertTrue($page->hasMore);
+        $this->assertSame('2026-10-20', $this->history[0]['request']->getHeaderLine('api-version'));
+        $this->assertEquals(
+            'http://localhost/api/whatsapp-messages?bot_instance_id=9&cursor=10&limit=50',
+            (string) $this->history[0]['request']->getUri(),
+        );
+    }
+
+    public function testSyncMessagesTranslatesTheShapeOfAZapmizerBefore1_148_17()
     {
         $client = $this->makeClient(new MockHandler([
             new Response(200, [], json_encode([
                 'wid' => '5581999990000@c.us',
                 'data' => [
-                    ['id' => 11, 'updated_at' => '2026-10-16T19:29:49+00:00', 'message' => [
+                    ['id' => 11, 'message' => [
                         'id' => ['id' => 'AAA', '_serialized' => 'false_5581988887777@c.us_AAA'],
                         'from' => '5581988887777@c.us',
+                        'to' => '5581999990000@c.us',
                         'type' => 'document',
                         'body' => '',
                         'hasMedia' => true,
                         'timestamp' => 1792193389,
                         '_data' => ['mimetype' => 'application/pdf', 'filename' => 'extrato.pdf', 'size' => 555593],
                     ]],
-                    ['id' => 12, 'updated_at' => '2026-10-16T19:30:00+00:00', 'message' => ['type' => 'chat']],
-                    ['id' => 13, 'updated_at' => '2026-10-16T19:30:01+00:00', 'message' => [
+                    ['id' => 12, 'message' => ['id' => ['id' => 'GP2'], 'from' => '120363000000000000@g.us', 'type' => 'gp2']],
+                    ['id' => 13, 'message' => [
                         'id' => ['id' => 'BBB', '_serialized' => 'true_5581988887777@c.us_BBB'],
                         'from' => '5581999990000@c.us',
                         'to' => '5581988887777@c.us',
@@ -639,64 +716,111 @@ class InstanceClientTest extends TestCase
                         'body' => 'recebido',
                         'timestamp' => 1792193401,
                     ]],
+                    ['id' => 14, 'message' => ['id' => ['id' => 'CIPHER'], 'from' => '5581988887777@c.us', 'type' => 'ciphertext', 'timestamp' => 1792193402]],
                 ],
-                'next_cursor' => '2026-10-16 19:30:01|13',
-                'has_more' => true,
+                'next_cursor' => '14',
+                'has_more' => false,
             ])),
         ]));
 
-        $page = $client->syncMessages(9, cursor: '2026-10-16 19:00:00|10', limit: 50);
+        $page = $client->syncMessages(9, cursor: '10');
 
-        $this->assertCount(2, $page->messages);
-        $this->assertSame('false_5581988887777@c.us_AAA', $page->messages[0]->id);
-        $this->assertSame('5581988887777', $page->messages[0]->fromPhone);
-        $this->assertSame('5581999990000@c.us', $page->messages[0]->to);
-        $this->assertSame('extrato.pdf', $page->messages[0]->mediaFilename());
+        $this->assertSame(['AAA', 'BBB', 'CIPHER'], array_map(fn ($message) => $message->id, $page->messages));
+        $this->assertSame('5581988887777@c.us', $page->messages[0]->chat);
+        $this->assertSame('extrato.pdf', $page->messages[0]->media->filename);
         $this->assertTrue($page->messages[1]->fromMe);
+        $this->assertSame('5581988887777@c.us', $page->messages[1]->chat);
+        $this->assertSame('unknown', $page->messages[2]->type);
+        $this->assertSame('ciphertext', $page->messages[2]->raw['type']);
         $this->assertSame('AAA', $page->payloads[0]['id']['id']);
-        $this->assertSame('2026-10-16 19:30:01|13', $page->cursor);
-        $this->assertTrue($page->hasMore);
-        $this->assertEquals(
-            'http://localhost/api/whatsapp-messages?bot_instance_id=9&cursor=2026-10-16%2019%3A00%3A00%7C10&limit=50',
-            (string) $this->history[0]['request']->getUri(),
-        );
+        $this->assertSame('5581999990000@c.us', $page->wid);
+        $this->assertNull($page->version);
     }
 
-    public function testMessageEndpointsPinTheLegacyVersionWhateverTheConfigSays()
+    /**
+     * @return array<string, array{0: ?string}>
+     */
+    public static function configuredVersions(): array
+    {
+        return ['none' => [null], '2025-06-27' => ['2025-06-27'], '2026-10-20' => ['2026-10-20']];
+    }
+
+    /** @dataProvider configuredVersions */
+    #[DataProvider('configuredVersions')]
+    public function testSyncMessagesAlwaysAsksForTheContractWhateverTheConfigSays(?string $version)
     {
         $this->fakeZapmizer(new MockHandler([
-            new Response(200, [], json_encode(['data' => [], 'has_more' => false])),
-            new Response(201, [], json_encode(['data' => ['id' => 42, 'secret' => 's']])),
+            new Response(200, [], json_encode(['wid' => '5581999990000@c.us', 'version' => '2026-10-20', 'data' => [], 'next_cursor' => '0', 'has_more' => false])),
             new Response(200, [], json_encode(['data' => ['id' => 9, 'state' => 'connected', 'is_online' => true]])),
         ]));
-        $client = new InstanceClient('team-token', new LaravelHttpTransport(), 'http://localhost/api', '2026-10-20');
+        $client = new InstanceClient('team-token', new LaravelHttpTransport(), 'http://localhost/api', $version);
 
         $client->syncMessages(9);
-        $client->createWebhook('http://app.test/zapmizer/webhook');
         $client->connection(9);
 
-        $this->assertSame('2025-06-27', $this->history[0]['request']->getHeaderLine('api-version'));
-        $this->assertSame('2025-06-27', $this->history[1]['request']->getHeaderLine('api-version'));
-        $this->assertSame('2024-02-27', json_decode((string) $this->history[1]['request']->getBody(), true)['version']);
-        $this->assertSame('2026-10-20', $this->history[2]['request']->getHeaderLine('api-version'));
+        $this->assertSame('2026-10-20', $this->history[0]['request']->getHeaderLine('api-version'));
+        $this->assertSame((string) $version, $this->history[1]['request']->getHeaderLine('api-version'));
     }
 
-    public function testSyncMessagesRefusesTheMessageContractInsteadOfDroppingIt()
+    /**
+     * @return array<string, array{0: mixed}>
+     */
+    public static function unknownContractVersions(): array
+    {
+        return ['newer' => ['2027-01-01'], 'not a date' => ['v3'], 'null' => [null], 'a number' => [20261020]];
+    }
+
+    /** @dataProvider unknownContractVersions */
+    #[DataProvider('unknownContractVersions')]
+    public function testSyncMessagesRefusesAVersionOfTheContractItDoesNotKnow(mixed $version)
     {
         $client = $this->makeClient(new MockHandler([
             new Response(200, [], json_encode([
-                'wid' => '5581999990000',
-                'version' => '2026-10-20',
-                'data' => [['id' => 14, 'message' => ['id' => 'AAA', 'chat' => '5581988887777', 'from_me' => false, 'type' => 'text', 'text' => 'oi']]],
+                'wid' => '5581999990000@c.us',
+                'version' => $version,
+                'data' => [['id' => 14, 'message' => $this->contractMessage()]],
                 'next_cursor' => '14',
                 'has_more' => false,
             ])),
         ]));
 
         $this->expectException(ZapmizerConnectException::class);
-        $this->expectExceptionMessage('message contract');
+        $this->expectExceptionMessage('of the message contract, which this version of the package does not know');
 
         $client->syncMessages(9, cursor: '13');
+    }
+
+    public function testAPageOfNoticesOnlyIsEmptyAndGoesOn()
+    {
+        $body = json_encode(['wid' => '5581999990000@c.us', 'version' => '2026-10-20', 'data' => [], 'next_cursor' => '40', 'has_more' => true]);
+        $this->assertMatchesContract('GET', '/whatsapp-messages', 200, $body);
+        $client = $this->makeClient(new MockHandler([new Response(200, [], $body)]));
+
+        $page = $client->syncMessages(9, cursor: '20');
+
+        $this->assertSame([], $page->messages);
+        $this->assertSame('40', $page->cursor);
+        $this->assertTrue($page->hasMore);
+    }
+
+    public function testAnEntryThatIsNotAMessageIsSkippedWithAWarning()
+    {
+        Log::spy();
+        $client = $this->makeClient(new MockHandler([
+            new Response(200, [], json_encode([
+                'wid' => '5581999990000@c.us',
+                'version' => '2026-10-20',
+                'data' => [['id' => 1, 'message' => ['chat' => 'x@c.us']], ['id' => 2], ['id' => 3, 'message' => $this->contractMessage()]],
+                'next_cursor' => '3',
+                'has_more' => false,
+            ])),
+        ]));
+
+        $page = $client->syncMessages(9, cursor: '0');
+
+        $this->assertCount(1, $page->messages);
+        Log::shouldHaveReceived('warning')->once()->withArgs(fn (string $message, array $context) => str_contains($message, 'not a message')
+            && $context === ['skipped' => 2, 'version' => '2026-10-20', 'wid' => '5581999990000@c.us', 'cursor' => '3']);
     }
 
     public function testSyncMessagesKeepsTheCursorWhenNothingNewCame()

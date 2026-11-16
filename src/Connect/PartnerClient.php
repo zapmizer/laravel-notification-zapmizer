@@ -59,9 +59,12 @@ class PartnerClient
      * registers on the team once the number pairs — its id and secret come
      * back with the token. `externalId` is the app's id for the customer,
      * the key of subscription() and checkout() once the connect is approved.
-     * With a `webhookUrl`, the session asks for the webhook in `2024-02-27`
-     * (`InstanceClient::LEGACY_WEBHOOK_VERSION`, sent as `webhook_version`),
-     * the version whose `message` event this version reads; Zapmizer before
+     * With a `webhookUrl`, the session asks for the webhook in
+     * `webhookVersion`, or `zapmizer.connect.webhook_version` (`2026-10-20`,
+     * the message contract, by default), sent as `webhook_version`; blank
+     * leaves it to the partner account's default. It only applies to a
+     * webhook the connect creates: a `webhookUrl` the team already had keeps
+     * its version (`ConnectToken::$webhookVersion`). Zapmizer before
      * 1.148.17 ignores the field.
      *
      * @throws InvalidArgumentException
@@ -73,6 +76,7 @@ class PartnerClient
         ?string $webhookUrl = null,
         ?int $expiresIn = null,
         ?string $externalId = null,
+        ?string $webhookVersion = null,
     ): ConnectSession {
         if ($externalId !== null) {
             $this->guardExternalId($externalId);
@@ -87,13 +91,32 @@ class PartnerClient
                 'webhook_url' => $webhookUrl,
                 'expires_in' => $this->clampExpiresIn($expiresIn),
                 'external_id' => $externalId,
-                'webhook_version' => $webhookUrl === null ? null : InstanceClient::LEGACY_WEBHOOK_VERSION,
+                'webhook_version' => $webhookUrl === null ? null : $this->webhookVersion($webhookVersion),
             ]),
         ]);
 
         $this->guardFailure($response, 'connect/sessions');
 
         return ConnectSession::fromArray($this->decode($response), $externalId);
+    }
+
+    /**
+     * The `webhook_version` of a session: the one given, or the config's.
+     * Null (left out of the body) when blank.
+     */
+    protected function webhookVersion(?string $webhookVersion): ?string
+    {
+        $version = $webhookVersion ?? config('zapmizer.connect.webhook_version', InstanceClient::MESSAGE_CONTRACT_VERSION);
+        $version = is_string($version) && trim($version) !== '' ? trim($version) : null;
+        $known = [InstanceClient::LEGACY_WEBHOOK_VERSION, InstanceClient::MESSAGE_CONTRACT_VERSION];
+
+        // Zapmizer refuses any other with a 422, which the connect would
+        // report as `zapmizer_unavailable` on every attempt.
+        if ($version !== null && !in_array($version, $known, true)) {
+            throw new \InvalidArgumentException("Invalid zapmizer.connect.webhook_version `{$version}`: use " . implode(' or ', $known) . ', or leave it empty for the partner account\'s default.');
+        }
+
+        return $version;
     }
 
     /**

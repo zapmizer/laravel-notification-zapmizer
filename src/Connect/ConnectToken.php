@@ -105,13 +105,14 @@ final class ConnectToken
     }
 
     /**
-     * The webhook delivers in a version other than `2024-02-27`: its
-     * messages come as `message_received`/`message_sent`, which this version
-     * does not read, so `MessageReceived` never fires for this connection.
+     * The webhook delivers in `2024-02-27`, the version Zapmizer deprecated
+     * (a reused webhook keeps the version it had). It works the same — the
+     * package translates its `message` event — but moving it to the message
+     * contract takes another `webhook_url`, or revoking and connecting again.
      */
-    public function hasUnreadableWebhookVersion(): bool
+    public function hasLegacyWebhookVersion(): bool
     {
-        return $this->webhookVersion !== null && $this->webhookVersion !== InstanceClient::LEGACY_WEBHOOK_VERSION;
+        return $this->webhookVersion === InstanceClient::LEGACY_WEBHOOK_VERSION;
     }
 
     public function hasNumber(): bool

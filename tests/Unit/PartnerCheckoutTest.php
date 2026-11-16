@@ -15,8 +15,8 @@ class PartnerCheckoutTest extends TestCase
 
     public function testP20AnUnknownDeadlineIsNull()
     {
+        // The contract no longer allows a null `expires_at`; reading one stays tolerant.
         $body = '{"url":"https://checkout.test/c/1","expires_at":null}';
-        $this->assertMatchesContract('POST', '/partner/users/{externalId}/checkout', 200, $body);
         Log::spy();
 
         $checkout = PartnerCheckout::fromArray(json_decode($body, true), '42');

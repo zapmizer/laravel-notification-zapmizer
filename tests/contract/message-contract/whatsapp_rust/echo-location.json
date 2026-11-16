@@ -1,0 +1,82 @@
+{
+    "echo": {
+        "id": "3EB0BBBB000000000005",
+        "chat": "5511911111111@c.us",
+        "bot_wid": "5511900000000@c.us",
+        "timestamp": 1760000500,
+        "native_type": "location",
+        "text": "",
+        "media": null,
+        "link_preview": null,
+        "quoted": null,
+        "poll": null,
+        "location": {
+            "latitude": -23.5505,
+            "longitude": -46.6333,
+            "name": "Escritório",
+            "address": "Rua Exemplo, 100 - São Paulo",
+            "url": null
+        },
+        "mentions": []
+    },
+    "message": {
+        "id": "3EB0BBBB000000000005",
+        "serialized_id": "true_5511911111111@c.us_3EB0BBBB000000000005",
+        "chat": "5511911111111@c.us",
+        "sender": "5511900000000@c.us",
+        "sender_name": null,
+        "from_me": true,
+        "from_me_other_device": false,
+        "timestamp": 1760000500,
+        "type": "location",
+        "text": null,
+        "quoted": null,
+        "forwarded": false,
+        "view_once": false,
+        "mentions": [],
+        "media": null,
+        "location": {
+            "latitude": -23.5505,
+            "longitude": -46.6333,
+            "name": "Escritório",
+            "address": "Rua Exemplo, 100 - São Paulo",
+            "url": null
+        },
+        "contacts": null,
+        "poll": null,
+        "reply": null,
+        "link_preview": null,
+        "ack": 1,
+        "edited": false,
+        "reactions": [],
+        "received_at": null,
+        "native_type": "location"
+    },
+    "legacy_payload": {
+        "id": {
+            "id": "3EB0BBBB000000000005",
+            "_serialized": "true_5511911111111@c.us_3EB0BBBB000000000005",
+            "fromMe": true,
+            "remote": "5511911111111@c.us"
+        },
+        "from": "5511900000000@c.us",
+        "to": "5511911111111@c.us",
+        "fromMe": true,
+        "type": "location",
+        "body": "",
+        "location": {
+            "latitude": -23.5505,
+            "longitude": -46.6333,
+            "name": "Escritório",
+            "address": "Rua Exemplo, 100 - São Paulo",
+            "description": "Escritório\nRua Exemplo, 100 - São Paulo"
+        },
+        "timestamp": 1760000500,
+        "hasMedia": false,
+        "hasQuotedMsg": false,
+        "ack": 1,
+        "_data": {
+            "notifyName": ""
+        }
+    }
+}

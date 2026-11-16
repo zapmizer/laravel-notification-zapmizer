@@ -417,8 +417,15 @@ class CheckCommand extends Command
 
         $local = $host === 'localhost' || str_ends_with($host, '.test') || str_ends_with($host, '.local') || filter_var($host, FILTER_VALIDATE_IP) !== false;
 
-        if ($scheme !== 'https' || $local) {
-            $this->record('app_url', self::WARN, "APP_URL {$url}: a Zapmizer de produção só aceita redirect_uri/webhook_url https, em host público liberado para o parceiro", 'Para testar o connect em dev, use uma URL pública https (túnel) liberada na conta de parceiro.');
+        // https is only required by a production deploy (the zapbot's
+        // PartnerUrlRule checks the scheme only when isProduction()): a local
+        // or staging Zapmizer takes http, as long as the host is allowed.
+        $production = EmbedBrand::knownDeploy(config('zapmizer.base_uri')) !== null;
+
+        if (($scheme !== 'https' || $local) && $production) {
+            $this->record('app_url', self::WARN, "APP_URL {$url}: o deploy de produção da Zapmizer/Parli só aceita redirect_uri/webhook_url https, em host público liberado para o parceiro", 'Para testar o connect contra o deploy de produção em dev, use uma URL pública https (túnel) liberada na conta de parceiro. Contra um Zapmizer local, http funciona.');
+        } elseif ($scheme !== 'https' || $local) {
+            $this->record('app_url', self::OK, "APP_URL {$url}: http vale com um Zapmizer local ou de desenvolvimento (https só é exigido em produção); o host {$host} precisa estar liberado na conta de parceiro");
         } else {
             $this->record('app_url', self::OK, "APP_URL {$url} (o host {$host} precisa estar liberado na conta de parceiro)");
         }

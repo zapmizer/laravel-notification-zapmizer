@@ -245,7 +245,7 @@ No JSON, cada item traz `id`, `status` (`ok`, `fail`, `warn` ou `skip`), `messag
 
 - Preencher as credenciais de parceiro no `.env` e pedir a liberação do host (veja [O que só o humano tem](#o-que-só-o-humano-tem)).
 - Conectar o número: abrir a tela, clicar em conectar e ler o QR code com o celular. O agente não faz essa parte.
-- Testar o connect em desenvolvimento pede uma URL pública `https` (um túnel) liberada na conta de parceiro, com o `APP_URL` apontando para ela.
+- Testar o connect em desenvolvimento **contra o deploy de produção** (`app.zapmizer.com`, `app.parlichat.com`) pede uma URL pública `https` (um túnel) liberada na conta de parceiro, com o `APP_URL` apontando para ela. Contra um Zapmizer local, `http` funciona: o `https` só é exigido em produção.
 
 ## Quando parar e pedir
 

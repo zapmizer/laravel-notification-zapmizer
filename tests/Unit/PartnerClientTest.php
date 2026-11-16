@@ -2,34 +2,50 @@
 
 namespace NotificationChannels\Zapmizer\Test\Unit;
 
-use GuzzleHttp\Client as HttpClient;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
-use GuzzleHttp\HandlerStack;
-use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use NotificationChannels\Zapmizer\Connect\ConnectSession;
 use NotificationChannels\Zapmizer\Connect\ConnectToken;
 use NotificationChannels\Zapmizer\Connect\PartnerClient;
+use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
 use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
+use NotificationChannels\Zapmizer\Test\Concerns\FakesZapmizerHttp;
 use NotificationChannels\Zapmizer\Test\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 class PartnerClientTest extends TestCase
 {
+    use FakesZapmizerHttp;
+
     /** @var array<int, array{request: Request}> */
     protected array $history = [];
 
     protected function makeClient(MockHandler $mock): PartnerClient
     {
-        $stack = HandlerStack::create($mock);
-        $stack->push(Middleware::history($this->history));
+        $this->fakeZapmizer($mock);
 
-        return new PartnerClient('partner-id', 'partner-secret', new HttpClient(['handler' => $stack]), 'http://localhost/api');
+        return new PartnerClient('partner-id', 'partner-secret', new LaravelHttpTransport(), 'http://localhost/api');
+    }
+
+    public function testMalformedUtf8InTheBodyIsTheCallersError()
+    {
+        $client = $this->makeClient(new MockHandler([new Response(201, [], '{"url":"http://localhost/connect/1"}')]));
+
+        try {
+            $client->createSession('https://app.test/cb', 'state-1', "https://app.test/hook-\xB1");
+            $this->fail('Expected an InvalidArgumentException.');
+        } catch (\GuzzleHttp\Exception\InvalidArgumentException $e) {
+            $this->assertInstanceOf(\GuzzleHttp\Exception\InvalidArgumentException::class, $e);
+            $this->assertNotInstanceOf(ZapmizerConnectException::class, $e);
+        }
+
+        $this->assertCount(0, $this->history);
     }
 
     public function testCreateSessionSendsPartnerKeyAndReturnsPopupUrl()
@@ -50,6 +66,7 @@ class PartnerClientTest extends TestCase
         $this->assertEquals('http://localhost/api/connect/sessions', (string) $request->getUri());
         $this->assertEquals('partner-id|partner-secret', $request->getHeaderLine('X-Partner-Key'));
         $this->assertFalse($request->hasHeader('Authorization'));
+        $this->assertEquals('application/json', $request->getHeaderLine('Accept'));
         $this->assertEquals(
             ['redirect_uri' => 'http://app.test/zapmizer/connect/callback', 'state' => 'state-123', 'webhook_url' => 'http://app.test/zapmizer/webhook'],
             json_decode((string) $request->getBody(), true)
@@ -188,7 +205,7 @@ class PartnerClientTest extends TestCase
 
     public function testMissingPartnerCredentialsThrowBeforeAnyRequest()
     {
-        $client = new PartnerClient(null, null, new HttpClient());
+        $client = new PartnerClient();
 
         $this->expectException(ZapmizerConnectException::class);
 
@@ -218,5 +235,17 @@ class PartnerClientTest extends TestCase
         }
 
         $this->assertFalse($this->history[0]['options']['allow_redirects']);
+    }
+
+    public function testAnEmptyHttpFakeIsNotAnApiAnswer()
+    {
+        Http::fake();
+
+        try {
+            (new PartnerClient('id', 'secret', null, 'http://zap.test/api/'))->createSession('https://app.test/cb', 'state-1');
+            $this->fail('Expected ZapmizerConnectException.');
+        } catch (ZapmizerConnectException $exception) {
+            $this->assertStringContainsString('response body is not valid JSON', $exception->getMessage());
+        }
     }
 }

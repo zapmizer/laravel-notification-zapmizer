@@ -23,12 +23,14 @@ use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesNothing;
 use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesPlainModel;
 use NotificationChannels\Zapmizer\Test\Fixtures\Team;
 use NotificationChannels\Zapmizer\Test\Fixtures\User;
+use NotificationChannels\Zapmizer\Test\Concerns\FakesZapmizerHttp;
 use NotificationChannels\Zapmizer\Test\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 class ConnectRouteTest extends TestCase
 {
     use CreatesConnectionTables;
+    use FakesZapmizerHttp;
 
     /** @var array<int, array{request: \GuzzleHttp\Psr7\Request}> */
     protected array $history = [];
@@ -45,10 +47,12 @@ class ConnectRouteTest extends TestCase
 
     protected function fakeHttp(Response ...$responses): void
     {
-        $stack = HandlerStack::create(new MockHandler($responses));
+        $mock = new MockHandler($responses);
+        $stack = HandlerStack::create($mock);
         $stack->push(Middleware::history($this->history));
 
         $this->instance(HttpClient::class, new HttpClient(['handler' => $stack]));
+        $this->fakeZapmizer($mock);
     }
 
     protected function actingAsUser(): User

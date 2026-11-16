@@ -19,9 +19,11 @@ export interface ZapmizerConnection {
   updated_at: string;
   /**
    * Só com `?live=1`: estado da instância no Zapmizer (`connected`,
-   * `disconnected`, `qrcode`, `off`, ...) ou um dos estados do pacote
-   * (`reauth_required`, `instance_gone`, `zapmizer_unavailable`). `null`
-   * quando não há o que consultar.
+   * `qr_pending`, `connecting`, `disconnected` ou `off`) ou um dos estados do
+   * pacote (`reauth_required`, `instance_gone`, `zapmizer_unavailable`). No
+   * número sem a rota de QR (o oficial) vem só `connected` ou `disconnected`,
+   * pelo `is_online`. `null` quando não há o que consultar. Ao gravar um
+   * número trocado no WhatsApp, `phone_number` já vem com o novo.
    */
   state?: string | null;
   /** Só com `?live=1`. */

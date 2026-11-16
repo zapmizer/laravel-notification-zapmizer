@@ -82,7 +82,7 @@ class EmbedSessionTest extends TestCase
         return [
             'E4 upper case and default port' => ['HTTPS://H.COM:443/x', 'https://h.com'],
             'E4 ipv6 with a port' => ['https://[::1]:8443/x', 'https://[::1]:8443'],
-            'E4 punycode' => ['https://xn--ao-ana.com/x', 'https://xn--ao-ana.com'],
+            'E4 punycode' => ['https://xn--bcher-kva.de/x', 'https://xn--bcher-kva.de'],
             'E4 ipv6' => ['https://[::1]/x', 'https://[::1]'],
             'E4 empty port' => ['https://h.com:/x', 'https://h.com'],
             'other port' => ['https://h.com:8443/x', 'https://h.com:8443'],

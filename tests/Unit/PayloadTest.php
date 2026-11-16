@@ -225,7 +225,50 @@ class PayloadTest extends TestCase
             'port with a letter in the middle' => ['https://h.com:4a4/x'],
             'name between brackets' => ['https://[evil.com]/'],
             'ipv6 with a zone id' => ['https://[fe80::1%25eth0]/'],
+            'H1 punycode that does not decode' => ['https://xn--ao-bia.com/x'],
+            'H1 punycode of the old test' => ['https://xn--ao-ana.com/x'],
+            'H1 empty punycode' => ['https://xn--.com/x'],
+            'H1 punycode of one letter' => ['https://xn--a.com/x'],
+            'H1 punycode with an invalid digit' => ['https://xn--zz.com/x'],
+            'H1 invalid punycode in upper case' => ['https://XN--AO-BIA.com/x'],
+            'H1 invalid punycode in a subdomain' => ['https://app.xn--ao-bia.com/x'],
         ];
+    }
+
+    /**
+     * H1: without `ext-intl` the polyfill provides `idn_to_utf8`. Both must
+     * agree on every punycode label of the providers, so the validation is
+     * the same on an app without the extension.
+     */
+    public function testH1ThePolyfillAgreesWithTheExtension()
+    {
+        if (!extension_loaded('intl')) {
+            $this->markTestSkipped('needs ext-intl to compare against');
+        }
+
+        $labels = ['xn--bcher-kva', 'xn--55qx5d', 'xn--fiqs8s', 'xn--ls8h', 'xn--ao-bia', 'xn--ao-ana', 'xn--', 'xn--a', 'xn--zz', 'xn--abc-', 'xn---abc', 'xn--4ca0bs'];
+        $flags = IDNA_CHECK_BIDI | IDNA_CHECK_CONTEXTJ | IDNA_NONTRANSITIONAL_TO_UNICODE;
+
+        foreach ($labels as $label) {
+            $native = idn_to_utf8($label, $flags, INTL_IDNA_VARIANT_UTS46, $nativeInfo);
+            $polyfill = \Symfony\Polyfill\Intl\Idn\Idn::idn_to_utf8($label, $flags, INTL_IDNA_VARIANT_UTS46, $polyfillInfo);
+
+            $this->assertSame(
+                $native !== false && ($nativeInfo['errors'] ?? 1) === 0,
+                $polyfill !== false && ($polyfillInfo['errors'] ?? 1) === 0,
+                $label,
+            );
+        }
+    }
+
+    public function testH1AnUnderscoreHostIsNotRunThroughIdna()
+    {
+        // Only `xn--` labels are decoded: the rest of the host keeps the
+        // package's own rules (the underscore of a docker host, a hyphen at
+        // the edge of a label), which IDNA would refuse.
+        $this->assertSame('http://zapbot_app/api/x', Payload::url('http://zapbot_app/api/x', underscoreInHost: true));
+        $this->assertSame('https://-h.com/x', Payload::url('https://-h.com/x'));
+        $this->assertNull(Payload::url('http://zapbot_app.xn--ao-bia.com/x', underscoreInHost: true));
     }
 
     public function testX18eAnUnderscoreInTheHostIsOnlyAcceptedWhenAsked()
@@ -258,7 +301,10 @@ class PayloadTest extends TestCase
         return [
             'E4 upper case and default port' => ['HTTPS://H.COM:443/x', 'https://h.com'],
             'E4 ipv6 with a port' => ['https://[::1]:8443/x', 'https://[::1]:8443'],
-            'E4 punycode' => ['https://xn--ao-ana.com/x', 'https://xn--ao-ana.com'],
+            'E4 punycode' => ['https://xn--bcher-kva.de/x', 'https://xn--bcher-kva.de'],
+            'H1 punycode in upper case' => ['https://XN--BCHER-KVA.de/x', 'https://xn--bcher-kva.de'],
+            'H1 punycode top-level domain' => ['https://xn--55qx5d.xn--fiqs8s/x', 'https://xn--55qx5d.xn--fiqs8s'],
+            'H1 punycode emoji' => ['https://xn--ls8h.la/x', 'https://xn--ls8h.la'],
             'E4 ipv6' => ['https://[::1]/x', 'https://[::1]'],
             'E4 empty port' => ['https://h.com:/x', 'https://h.com'],
             'other port' => ['https://h.com:8443/x', 'https://h.com:8443'],

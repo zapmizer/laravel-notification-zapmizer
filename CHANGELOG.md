@@ -266,6 +266,7 @@ Outras mudanças nas rotas:
 - O JSON do `start()` passa a normalizar `expires_at` (`Z` → `+00:00`, sem frações).
 - `start()` reporta (`report()`) os 4xx do parceiro; um app com `ZapmizerUnavailableException` em `dontReport` passa a ver esses 4xx reportados, porque agora são `ZapmizerApiException`.
 - `NoConnectableException` nas rotas da lib deixa de ir para o `report()`.
+- **Resolver próprio que devolve model sem `Connectable` (ou `null`)** (desde a 2.0.0-beta.5): as rotas do connect, do reconnect e da caixa respondem `403 {"code": "no_connectable"}` (e os callbacks do popup, `status: "no_connectable"`), como já faziam com o resolver padrão e um usuário sem `Connectable`, com o `Log::warning` `zapmizer: the connect resolver returned a model that is not Connectable.`, cujo contexto traz `resolver` (a classe configurada em `zapmizer.connect.resolver`) e `returned` (a classe devolvida, ou `null`). Até a 2.0.0-beta.4 era `TypeError` (500). Só o tipo de retorno do `resolve()` entra aqui: um `TypeError` de dentro do resolver continua 500.
 - Na rota `zapmizer.connect.start`, a `base_uri` inválida, a resposta inesperada e a configuração ausente respondem 503 `zapmizer_unavailable` com `report()` (veja "Base da API").
 
 Correções (já não funcionavam com token de connect, 403 `missing_ability`):

@@ -11,7 +11,7 @@ Instale a lib zapmizer/laravel-notification-zapmizer (2.0 beta) neste app, com o
 The commands, in order (Inertia + Vue 3 app; the guide covers Blade):
 
 ```bash
-composer require "zapmizer/laravel-notification-zapmizer:^2.0.0-beta.4@beta"
+composer require "zapmizer/laravel-notification-zapmizer:^2.0.0-beta.5@beta"
 php artisan zapmizer:install --base-uri=https://app.zapmizer.com/api/ --model=App\\Models\\User --inbox --no-interaction   # or https://app.parlichat.com/api/
 php artisan migrate
 npm install github:zapmizer/embed#v0.1.3 axios lucide-vue-next   # or bun/pnpm/yarn add, as the install output says

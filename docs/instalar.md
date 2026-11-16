@@ -29,7 +29,7 @@ Pergunte uma coisa por vez, e só o que você não conseguir descobrir lendo o a
 ### 1. Instalar o pacote
 
 ```bash
-composer require "zapmizer/laravel-notification-zapmizer:^2.0.0-beta.4@beta"
+composer require "zapmizer/laravel-notification-zapmizer:^2.0.0-beta.5@beta"
 ```
 
 ### 2. Rodar o instalador

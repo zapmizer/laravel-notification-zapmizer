@@ -77,7 +77,7 @@ class AgentDocsTest extends TestCase
             $this->assertNotEmpty($constraints[1], $file);
 
             foreach ($constraints[1] as $constraint) {
-                $this->assertSame('^2.0.0-beta.4@beta', $constraint, $file);
+                $this->assertSame('^2.0.0-beta.5@beta', $constraint, $file);
             }
         }
     }

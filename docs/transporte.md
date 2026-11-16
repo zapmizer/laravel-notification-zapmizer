@@ -200,7 +200,7 @@ class StoreInboundMedia implements ShouldQueue
     public function handle(): void
     {
         $disk = Storage::disk(config('services.zapmizer.media_disk'));
-        $path = $this->pathFor($this->zapmizerConnection->getKey(), $this->message->id, $this->message->media?->mime);
+        $path = $this->pathFor($this->zapmizerConnection->getKey(), $this->message->chat . '|' . $this->message->id, $this->message->media?->mime);
 
         if ($disk->exists($path)) {
             return;
@@ -242,11 +242,12 @@ class StoreInboundMedia implements ShouldQueue
         }
     }
 
-    protected function pathFor(int|string $connectionId, string $messageId, ?string $mime): string
+    // The message id may repeat across chats: the key is `chat|id`.
+    protected function pathFor(int|string $connectionId, string $messageKey, ?string $mime): string
     {
         $extension = $mime === null ? null : (MimeTypes::getDefault()->getExtensions($mime)[0] ?? null);
 
-        return "zapmizer/{$connectionId}/" . preg_replace('/[^A-Za-z0-9_-]/', '_', $messageId) . '.' . ($extension ?? 'bin');
+        return "zapmizer/{$connectionId}/" . sha1($messageKey) . '.' . ($extension ?? 'bin');
     }
 }
 ```

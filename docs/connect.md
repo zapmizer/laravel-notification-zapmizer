@@ -436,7 +436,7 @@ class StoreInboundMedia implements ShouldQueue
             return;   // log it, tell the user — it will not arrive
         }
 
-        Storage::disk('s3')->put("inbound/{$this->message->id}/" . ($this->message->media?->filename ?? $download->filename), $download->stream());
+        Storage::disk('s3')->put('inbound/' . sha1($this->message->chat . '|' . $this->message->id) . '/' . ($this->message->media?->filename ?? $download->filename), $download->stream());
     }
 }
 ```

@@ -393,6 +393,23 @@ class ConnectableTest extends TestCase
         $this->assertEquals('Bearer team-token', $request->getHeaderLine('Authorization'));
     }
 
+    public function testMediaWithoutAUsableTimestampAsksWithNow()
+    {
+        // 0 would read as a long-gone message (`unavailable` at once) and a
+        // future one as a 422: sentAt() falls back to now, as before.
+        \Illuminate\Support\Carbon::setTestNow('2026-11-16 12:00:00');
+        \Carbon\CarbonImmutable::setTestNow('2026-11-16 12:00:00');
+        $this->fakeHttp(new Response(200, ['Content-Type' => 'image/png'], 'png-bytes'));
+        $connection = $this->connectedTeam(overrides: ['api_token' => 'team-token', 'bot_instance_id' => 77])->zapmizerConnection;
+
+        $connection->media(Message::fromContract(['id' => '3EB0ABC123', 'chat' => '5581999998888@c.us', 'type' => 'image', 'media' => ['mime' => 'image/png']]));
+
+        parse_str($this->history[0]['request']->getUri()->getQuery(), $query);
+        $this->assertSame((string) \Carbon\CarbonImmutable::parse('2026-11-16 12:00:00')->getTimestamp(), $query['timestamp']);
+        \Illuminate\Support\Carbon::setTestNow();
+        \Carbon\CarbonImmutable::setTestNow();
+    }
+
     public function testMediaRequiresAPairedInstance()
     {
         $connection = $this->connectedTeam(overrides: ['bot_instance_id' => null])->zapmizerConnection;

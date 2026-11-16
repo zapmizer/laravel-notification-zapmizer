@@ -115,6 +115,23 @@ class PartnerClientTest extends TestCase
         $this->assertSame($sent, json_decode((string) $this->history[0]['request']->getBody(), true)['webhook_version'] ?? null);
     }
 
+    public function testAnUnknownWebhookVersionFailsBeforeAnyCall()
+    {
+        // Zapmizer answers it with a 422, which the connect would report as
+        // zapmizer_unavailable on every attempt.
+        config()->set('zapmizer.connect.webhook_version', '2025-06-27');
+        $client = $this->makeClient(new MockHandler([]));
+
+        try {
+            $client->createSession('http://app.test/cb', 'state', 'http://app.test/zapmizer/webhook');
+            $this->fail('expected an InvalidArgumentException');
+        } catch (\InvalidArgumentException $exception) {
+            $this->assertStringContainsString('zapmizer.connect.webhook_version `2025-06-27`', $exception->getMessage());
+        }
+
+        $this->assertSame([], $this->history);
+    }
+
     public function testWithoutTheKeyInAPublishedConfigItAsksForTheContract()
     {
         config()->set('zapmizer.connect', ['resolver' => config('zapmizer.connect.resolver')]);

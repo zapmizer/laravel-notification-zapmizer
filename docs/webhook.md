@@ -199,6 +199,7 @@ Quem publicou `config/zapmizer.php` acrescenta à mão, dentro de `webhook`, as 
 ## Subclasses do `WebhookController`
 
 - **`handle*` próprio.** Um `handleMessageStatus` (ou outro do catálogo) que o app já escreveu continua rodando, com a resposta dele e o `WebhookHandled`. O evento tipado sai também, antes dele. Para não ter os dois, escolha um.
+- **`handleMessage()` sobrescrito.** Só roda em webhook `2024-02-27`. Em `2026-10-20`, o que o connect e o `createWebhook()` criam, a mensagem chega em `handleMessageReceived()`/`handleMessageSent()`: sobrescreva esses também, ou ouça `MessageReceived`/`MessageSent`. A lib registra um `Log::warning` a cada mensagem `2026-10-20` enquanto só o `handleMessage()` estiver sobrescrito. O mesmo vale para um listener de `WebhookReceived` que filtra `name === 'message'`.
 - **`missingMethod` sobrescrito.** Continua recebendo os eventos do catálogo, como antes.
 - **Trocar ou desligar eventos.** Sobrescreva `catalogEvents()`, que devolve o mapa `name => classe` (cada classe estende `WebhookEvent` e implementa `fromWebhook()`). Devolver `[]` desliga todos.
 - **Resposta da repetição.** `duplicateMethod()` monta a resposta de uma entrega repetida.

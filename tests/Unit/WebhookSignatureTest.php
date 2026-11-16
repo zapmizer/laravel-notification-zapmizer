@@ -37,6 +37,8 @@ class WebhookSignatureTest extends TestCase
     {
         $router->post('custom-webhook', [CapturesConnectionWebhookController::class, 'handleWebhook'])
             ->middleware(VerifyWebhookSignature::class);
+        $router->post('legacy-handler-webhook', [\NotificationChannels\Zapmizer\Test\Fixtures\OverridesHandleMessageWebhookController::class, 'handleWebhook'])
+            ->middleware(VerifyWebhookSignature::class);
     }
 
     protected function setUp(): void
@@ -390,6 +392,32 @@ class WebhookSignatureTest extends TestCase
         Event::assertDispatched(MessageReceived::class, fn (MessageReceived $event) => $event->message->id === 'AAA');
         Log::shouldHaveReceived('warning')->once()->withArgs(fn (string $message, array $context) => str_contains($message, 'version ' . ($version ?? '(none)') . ', which this version of the package does not know: read as 2026-10-20')
             && ($context['version'] ?? null) === $version);
+    }
+
+    public function testAnOverriddenHandleMessageIsWarnedAboutOnAContractMessage()
+    {
+        // A webhook in 2026-10-20 never calls handleMessage(): the app's own
+        // code would stop running without a trace.
+        Event::fake([MessageReceived::class]);
+        Log::spy();
+        \NotificationChannels\Zapmizer\Test\Fixtures\OverridesHandleMessageWebhookController::$handled = 0;
+
+        $this->deliverSigned($this->contractEnvelope('message_received', ['id' => 'AAA']), 'app-secret', path: '/legacy-handler-webhook')->assertOk();
+
+        Event::assertDispatched(MessageReceived::class);
+        $this->assertSame(0, \NotificationChannels\Zapmizer\Test\Fixtures\OverridesHandleMessageWebhookController::$handled);
+        Log::shouldHaveReceived('warning')->once()->withArgs(fn (string $message) => str_contains($message, 'overrides handleMessage()') && str_contains($message, 'message_received'));
+    }
+
+    public function testThePackagesOwnHandleMessageIsNotWarnedAbout()
+    {
+        Event::fake([MessageReceived::class]);
+        Log::spy();
+        $this->connectedTeam('secret-a');
+
+        $this->deliverSigned($this->contractEnvelope('message_received', ['id' => 'AAA']), 'secret-a')->assertOk();
+
+        Log::shouldNotHaveReceived('warning');
     }
 
     public function testAMessageInAnUnknownVersionThatCannotBeReadOnlyWarns()

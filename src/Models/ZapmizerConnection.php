@@ -218,7 +218,9 @@ class ZapmizerConnection extends Model
         return $this->instanceClient()->media(
             (int) $this->bot_instance_id,
             $message->id,
-            $message->timestamp,
+            // `sentAt()` falls back to now without a usable timestamp: 0
+            // would read as a long-gone message and a future one as a 422.
+            $message->sentAt()->getTimestamp(),
         );
     }
 

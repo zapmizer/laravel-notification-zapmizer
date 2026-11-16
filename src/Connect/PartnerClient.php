@@ -107,8 +107,16 @@ class PartnerClient
     protected function webhookVersion(?string $webhookVersion): ?string
     {
         $version = $webhookVersion ?? config('zapmizer.connect.webhook_version', InstanceClient::MESSAGE_CONTRACT_VERSION);
+        $version = is_string($version) && trim($version) !== '' ? trim($version) : null;
+        $known = [InstanceClient::LEGACY_WEBHOOK_VERSION, InstanceClient::MESSAGE_CONTRACT_VERSION];
 
-        return is_string($version) && trim($version) !== '' ? trim($version) : null;
+        // Zapmizer refuses any other with a 422, which the connect would
+        // report as `zapmizer_unavailable` on every attempt.
+        if ($version !== null && !in_array($version, $known, true)) {
+            throw new \InvalidArgumentException("Invalid zapmizer.connect.webhook_version `{$version}`: use " . implode(' or ', $known) . ', or leave it empty for the partner account\'s default.');
+        }
+
+        return $version;
     }
 
     /**

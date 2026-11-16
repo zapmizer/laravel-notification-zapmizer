@@ -51,7 +51,8 @@ return [
         // session's `webhook_version` (Zapmizer 1.148.17 or later; an older
         // one ignores it). 2026-10-20 delivers messages in Zapmizer's message
         // contract; 2024-02-27 (deprecated) still works, translated. Empty
-        // leaves it to the partner account's default. A published
+        // leaves it to the partner account's default; any other value throws
+        // (Zapmizer would refuse it with a 422). A published
         // config/zapmizer.php must get this key added by hand.
         'webhook_version' => env('ZAPMIZER_WEBHOOK_VERSION', '2026-10-20'),
     ],

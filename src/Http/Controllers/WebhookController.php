@@ -237,6 +237,7 @@ class WebhookController extends Controller
      */
     protected function dispatchContractMessage(array $payload, string $event): Response
     {
+        $this->warnIfHandleMessageIsOverridden($payload);
         $envelope = Envelope::fromPayload($payload);
         $data = $payload['data'] ?? null;
         $message = is_array($data) ? Message::fromContract($data) : null;
@@ -252,6 +253,21 @@ class WebhookController extends Controller
         event(new $event($message, $this->connection(), $payload, $envelope));
 
         return $this->successMethod();
+    }
+
+    /**
+     * A subclass that overrode `handleMessage()` only sees webhooks in
+     * version `2024-02-27`: in `2026-10-20` (what the connect and
+     * `createWebhook()` create now) messages come as `message_received` and
+     * `message_sent`, and its own code would stop running without a trace.
+     */
+    protected function warnIfHandleMessageIsOverridden(array $payload): void
+    {
+        if ((new \ReflectionMethod($this, 'handleMessage'))->getDeclaringClass()->getName() === self::class) {
+            return;
+        }
+
+        Log::warning('zapmizer: ' . static::class . ' overrides handleMessage(), which only runs for webhooks in version 2024-02-27; this delivery is ' . ($payload['name'] ?? '?') . ' (2026-10-20). Override handleMessageReceived()/handleMessageSent() too, or listen to MessageReceived/MessageSent.', $this->messageLogContext($payload));
     }
 
     /**

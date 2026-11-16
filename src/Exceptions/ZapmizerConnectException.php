@@ -22,11 +22,12 @@ class ZapmizerConnectException extends ZapmizerException
 
     /**
      * Thrown when the resolved model is not a Connectable — a configuration
-     * error of `zapmizer.connect.resolver`, not a user error.
+     * error of `zapmizer.connect.resolver`, not a user error. The package
+     * routes answer it with 403 `no_connectable` and a warning.
      */
-    public static function notConnectable(object $model): self
+    public static function notConnectable(object $model): NotConnectableException
     {
-        return new self(sprintf(
+        return new NotConnectableException(sprintf(
             '%s must implement NotificationChannels\Zapmizer\Contracts\Connectable (use the NotificationChannels\Zapmizer\Connectable trait) to be connected.',
             get_class($model),
         ));

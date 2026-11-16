@@ -99,7 +99,7 @@ The `ZapmizerConnection` model (`zapmizer.models.connection` to subclass it) exp
 
 ## 4. Who gets connected: the resolver
 
-The controller asks a resolver which model the current request connects. The default returns `$request->user()` (which must implement `Contracts\Connectable`, or it throws a `ZapmizerConnectException` naming the class). For team-scoped connections, point `zapmizer.connect.resolver` at your own — the return type is the contract. When there is nothing to connect (a user without a team), throw `ZapmizerConnectException::noConnectable()`: the JSON endpoints answer 403 `{"code": "no_connectable"}` and the popup callback reports `no_connectable` on its result page. Returning `null` is not an option — it would surface as a `TypeError` (500).
+The controller asks a resolver which model the current request connects. The default returns `$request->user()` (which must implement `Contracts\Connectable`, or it throws a `NotConnectableException` naming the class; the package routes answer that like `no_connectable` below, 403, with the warning `zapmizer: the connect resolver returned a model that is not Connectable.`). For team-scoped connections, point `zapmizer.connect.resolver` at your own — the return type is the contract. When there is nothing to connect (a user without a team), throw `ZapmizerConnectException::noConnectable()`: the JSON endpoints answer 403 `{"code": "no_connectable"}` and the popup callback reports `no_connectable` on its result page. Returning `null` is not an option — it would surface as a `TypeError` (500).
 
 ```php
 use Illuminate\Database\Eloquent\Model;
@@ -288,7 +288,7 @@ The JSON endpoints (`show`, `start`, `destroy`, `reconnect`) answer these themse
 |---|---|---|
 | `zapmizer_unavailable` | 503 | Zapmizer is down, misbehaving or refused the session (404, 409, 422, 429), the configuration is missing or invalid (partner credentials, `base_uri`, an authenticated user that is not `Connectable` with the default resolver), or the answer was unexpected — back off and retry. Reported: the report says which. |
 | `partner_unauthorized` | 503 | Your partner credentials were refused — configuration error, logged and reported. |
-| `no_connectable` | 403 | The resolver found nothing to connect on this request (no user, a user without a team). |
+| `no_connectable` | 403 | The resolver found nothing to connect on this request (no user, a user without a team), or the default resolver's user model does not implement `Connectable` (logged as a warning). |
 | `no_instance` | 409 | `reconnect` only: nothing to reconnect (above). |
 | `reauth_required` | 409 | `reconnect` only: the token is no longer valid or no longer decrypts (above). |
 

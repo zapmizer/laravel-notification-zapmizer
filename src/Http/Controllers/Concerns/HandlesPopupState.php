@@ -6,8 +6,11 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use NotificationChannels\Zapmizer\Contracts\Connectable;
+use NotificationChannels\Zapmizer\Exceptions\NoConnectableException;
+use NotificationChannels\Zapmizer\Exceptions\NotConnectableException;
 use Throwable;
 
 /**
@@ -38,11 +41,21 @@ trait HandlesPopupState
      * (`Model&Connectable`) is the contract: a resolver handing back a model
      * without it fails right there, with a TypeError naming the class. A
      * resolver with nothing to connect throws NoConnectableException, which
-     * the JSON endpoints answer with 403 `no_connectable`.
+     * the JSON endpoints answer with 403 `no_connectable`. So is a
+     * NotConnectableException (the default resolver with a user model that
+     * lacks Connectable), with a warning: a setup defect, not a 500.
+     *
+     * @throws NoConnectableException
      */
     protected function connectable(Request $request): Model&Connectable
     {
-        return $this->resolver->resolve($request);
+        try {
+            return $this->resolver->resolve($request);
+        } catch (NotConnectableException $exception) {
+            Log::warning('zapmizer: the connect resolver returned a model that is not Connectable.', ['reason' => $exception->getMessage()]);
+
+            throw new NoConnectableException($exception->getMessage(), 0, $exception);
+        }
     }
 
     protected function code(string $code, int $status): JsonResponse

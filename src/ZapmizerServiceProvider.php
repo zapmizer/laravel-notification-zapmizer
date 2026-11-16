@@ -31,12 +31,14 @@ class ZapmizerServiceProvider extends ServiceProvider
         // `app(Zapmizer::class, [...])` takes `api_token`, `base_uri` and
         // `api_version`, and for the HTTP side `timeout` / `connect_timeout`
         // (seconds, over `zapmizer.http.*`) or a ready `transport`.
-        $this->app->bind(Zapmizer::class, fn (Application $app, $config) => new Zapmizer(
+        // `connection` (a ZapmizerConnection) marks the client as that
+        // connection's, for the fake's assertions.
+        $this->app->bind(Zapmizer::class, fn (Application $app, $config) => (new Zapmizer(
             Arr::get($config, 'api_token', config('zapmizer.api_token')),
             $this->transportFor($app, is_array($config) ? $config : []),
             Arr::get($config, 'base_uri', config('zapmizer.base_uri')),
             Arr::get($config, 'api_version', config('zapmizer.api_version'))
-        ));
+        ))->setConnection(Arr::get($config, 'connection')));
 
         $this->app->bind(VerificationClient::class, fn (Application $app, $config) => new VerificationClient(
             Arr::get($config, 'api_token', config('zapmizer.api_token')),

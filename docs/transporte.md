@@ -59,7 +59,7 @@ O download de mídia ignora esses timeouts e usa limites fixos de 60 s para cone
 
 ## Testes
 
-Use `Http::fake()`. Os fakes se acumulam: um segundo `Http::fake()` não substitui o primeiro, e o primeiro stub que casa com a URL vence. Por isso o exemplo usa um só, com um padrão para cada endpoint (ou escreva um teste por fake).
+Para os envios de mensagem, prefira o `Zapmizer::fake()` (veja [envio.md](envio.md#testes)): ele pega todo envio, inclusive o de um model conectado, sem montar respostas. Para o resto (parceiro, instância, connect, verificação) e para provar a requisição em si, use `Http::fake()`. Os fakes se acumulam: um segundo `Http::fake()` não substitui o primeiro, e o primeiro stub que casa com a URL vence. Por isso o exemplo usa um só, com um padrão para cada endpoint (ou escreva um teste por fake).
 
 ```php
 use Illuminate\Http\Client\Request;

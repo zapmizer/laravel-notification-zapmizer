@@ -91,9 +91,72 @@ Event::listen(function (NotificationSent $event) {
 
 ## Testes
 
-Duas formas, conforme o que o teste quer provar.
+A forma recomendada é o `Zapmizer::fake()`, no estilo do `Mail::fake()` e do `Notification::fake()`: ele pega **todo** envio da lib, por qualquer caminho, e nenhuma requisição sai.
 
-**Pelo HTTP**, com `Http::fake()`: o envio passa pelo `Http` do Laravel (veja [transporte.md](transporte.md#testes)). Responda com um corpo JSON: um `Http::fake()` vazio responde 200 sem corpo, e o envio lança `unexpectedResponse`.
+```php
+use NotificationChannels\Zapmizer\Facades\Zapmizer;
+use NotificationChannels\Zapmizer\Testing\FakeSend;
+
+Zapmizer::fake();
+
+$user->notify(new PedidoSaiu($pedido));
+
+Zapmizer::assertSent(fn (FakeSend $send) => $send->to === '5511999999999'
+    && str_contains($send->text, 'saiu para entrega'));
+Zapmizer::assertSentTimes(1);
+```
+
+**O import é `NotificationChannels\Zapmizer\Facades\Zapmizer`**, a facade, e não `NotificationChannels\Zapmizer\Zapmizer`, o cliente: as duas classes têm o mesmo nome curto. Num arquivo que usa as duas, dê um alias a uma delas (`use NotificationChannels\Zapmizer\Zapmizer as ZapmizerClient;`). Um `$this->mock(Zapmizer::class)` com a facade importada mocka o nome da facade, que ninguém resolve, e o envio sai de verdade.
+
+O fake pega o `Zapmizer::sendMessage()`/`sendMessageWithFile()`/`sendTemplate()` (pela facade ou por um cliente do container), o `ZapmizerMessage::send()`, o canal `zapmizer`, o `zapmizer:send-message`, e os envios pelo número de um model conectado (`$team->zapmizerMessage()`, `$team->zapmizer()`, `$connection->message()`), que montam um cliente novo com o token da conexão: todo envio passa pela classe `NotificationChannels\Zapmizer\Zapmizer`, e ela entrega ao fake enquanto ele está ligado, seja qual for o jeito com que o cliente foi feito (container, parâmetros, `new`). O fake não pede `ZAPMIZER_API_TOKEN`.
+
+Cada envio devolve um `SentMessage::fake()` com `id` próprio e o `widTo`/`widFrom` dos números enviados (`5511999999999` vira `5511999999999@c.us`; um wid fica como veio); o template devolve um `SentTemplate` com `wamid`. O `track()` (e `sentMessage()`/`metaMessage()`) de um envio do fake responde o status `QUEUED`, sem chamar a API.
+
+| Asserção | |
+| --- | --- |
+| `Zapmizer::assertSent(?callable $callback = null)` | algum envio (que o callback aceita) |
+| `Zapmizer::assertSentTimes(int $times, ?callable $callback = null)` | exatamente `$times` envios (que o callback aceita) |
+| `Zapmizer::assertNotSent(?callable $callback = null)` | nenhum envio que o callback aceita |
+| `Zapmizer::assertNothingSent()` | nenhum envio |
+| `Zapmizer::sent(?callable $callback = null)` | os envios, uma `Collection` de `FakeSend` |
+
+O callback recebe um `Testing\FakeSend`:
+
+| Campo | |
+| --- | --- |
+| `kind` | `FakeSend::MESSAGE` (texto), `FakeSend::FILE` (`image()`/`document()`, `sendMessageWithFile()`) ou `FakeSend::TEMPLATE` |
+| `to`, `from` | como o app passou (sem normalizar) |
+| `text` | o texto, a legenda do arquivo, ou `null` no template |
+| `type` | `chat`, `image`, `document`...; `template` no template |
+| `file`, `filename()`, `hasFile()` | o caminho do arquivo e o nome que iria no upload |
+| `template`, `language`, `body`, `header` | os campos do template |
+| `token`, `baseUri` | os do cliente que enviou |
+| `connection` | a `ZapmizerConnection` do envio pelo número de um model, ou `null` (token do app) |
+| `params` | os parâmetros como iriam à API |
+| `response` | o `SentMessage` (ou `SentTemplate`) que o envio devolveu |
+
+**Falha.** Para testar os caminhos de erro do app:
+
+```php
+use NotificationChannels\Zapmizer\Exceptions\ErrorCode;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
+
+// como a API responderia: 401 vira ZapmizerUnauthorizedException, 429 ZapmizerRateLimitedException,
+// o resto ZapmizerApiException, com error(), reason() e payload() lidos do corpo
+Zapmizer::fake()->failWithApiError(409, ['error' => ErrorCode::WINDOW_CLOSED, 'message' => 'Janela fechada.']);
+
+// uma exceção pronta, para todo envio
+Zapmizer::fake()->failWith(new ZapmizerUnavailableException('fora do ar'));
+
+// só alguns envios: o closure recebe o FakeSend e devolve a exceção, ou null para deixar passar
+Zapmizer::fake()->failWith(fn (FakeSend $send) => $send->to === '5511000000000' ? new ZapmizerUnavailableException('fora do ar') : null);
+```
+
+Um envio que falha não entra nas asserções (não foi enviado). `->failWith(null)` volta a deixar passar.
+
+O fake não cobre a verificação de número (`VerificationClient`), o connect, o parceiro nem as chamadas de instância (`InstanceClient`): para esses, `Http::fake()`.
+
+**Pelo HTTP**, com `Http::fake()`, quando o teste quer provar a requisição em si (veja [transporte.md](transporte.md#testes)). Responda com um corpo JSON: um `Http::fake()` vazio responde 200 sem corpo, e o envio lança `unexpectedResponse`.
 
 ```php
 use Illuminate\Http\Client\Request;
@@ -109,7 +172,7 @@ Http::assertSent(fn (Request $request) => $request->url() === 'https://app.zapmi
 
 Um `MockHandler` num `GuzzleHttp\Client` registrado no container não pega mais o envio.
 
-**Com um mock do `Zapmizer`**: o `Messages\SentMessage` é `final`, então o Mockery não fabrica o retorno de `sendMessage()` sozinho e um mock sem `andReturn()` quebra no envio. Devolva `SentMessage::fake()`:
+**Com um mock do `Zapmizer`** (o cliente, não a facade): o `Messages\SentMessage` é `final`, então o Mockery não fabrica o retorno de `sendMessage()` sozinho e um mock sem `andReturn()` quebra no envio. Devolva `SentMessage::fake()`:
 
 ```php
 use NotificationChannels\Zapmizer\Messages\SentMessage;
@@ -124,7 +187,7 @@ $this->mock(Zapmizer::class)
 
 `SentMessage::fake(array $overrides = [])` é a resposta de um envio por QR aceito (na fila, com `links.self`, `isTrackable()` verdadeiro), cada chamada com um `id` próprio. As chaves de `$overrides` têm a forma da resposta da API, não a dos campos do objeto: `SentMessage::fake(['id' => 'abc', 'wid_to' => '5511988887777@c.us'])`. O `links.self` acompanha o `id` quando não é dado, e `SentMessage::fake(['id' => null])` é um envio oficial que entrou na fila (sem nada a acompanhar). Para um corpo exato, `SentMessage::fromArray($corpo)` lê qualquer resposta, inclusive a do formato antigo (`['data' => [...]]`).
 
-O mock só vale para quem resolve o `Zapmizer` pelo container sem parâmetros (`ZapmizerMessage::create()`, `app(Zapmizer::class)`). Quem passa parâmetros (`app(Zapmizer::class, ['api_version' => ...])`) ou usa o número de um model conectado (`$team->zapmizerMessage()`) ganha um cliente novo: teste esses pelo HTTP.
+O mock só vale para quem resolve o `Zapmizer` pelo container sem parâmetros (`ZapmizerMessage::create()`, `app(Zapmizer::class)`). Quem passa parâmetros (`app(Zapmizer::class, ['api_version' => ...])`) ou usa o número de um model conectado (`$team->zapmizerMessage()`) ganha um cliente novo: use o `Zapmizer::fake()`.
 
 ## Acompanhar o envio
 

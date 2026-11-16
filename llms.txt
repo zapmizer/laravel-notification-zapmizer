@@ -13,7 +13,7 @@ Para instalar num app, o caminho é `composer require "zapmizer/laravel-notifica
 
 - [Conectar um número por model](https://github.com/zapmizer/laravel-notification-zapmizer/blob/2.x/docs/connect.md): `Connectable`, o resolver, as rotas e os códigos do connect, os componentes Inertia + Vue, reconnect, revogação, assinatura e checkout (em inglês)
 - [Embutir a conversa e a caixa de entrada](https://github.com/zapmizer/laravel-notification-zapmizer/blob/2.x/docs/embed.md): `EmbedSessionResponse`, o `user` do atendente e a tabela de respostas ao `@zapmizer/embed`
-- [Enviar notificações](https://github.com/zapmizer/laravel-notification-zapmizer/blob/2.x/docs/envio.md): o canal `zapmizer`, `ZapmizerMessage`, o retorno tipado e o template do número oficial
+- [Enviar notificações](https://github.com/zapmizer/laravel-notification-zapmizer/blob/2.x/docs/envio.md): o canal `zapmizer`, `ZapmizerMessage`, o retorno tipado, o template do número oficial e os testes com `Zapmizer::fake()` (`NotificationChannels\Zapmizer\Facades\Zapmizer`)
 - [Erros](https://github.com/zapmizer/laravel-notification-zapmizer/blob/2.x/docs/erros.md): a árvore de exceções e o que cada uma carrega
 - [Eventos do webhook](https://github.com/zapmizer/laravel-notification-zapmizer/blob/2.x/docs/webhook.md): `MessageReceived`, `MessageSent` e os eventos tipados do catálogo
 

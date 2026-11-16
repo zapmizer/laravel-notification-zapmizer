@@ -156,6 +156,7 @@ class ZapmizerConnection extends Model
         return app(Zapmizer::class, [
             'api_token' => $this->api_token,
             'api_version' => config('zapmizer.api_version'),
+            'connection' => $this,
         ]);
     }
 

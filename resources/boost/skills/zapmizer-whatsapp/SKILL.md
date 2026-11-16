@@ -142,7 +142,7 @@ public function toZapmizer(object $notifiable)
 }
 ```
 
-`send()` returns a `Messages\SentMessage`; keep `$sent->widTo` as the contact key. Every exception extends `ZapmizerException`. Tests: `Http::fake()` covers the calls.
+`send()` returns a `Messages\SentMessage`; keep `$sent->widTo` as the contact key. Every exception extends `ZapmizerException`. Tests: `Zapmizer::fake()` (import `NotificationChannels\Zapmizer\Facades\Zapmizer`, not the client class of the same short name) catches every send of the package, the ones through a connected model included, with `assertSent(fn (FakeSend $send) => ...)`, `assertSentTimes()`, `assertNotSent()`, `assertNothingSent()`, `sent()` and `failWith()`/`failWithApiError()` for the error paths; `Http::fake()` covers the other calls. See `docs/envio.md` (Testes).
 
 ## Inbox routes (reference)
 

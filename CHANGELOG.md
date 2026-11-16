@@ -12,7 +12,7 @@
 - O `getPrevious()` da `ZapmizerUnavailableException` pode mudar de classe conforme a versão do Laravel: uma exceção do `Http` do Laravel (`ConnectionException` etc.) ou, do Laravel 8 ao 11 em alguns casos (corpo cortado), a do Guzzle.
 - `zapmizer.http.connect_timeout` e `zapmizer.http.timeout` (`ZAPMIZER_HTTP_CONNECT_TIMEOUT`, `ZAPMIZER_HTTP_TIMEOUT`), `null` por padrão. Sem valor, vale o padrão do `Http` da versão: nenhum no Laravel 8; 30 s de total e 10 s de conexão no 9.52 e do 10 em diante.
 - `illuminate/http` declarado como dependência; `ext-curl` sugerida.
-- Um app que já tinha `zapmizer.http.connect_timeout`/`timeout` na config agora aplica esses timeouts nas chamadas JSON de parceiro e instância.
+- Um app que já tinha `zapmizer.http.connect_timeout`/`timeout` na config agora aplica esses timeouts nas chamadas JSON de parceiro e instância e no envio de texto.
 - Download de mídia: 60 s para conectar e 600 s no total (`ZapmizerApi::TRANSFER_CONNECT_TIMEOUT`/`TRANSFER_TIMEOUT`), no lugar do limite de 60 s por leitura e de qualquer timeout de um `GuzzleHttp\Client` registrado. O teto total pede a extensão `curl`. O corpo passa por `php://temp` (memória até 2 MB, disco depois) e é copiado para o arquivo temporário.
 - Um download de mídia cortado (erro de transporte, falha de leitura ou de escrita no meio da cópia, ou corpo menor que o `Content-Length` sem `Transfer-Encoding`) lança `ZapmizerUnavailableException` e não deixa arquivo. Antes lançava um `RuntimeException` cru, ou devolvia um `attached` truncado quando a conexão fechava limpa.
 - Sem conseguir criar ou abrir o arquivo temporário, uma resposta `200` de mídia lança `ZapmizerUnavailableException` (antes estourava `ErrorException`); os outros status não criam arquivo.
@@ -22,7 +22,7 @@
 
 **Com o `Http` do Laravel como padrão:**
 
-- `Http::fake()`, `Http::preventStrayRequests()`, os listeners de `RequestSending`/`ResponseReceived` e o Telescope passam a ver as chamadas de parceiro, instância e envio. Um `Http::fake()` sem resposta para a URL da Zapmizer responde 200 vazio: as chamadas que esperam JSON (`createSession`, `exchangeCode`, `subscription`, `checkout`, `connection`, `createWebhook`, `rotateWebhookSecret`) falham com `unexpectedResponse`, mas `deleteWebhook()` passa em silêncio e `media()` devolve um download anexado vazio (`size === 0`).
+- `Http::fake()`, `Http::preventStrayRequests()`, os listeners de `RequestSending`/`ResponseReceived` e o Telescope passam a ver as chamadas de parceiro, instância e envio. Um `Http::fake()` sem resposta para a URL da Zapmizer responde 200 vazio: as chamadas que esperam JSON (`createSession`, `exchangeCode`, `subscription`, `checkout`, `connection`, `createWebhook`, `rotateWebhookSecret`, `reconnect`, `conversationSession`, `inboxSession`) e o `revokeToken()` (só 204 e 401 contam como revogado) falham com `unexpectedResponse`, mas `deleteWebhook()` passa em silêncio e `media()` devolve um download anexado vazio (`size === 0`).
 - Fake com `MockHandler` num `GuzzleHttp\Client` registrado no container deixa de pegar parceiro, instância e envio: use `Http::fake()`. Esse `GuzzleHttp\Client` passa a valer só para o `VerificationClient`.
 - Proxy sem `Http::globalOptions` (Laravel 8, 9 e 10 antes do 10.48) pede um transporte próprio (exemplo em `docs/transporte.md`).
 - O `GuzzleTransport` que existiu nas versões de desenvolvimento deste ciclo saiu.
@@ -89,6 +89,17 @@ Quebras:
 - `createSession()`: `expires_in` acima de 86400 é cortado; `redirect_uri`/`webhook_url` vazios vão no corpo (422 da API) em vez de sumirem.
 - 404 e 409 de chamadas de parceiro deixam de logar `zapmizer: partner call failed.`.
 - Subclasses: `PartnerClient` ganhou os métodos públicos `subscription()` e `checkout()`, a constante `MAX_EXPIRES_IN` e os métodos protegidos `guardExternalId()`, `guardState()` e `withoutNulls()`, que podem colidir com nomes de uma subclasse.
+
+**Cliente de instância:**
+
+- `InstanceClient::reconnect(int $botInstanceId, string $redirectUri, ?string $state = null, ?int $expiresIn = null): ReconnectResult` religa o número (`POST /bot-instances/{id}/reconnect`). `Connect\ReconnectResult` tem `status` (`ReconnectResult::ONLINE`, `STARTING` ou `NEEDS_CLIENT`), `url`, `expiresAt` (`?CarbonImmutable`), `isOnline()`, `isStarting()` e `needsClient()`: 200 → online, 202 → starting, 409 `needs_reconnect` → `needsClient()` com a `url` para onde mandar o cliente. 404 → `InstanceGoneException` (número inexistente ou fora desta conexão); 402, 403, 422 e outro 409 → `ZapmizerApiException` com `status()` e `error()`; 429 → `ZapmizerRateLimitedException`. `state` e `expires_in` seguem as regras do `createSession()`.
+- `InstanceClient::revokeToken(): void` revoga o token da conexão (`DELETE /connect/token`). 204 e 401 voltam normalmente (revogado agora; o token já não valia); 404 → `ZapmizerApiException` com `status()` 404 (o token não veio de um connect e continua valendo).
+- `InstanceClient::conversationSession(string $phone, string $parentOrigin, array $appearance = [], ?string $userId = null, ?string $userName = null)` e `inboxSession(string $parentOrigin, array $appearance = [], ?string $userId = null, ?string $userName = null)` criam a sessão do iframe (`POST /embed/sessions`) e devolvem `Connect\EmbedSession`, com `url`, `origin` (a origem do iframe como o navegador mostra), `expiresAt`, `resumeUrl` e `resumeUntil`; `resumeUntil` é `null` sempre que `resumeUrl` for `null`. Uma `url` que não seja http(s) segura lança `unexpectedResponse`; um `resume_url` inseguro ou de outra origem vira `null` e loga `zapmizer: unexpected resume url.` (warning) só com as origens.
+- Veja "9. Reconnect, revoke and embed" em `docs/connect.md`, com a ordem dos `catch`.
+
+Quebras: nenhuma de comportamento. Só métodos e classes novos, e o `PartnerClient` passa a usar o trait `Connect\Concerns\BuildsZapmizerRequests`, com os mesmos métodos `protected`.
+
+- Subclasses: subclasses de `InstanceClient` ganham `reconnect()`, `revokeToken()`, `conversationSession()`, `inboxSession()`, `guardState()`, `withoutNulls()` e `clampExpiresIn()`; subclasses de `PartnerClient` ganham `clampExpiresIn()`. Esses nomes podem colidir com métodos já existentes nelas.
 
 **Upgrade da 0.3:**
 

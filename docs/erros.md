@@ -11,7 +11,7 @@ ZapmizerException
 │  │  ├─ ZapmizerUnauthorizedException   401, or no token to send
 │  │  ├─ PartnerCredentialsException     partner key refused (401/403)
 │  │  ├─ MediaRejectedException          media request refused (422)
-│  │  └─ InstanceGoneException           instance deleted (404)
+│  │  └─ InstanceGoneException           instance deleted, or not this connection's number on reconnect() (404)
 │  ├─ ZapmizerUnavailableException       timeout, 5xx, no answer at all
 │  └─ NoConnectableException             the resolver has nothing to connect
 └─ ZapmizerVerificationException         verify-number
@@ -58,8 +58,8 @@ Falha que não é resposta da Zapmizer mantém a própria classe e **não é uma
 - campo multipart inválido;
 - `Http::preventStrayRequests()` num teste;
 - exceção lançada pelo seu transporte próprio;
-- JSON com UTF-8 malformado no corpo (o `InvalidArgumentException` do Guzzle): é erro de quem chamou, não queda;
-- `external_id` ou `state` inválido em `createSession()`, `subscription()` ou `checkout()` (`InvalidArgumentException`, antes de chamar a API; as regras estão em [connect.md](connect.md)).
+- JSON com UTF-8 malformado no corpo (o `InvalidArgumentException` do Guzzle): é erro de quem chamou, não queda. Com o cliente de instância, o caminho real é o `userName` de `conversationSession()`/`inboxSession()`, que vai em `user.name` no corpo do embed (por exemplo, um nome cortado no meio de um caractere), ou um texto de `appearance`;
+- `external_id` ou `state` inválido em `createSession()`, `subscription()` ou `checkout()`, e `state` inválido em `reconnect()` (`InvalidArgumentException`, antes de chamar a API; as regras estão em [connect.md](connect.md)).
 
 ## Resposta HTTP
 

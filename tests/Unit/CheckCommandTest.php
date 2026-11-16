@@ -163,14 +163,14 @@ class CheckCommandTest extends TestCase
         $this->partnerAnswers(404);
         config()->set('zapmizer.inbox.enabled', true);
         $this->reloadPackageRoutes();
-        $this->appFile('package.json', json_encode(['dependencies' => ['@zapmizer/embed' => 'github:zapmizer/embed#v0.1.2', 'vue' => '^3.2.47']]));
+        $this->appFile('package.json', json_encode(['dependencies' => ['@zapmizer/embed' => 'github:zapmizer/embed#v0.1.3', 'vue' => '^3.2.47']]));
 
         $old = $this->checkJson();
         $this->assertSame(0, $old['exit']);
         $this->assertSame('warn', $old['checks']['vue_version']['status']);
         $this->assertStringContainsString('>= 3.3', $old['checks']['vue_version']['message']);
 
-        $this->appFile('package.json', json_encode(['dependencies' => ['@zapmizer/embed' => 'github:zapmizer/embed#v0.1.2', 'vue' => '^3.5.13']]));
+        $this->appFile('package.json', json_encode(['dependencies' => ['@zapmizer/embed' => 'github:zapmizer/embed#v0.1.3', 'vue' => '^3.5.13']]));
         $this->assertArrayNotHasKey('vue_version', $this->checkJson()['checks']);
     }
 
@@ -331,11 +331,32 @@ class CheckCommandTest extends TestCase
         $this->assertSame(0, $unpinned['exit']);
         $this->assertSame('warn', $unpinned['checks']['embed_package']['status']);
 
-        $this->appFile('package.json', json_encode(['dependencies' => ['@zapmizer/embed' => 'github:zapmizer/embed#v0.1.2']]));
+        $this->appFile('package.json', json_encode(['dependencies' => ['@zapmizer/embed' => 'github:zapmizer/embed#v0.1.3']]));
         $pinned = $this->checkJson();
         $this->assertSame(0, $pinned['exit']);
         $this->assertSame('ok', $pinned['checks']['embed_package']['status']);
-        $this->assertStringContainsString('v0.1.2', $pinned['checks']['embed_package']['message']);
+        $this->assertStringContainsString('v0.1.3', $pinned['checks']['embed_package']['message']);
+    }
+
+    public function testAnOlderEmbedTagIsAWarningToUpdate()
+    {
+        $this->partnerAnswers(404);
+        config()->set('zapmizer.inbox.enabled', true);
+        $this->reloadPackageRoutes();
+
+        foreach (['v0.1.2', 'v0.1.0'] as $tag) {
+            $this->appFile('package.json', json_encode(['dependencies' => ['@zapmizer/embed' => "github:zapmizer/embed#{$tag}"]]));
+            $result = $this->checkJson();
+
+            $this->assertSame(0, $result['exit'], $tag);
+            $this->assertSame('warn', $result['checks']['embed_package']['status'], $tag);
+            $this->assertStringContainsString($tag, $result['checks']['embed_package']['message']);
+            $this->assertStringContainsString('atualize para v0.1.3: tipos com moduleResolution node', $result['checks']['embed_package']['message']);
+            $this->assertStringContainsString('github:zapmizer/embed#v0.1.3', $result['checks']['embed_package']['hint']);
+        }
+
+        $this->appFile('package.json', json_encode(['dependencies' => ['@zapmizer/embed' => 'github:zapmizer/embed#v0.2.0']]));
+        $this->assertSame('ok', $this->checkJson()['checks']['embed_package']['status'], 'a newer tag is fine');
     }
 
     public function testTheFrontBrandMustMatchTheDeployOfTheBaseUri()
@@ -343,7 +364,7 @@ class CheckCommandTest extends TestCase
         $this->partnerAnswers(404);
         config()->set('zapmizer.inbox.enabled', true);
         $this->reloadPackageRoutes();
-        $this->appFile('package.json', json_encode(['dependencies' => ['@zapmizer/embed' => 'github:zapmizer/embed#v0.1.2']]));
+        $this->appFile('package.json', json_encode(['dependencies' => ['@zapmizer/embed' => 'github:zapmizer/embed#v0.1.3']]));
 
         $match = $this->checkJson();
         $this->assertSame(0, $match['exit']);
@@ -371,7 +392,7 @@ class CheckCommandTest extends TestCase
     {
         $this->partnerAnswers(404);
         config()->set('zapmizer.inbox.enabled', true);
-        $this->appFile('package.json', json_encode(['dependencies' => ['@zapmizer/embed' => 'github:zapmizer/embed#v0.1.2']]));
+        $this->appFile('package.json', json_encode(['dependencies' => ['@zapmizer/embed' => 'github:zapmizer/embed#v0.1.3']]));
 
         $result = $this->checkJson();
 
@@ -401,7 +422,7 @@ class CheckCommandTest extends TestCase
         config()->set('zapmizer.inbox.enabled', true);
         config()->set('zapmizer.inbox.parent_origin', 'https://app.example.com/inbox');
         $this->reloadPackageRoutes();
-        $this->appFile('package.json', json_encode(['dependencies' => ['@zapmizer/embed' => 'github:zapmizer/embed#v0.1.2']]));
+        $this->appFile('package.json', json_encode(['dependencies' => ['@zapmizer/embed' => 'github:zapmizer/embed#v0.1.3']]));
 
         $result = $this->checkJson();
 

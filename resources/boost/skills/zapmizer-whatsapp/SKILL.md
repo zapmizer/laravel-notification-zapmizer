@@ -30,7 +30,7 @@ Ask one thing at a time, and only what the app does not tell you:
 ## Install
 
 ```bash
-composer require "zapmizer/laravel-notification-zapmizer:^2.0.0-beta.2@beta"
+composer require "zapmizer/laravel-notification-zapmizer:^2.0.0-beta.3@beta"
 php artisan zapmizer:install --base-uri=https://app.parlichat.com/api/ --model=App\\Models\\User --inbox --no-interaction
 php artisan migrate
 ```
@@ -66,7 +66,7 @@ Then `'connect' => ['resolver' => App\Zapmizer\ResolvesCurrentTeam::class, ...]`
 
 ## Front: connect + inbox (Inertia + Vue 3)
 
-1. Install the embed with the app's package manager (the install output prints the exact command): `npm install github:zapmizer/embed#v0.1.2 axios lucide-vue-next` (or `bun add` / `pnpm add` / `yarn add`). Always pin the tag.
+1. Install the embed with the app's package manager (the install output prints the exact command): `npm install github:zapmizer/embed#v0.1.3 axios lucide-vue-next` (or `bun add` / `pnpm add` / `yarn add`). Always pin the tag.
 2. Mount the screen on an authenticated page, inside the app's own layout, with a height:
 
 ```vue

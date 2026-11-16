@@ -266,7 +266,7 @@ PHP;
 
         $this->assertInstall(['--inbox' => true], 0, [
             'componentes Vue em resources/js',
-            'Instale o front: npm install github:zapmizer/embed#v0.1.2 lucide-vue-next',
+            'Instale o front: npm install github:zapmizer/embed#v0.1.3 lucide-vue-next',
             'endZapmizerEmbeds() antes do logout',
             'Rebuilde o front',
         ]);
@@ -290,7 +290,7 @@ PHP;
             $this->appFile($lockfile, '');
 
             $this->assertInstall(['--inbox' => true], 0, [
-            "Instale o front: {$command} github:zapmizer/embed#v0.1.2",
+            "Instale o front: {$command} github:zapmizer/embed#v0.1.3",
         ]);
 
             unlink($this->appFile($lockfile));
@@ -316,7 +316,7 @@ PHP;
         $output = $this->assertInstall(['--inbox' => true], 0, [
             'o package.json não tem vue',
             'caminho Blade de docs/instalar.md',
-            'Instale só o embed: npm install github:zapmizer/embed#v0.1.2',
+            'Instale só o embed: npm install github:zapmizer/embed#v0.1.3',
         ]);
 
         $this->assertStringNotContainsString('<InboxScreen', $output);

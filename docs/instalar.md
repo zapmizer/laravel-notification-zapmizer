@@ -29,7 +29,7 @@ Pergunte uma coisa por vez, e só o que você não conseguir descobrir lendo o a
 ### 1. Instalar o pacote
 
 ```bash
-composer require "zapmizer/laravel-notification-zapmizer:^2.0.0-beta.2@beta"
+composer require "zapmizer/laravel-notification-zapmizer:^2.0.0-beta.3@beta"
 ```
 
 ### 2. Rodar o instalador
@@ -111,13 +111,15 @@ Mais em [connect.md](connect.md), seção 4.
 Instale o `@zapmizer/embed` com o gerenciador do lockfile do app, fixando a tag. O instalador já imprime o comando certo, com `axios` e `lucide-vue-next` quando faltam (os componentes do connect usam os dois):
 
 ```bash
-npm install github:zapmizer/embed#v0.1.2 axios lucide-vue-next   # package-lock.json ou nenhum lockfile
-bun add github:zapmizer/embed#v0.1.2 axios lucide-vue-next       # bun.lock
-pnpm add github:zapmizer/embed#v0.1.2 axios lucide-vue-next      # pnpm-lock.yaml
-yarn add github:zapmizer/embed#v0.1.2 axios lucide-vue-next      # yarn.lock
+npm install github:zapmizer/embed#v0.1.3 axios lucide-vue-next   # package-lock.json ou nenhum lockfile
+bun add github:zapmizer/embed#v0.1.3 axios lucide-vue-next       # bun.lock
+pnpm add github:zapmizer/embed#v0.1.3 axios lucide-vue-next      # pnpm-lock.yaml
+yarn add github:zapmizer/embed#v0.1.3 axios lucide-vue-next      # yarn.lock
 ```
 
 O `@zapmizer/embed/vue` pede **Vue 3.3 ou mais novo**: com um `vue` mais antigo no `package.json`, suba-o antes (o `zapmizer:check` avisa).
+
+A partir da v0.1.3 os tipos do embed resolvem também com `moduleResolution: node` no `tsconfig.json`: não acrescente `paths` para o `@zapmizer/embed` nem mexa no `tsconfig.json` por causa dele. Com uma tag anterior, o `vue-tsc` de um app em `moduleResolution: node` não acha os tipos: suba para a v0.1.3 (o `zapmizer:check` avisa em `embed_package`).
 
 Monte o `InboxScreen` numa página autenticada. Num app Inertia (Breeze ou Jetstream com Vue):
 
@@ -150,7 +152,7 @@ import InboxScreen from '@/components/zapmizer/InboxScreen.vue';
 - Sem conexão, o componente mostra o botão de conectar. Conectou, a caixa abre. Uma conexão revogada, ou anterior à caixa (`missing_ability`), volta ao botão.
 - Com o Ziggy no app, as URLs saem do `route()`. Sem ele, de `resources/js/composables/zapmizerRoute.ts`, com o prefixo padrão `/zapmizer`.
 
-Logout, nas duas pontas ([logout-e-multiaba.md](https://github.com/zapmizer/embed/blob/v0.1.2/docs/logout-e-multiaba.md) do embed):
+Logout, nas duas pontas ([logout-e-multiaba.md](https://github.com/zapmizer/embed/blob/v0.1.3/docs/logout-e-multiaba.md) do embed):
 
 ```ts
 // resources/js/app.ts (ou app.js), uma vez por aba
@@ -225,7 +227,7 @@ Sai com código diferente de zero quando algo crítico falha. A única chamada e
 | `connectable` | o model que o resolver usa implementa `Connectable` | sim |
 | `connect_routes` | rotas do connect e do webhook registradas | sim |
 | `inbox_routes` | rotas da caixa registradas, com `ZAPMIZER_INBOX_ENABLED=true` | sim |
-| `embed_package` | `@zapmizer/embed` no `package.json`, com tag fixa | sim sem o pacote; aviso sem tag |
+| `embed_package` | `@zapmizer/embed` no `package.json`, com tag fixa a partir da v0.1.3 | sim sem o pacote; aviso sem tag ou com tag anterior à v0.1.3 |
 | `vue_version` | aparece só com a caixa ligada e um `vue` < 3.3 no `package.json` | não (aviso) |
 | `embed_brand` | `VITE_ZAPMIZER_BRAND` do `.env` igual à marca da config (a do deploy da `ZAPMIZER_BASE_URI`) | sim, com a caixa ligada |
 | `app_url` | `APP_URL` absoluto; aviso com `http` ou host local | sim só se não for URL |
@@ -256,7 +258,7 @@ No JSON, cada item traz `id`, `status` (`ok`, `fail`, `warn` ou `skip`), `messag
 
 ## Sem Inertia/Vue
 
-As rotas da lib (connect e caixa) servem a qualquer front. Numa página Blade, com o Vite do app e só o `@zapmizer/embed` instalado (`npm install github:zapmizer/embed#v0.1.2`, ou o gerenciador do lockfile), são três peças: a página, o script da página e o logout no layout.
+As rotas da lib (connect e caixa) servem a qualquer front. Numa página Blade, com o Vite do app e só o `@zapmizer/embed` instalado (`npm install github:zapmizer/embed#v0.1.3`, ou o gerenciador do lockfile), são três peças: a página, o script da página e o logout no layout.
 
 A página:
 
@@ -451,7 +453,7 @@ document.addEventListener('submit', (event) => {
 
 - Ponha `resources/js/zapmizer.js` e `resources/js/zapmizer-logout.js` no `input` do `laravel-vite-plugin` em `vite.config.js`.
 - Os `status` do popup que não conectam são `denied`, `plan_limit`, `subscription_required`, `invalid_state`, `exchange_failed`, `rate_limited`, `team_already_connected` e `no_connectable`; o `message` que vem junto já é um texto para a pessoa.
-- O guia do front do embed: [caixa-de-entrada.md](https://github.com/zapmizer/embed/blob/v0.1.2/docs/caixa-de-entrada.md) e [backend.md](https://github.com/zapmizer/embed/blob/v0.1.2/docs/backend.md).
+- O guia do front do embed: [caixa-de-entrada.md](https://github.com/zapmizer/embed/blob/v0.1.3/docs/caixa-de-entrada.md) e [backend.md](https://github.com/zapmizer/embed/blob/v0.1.3/docs/backend.md).
 
 ## As rotas da caixa
 

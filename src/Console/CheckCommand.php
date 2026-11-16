@@ -309,9 +309,19 @@ class CheckCommand extends Command
             $this->record('vue_version', self::WARN, "o package.json declara vue {$vue}: o @zapmizer/embed/vue pede vue >= 3.3", 'Suba o vue para ^3.3 (o InboxScreen usa @zapmizer/embed/vue).');
         }
 
-        preg_match('/#(v\d+\.\d+\.\d+)$/', $version, $tag) === 1
-            ? $this->record('embed_package', self::OK, InstallCommand::EMBED_PACKAGE . " {$tag[1]} no package.json")
-            : $this->record('embed_package', self::WARN, InstallCommand::EMBED_PACKAGE . " sem tag fixa ({$version})", 'Fixe a tag: ' . InstallCommand::EMBED_VERSION);
+        if (preg_match('/#(v\d+\.\d+\.\d+)$/', $version, $tag) !== 1) {
+            $this->record('embed_package', self::WARN, InstallCommand::EMBED_PACKAGE . " sem tag fixa ({$version})", 'Fixe a tag: ' . InstallCommand::EMBED_VERSION);
+
+            return;
+        }
+
+        $wanted = substr(InstallCommand::EMBED_VERSION, (int) strrpos(InstallCommand::EMBED_VERSION, '#') + 1);
+
+        // Before v0.1.3 the package's types only resolved through `exports`:
+        // an app on `moduleResolution: node` got none for @zapmizer/embed/*.
+        version_compare(ltrim($tag[1], 'v'), ltrim($wanted, 'v'), '<')
+            ? $this->record('embed_package', self::WARN, InstallCommand::EMBED_PACKAGE . " {$tag[1]} no package.json: atualize para {$wanted}: tipos com moduleResolution node", 'Troque a dependência por ' . InstallCommand::EMBED_VERSION . ' (sem mexer no tsconfig por causa dos tipos do embed).')
+            : $this->record('embed_package', self::OK, InstallCommand::EMBED_PACKAGE . " {$tag[1]} no package.json");
     }
 
     /**

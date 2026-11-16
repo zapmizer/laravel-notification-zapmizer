@@ -27,7 +27,7 @@ class InstallCommand extends Command
 {
     public const EMBED_PACKAGE = '@zapmizer/embed';
 
-    public const EMBED_VERSION = 'github:zapmizer/embed#v0.1.2';
+    public const EMBED_VERSION = 'github:zapmizer/embed#v0.1.3';
 
     /**
      * @var string

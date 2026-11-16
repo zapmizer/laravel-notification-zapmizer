@@ -30,6 +30,8 @@ Zapmizer validates `webhook_url` the way it validates `redirect_uri`: **https in
 
 ## 2. Package setup
 
+The quick way is `php artisan zapmizer:install --model=App\\Models\\User` (add `--inbox` for the embedded inbox): it publishes the config and the migration, adds the missing `ZAPMIZER_*` keys to `.env` and `.env.example`, makes the model `Connectable` and prints what is left. `php artisan zapmizer:check` verifies the result. See [instalar.md](instalar.md) (Portuguese). By hand:
+
 ```bash
 php artisan vendor:publish --provider="NotificationChannels\Zapmizer\ZapmizerServiceProvider" --tag=config
 php artisan vendor:publish --provider="NotificationChannels\Zapmizer\ZapmizerServiceProvider" --tag=zapmizer-migrations-connect
@@ -298,7 +300,7 @@ A connect button, a connection panel and the composable that loads the state shi
 php artisan vendor:publish --provider="NotificationChannels\Zapmizer\ZapmizerServiceProvider" --tag=zapmizer-wizard
 ```
 
-This copies into `resources/js/`:
+This copies into `resources/js/` (`zapmizer:install --inbox` copies the same set):
 
 - `components/zapmizer/ConnectButton.vue` — opens the popup, listens to its `postMessage` (checking `event.origin` and `source === 'zapmizer-connect'`), shows a message per `status`, and has a "Já conectei" button for a popup that was closed by hand (emits `recheck`). It emits `connected` on `ok` and on `webhook_failed`, which also shows the warning that the number cannot receive.
 - `components/zapmizer/ConnectionPanel.vue` — the connected number, its live state (from `show?live=1`), a "Religar número" button (when the connection is active and `state` is `disconnected`, `off` or `qr_pending`; it calls `relinkZapmizer()` and listens to the `zapmizer-reconnect` popup), the warning "this number sends but does not receive" when `webhook_id` is set and `has_webhook_secret === false`, "Trocar número" (a new connect, emits `reconnect`) and disconnect.
@@ -328,10 +330,13 @@ onMounted(startPolling);
 </template>
 ```
 - `types/zapmizer.ts` — `ZapmizerConnection`, `ZapmizerConnectStatus`, `ZapmizerConnectMessage`, `ZapmizerReconnectStatus`, `ZapmizerReconnectMessage`, `ZapmizerRelinkResult`.
+- `components/zapmizer/InboxScreen.vue` — the embedded inbox over the package's inbox routes (`zapmizer.inbox.enabled`), with `@zapmizer/embed/vue`. Without a connection, or when the session asks for a new connect, it shows `ConnectButton`. See [instalar.md](instalar.md).
+- `composables/zapmizerEmbed.ts` — the `openSession` and `keepAlive` of `@zapmizer/embed` against those routes (with Laravel's CSRF), `listenToZapmizerLogout()` and `endZapmizerEmbeds()`.
+- `composables/zapmizerRoute.ts` — the package's URLs: Ziggy's `route()` when the app has it, else the paths under the default `/zapmizer` prefix.
 
 The lasting warning of a `webhook_failed` is the panel's: the button emits `connected`, the screen switches to the panel, and the button's warning goes with it.
 
-They expect `axios`, `lucide-vue-next` and Ziggy's `route()`; the markup uses utility classes from the app they came from (`gp-*`) — restyle them as yours. The popup pages are Blade views you can publish with `--tag=views` (`resources/views/vendor/zapmizer/connect-result.blade.php`, `connect-wait.blade.php` and `reconnect-result.blade.php`).
+They expect `axios` and `lucide-vue-next` (and `@zapmizer/embed` for the inbox screen); Ziggy's `route()` is used when present, not required; the markup uses utility classes from the app they came from (`gp-*`) — restyle them as yours. The popup pages are Blade views you can publish with `--tag=views` (`resources/views/vendor/zapmizer/connect-result.blade.php`, `connect-wait.blade.php` and `reconnect-result.blade.php`).
 
 ## 6. Receiving messages: the signed webhook
 

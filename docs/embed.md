@@ -17,7 +17,9 @@ EmbedSessionResponse                       200 {url, origin, resume_url, resume_
                                            ou {code} com o status certo
 ```
 
-A lib não registra rota de embed. A rota precisa do telefone do contato, de quem é o usuário, da aparência validada, da permissão e do throttle do seu app, e nada disso se repete entre apps. O que se repete é a resposta, e é isso que a `EmbedSessionResponse` faz: o controller devolve o objeto (ele é `Responsable`) e o Laravel monta o JSON.
+A conversa não tem rota da lib: ela precisa do telefone do contato, de quem é o usuário, da aparência validada, da permissão e do throttle do seu app, e nada disso se repete entre apps. O que se repete é a resposta, e é isso que a `EmbedSessionResponse` faz: o controller devolve o objeto (ele é `Responsable`) e o Laravel monta o JSON.
+
+A caixa de entrada tem rota pronta, opt-in: com `ZAPMIZER_INBOX_ENABLED=true` (o `zapmizer:install --inbox` liga), a lib registra `zapmizer.inbox.session` e `zapmizer.inbox.keepalive`, que abrem a caixa da conexão do model do `zapmizer.connect.resolver` com o usuário logado como atendente e respondem pela `EmbedSessionResponse`. Veja [instalar.md](instalar.md#as-rotas-da-caixa). Para outra regra (outro dono, aparência, permissão), deixe-a desligada e escreva a sua rota como abaixo.
 
 ## 2. A rota do app
 

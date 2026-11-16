@@ -334,6 +334,16 @@ class ConnectController extends Controller
             ]);
         }
 
+        if ($token->hasUnreadableWebhookVersion()) {
+            // A webhook_url the team already had keeps its version: the
+            // session's `webhook_version` only applies to a new webhook.
+            Log::warning('zapmizer: the connection\'s webhook delivers in version ' . $token->webhookVersion . ', which this version of the package does not read: MessageReceived will not fire for this connection. Switch that webhook to version ' . InstanceClient::LEGACY_WEBHOOK_VERSION . ' on Zapmizer\'s Webhooks screen.', [
+                'connection_id' => $connection->getKey(),
+                'webhook_id' => $connection->webhook_id,
+                'webhook_version' => $token->webhookVersion,
+            ]);
+        }
+
         if ($previousToken !== null && !hash_equals($previousToken, $token->token)) {
             $this->revokePreviousToken($connection, $previousToken);
         }

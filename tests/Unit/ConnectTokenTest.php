@@ -38,6 +38,27 @@ class ConnectTokenTest extends TestCase
         $this->assertTrue($token->hasNumber());
     }
 
+    /** @dataProvider webhookVersions */
+    #[DataProvider('webhookVersions')]
+    public function testTheWebhookVersionIsReadAndNullWhenAbsent(array $overrides, ?string $version, bool $unreadable)
+    {
+        $token = ConnectToken::fromArray($this->payload($overrides));
+
+        $this->assertSame($version, $token->webhookVersion);
+        $this->assertSame($unreadable, $token->hasUnreadableWebhookVersion());
+    }
+
+    public static function webhookVersions(): array
+    {
+        return [
+            'absent (Zapmizer before 1.148.17)' => [[], null, false],
+            'null (no webhook)' => [['webhook_version' => null], null, false],
+            '2024-02-27' => [['webhook_version' => '2024-02-27'], '2024-02-27', false],
+            '2026-10-20 (a reused webhook keeps its version)' => [['webhook_version' => '2026-10-20'], '2026-10-20', true],
+            'not a string' => [['webhook_version' => 20261020], null, false],
+        ];
+    }
+
     public function testTheConstructorTakesTheUserSecond()
     {
         $token = new ConnectToken('1|sanctum', 3, 7, 'Acme');

@@ -186,13 +186,12 @@ class ConnectController extends Controller
 
         // One connectable per Zapmizer team: two of them would register two
         // webhooks and every message would fire on both tenants.
-        if ($token->teamId !== null && $this->teamConnectedElsewhere($connection, $token->teamId)) {
+        if ($this->teamConnectedElsewhere($connection, $token->teamId)) {
             return $this->result('team_already_connected');
         }
 
         $switchingTeam = $connection->exists
             && $connection->zapmizer_team_id !== null
-            && $token->teamId !== null
             && $connection->zapmizer_team_id !== $token->teamId;
 
         // A webhook replaced on the same team (new id): the old one would keep

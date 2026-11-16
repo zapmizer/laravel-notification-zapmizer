@@ -3,14 +3,17 @@
 namespace NotificationChannels\Zapmizer\Connect;
 
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
+use NotificationChannels\Zapmizer\Support\Payload;
 
 /**
  * Class ConnectToken.
  *
  * Result of exchanging the callback code: the team's Sanctum token on
- * Zapmizer, which team authorized, and — since the hosted page pairs the
- * number before handing out the code — the paired number, its instance and
- * the webhook Zapmizer registered for the session's `webhook_url`.
+ * Zapmizer, the user and team that authorized it, and — since the hosted
+ * page pairs the number before handing out the code — the paired number,
+ * its instance and the webhook Zapmizer registered for the session's
+ * `webhook_url`. `hasNumber()` is false when the number ceased to exist
+ * between the approval and the exchange.
  *
  * `webhookSecret` is null when no webhook was requested AND when Zapmizer
  * reused a webhook the team already had for that URL (the secret is only
@@ -21,7 +24,8 @@ final class ConnectToken
 {
     public function __construct(
         public readonly string $token,
-        public readonly ?int $teamId = null,
+        public readonly int $userId,
+        public readonly int $teamId,
         public readonly ?string $teamName = null,
         public readonly ?string $phoneNumber = null,
         public readonly ?int $botInstanceId = null,
@@ -41,9 +45,22 @@ final class ConnectToken
             throw ZapmizerConnectException::unexpectedResponse('missing token');
         }
 
+        $userId = Payload::positiveId($data['user_id'] ?? null);
+
+        if ($userId === null) {
+            throw ZapmizerConnectException::unexpectedResponse('invalid user_id');
+        }
+
+        $teamId = Payload::positiveId($data['team_id'] ?? null);
+
+        if ($teamId === null) {
+            throw ZapmizerConnectException::unexpectedResponse('invalid team_id');
+        }
+
         return new self(
             token: (string) $data['token'],
-            teamId: isset($data['team_id']) ? (int) $data['team_id'] : null,
+            userId: $userId,
+            teamId: $teamId,
             teamName: isset($data['team_name']) ? (string) $data['team_name'] : null,
             phoneNumber: filled($data['phone_number'] ?? null) ? (string) $data['phone_number'] : null,
             botInstanceId: isset($data['bot_instance_id']) ? (int) $data['bot_instance_id'] : null,
@@ -60,5 +77,10 @@ final class ConnectToken
     public function needsWebhookSecret(): bool
     {
         return $this->webhookId !== null && $this->webhookSecret === null;
+    }
+
+    public function hasNumber(): bool
+    {
+        return $this->phoneNumber !== null && $this->botInstanceId !== null;
     }
 }

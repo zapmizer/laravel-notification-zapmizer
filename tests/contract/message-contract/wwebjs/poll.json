@@ -1,0 +1,253 @@
+{
+    "raw": {
+        "_data": {
+            "id": {
+                "fromMe": false,
+                "remote": "120363000000000001@g.us",
+                "id": "3AAAAA00000000000001",
+                "participant": {
+                    "server": "lid",
+                    "user": "100000000000001",
+                    "_serialized": "100000000000001@lid"
+                },
+                "$1": "false_120363000000000001@g.us_3AAAAA00000000000001_100000000000001@lid",
+                "_serialized": "false_120363000000000001@g.us_3AAAAA00000000000001_100000000000001@lid"
+            },
+            "rowId": 1000000001,
+            "viewed": false,
+            "type": "poll_creation",
+            "t": 1760000000,
+            "from": {
+                "server": "g.us",
+                "user": "120363000000000001",
+                "_serialized": "120363000000000001@g.us"
+            },
+            "to": {
+                "server": "c.us",
+                "user": "5511900000000",
+                "_serialized": "5511900000000@c.us"
+            },
+            "author": "5511911111111@c.us",
+            "ack": 0,
+            "invis": true,
+            "star": false,
+            "kicNotified": false,
+            "isFromTemplate": false,
+            "isAdsMedia": false,
+            "pollName": "teste mensagem exemplo texto simples conteudo neutro aqui linha valor item produto pedido% contato atendimento informacao padrao modelo *amostra frase rapida* resposta teste mensagem exemplo texto simples conteudo neutro aqui linha",
+            "pollOptions": [
+                {
+                    "name": "valor item produto pedido contato atendimento informacao padrao",
+                    "localId": 0
+                },
+                {
+                    "name": "modelo amostra frase rapida resposta teste mensagem",
+                    "localId": 1
+                },
+                {
+                    "name": "exemplo texto simples conteudo neutro",
+                    "localId": 2
+                },
+                {
+                    "name": "aqui linha valor item produto pedido contato atendimento",
+                    "localId": 3
+                },
+                {
+                    "name": "informacao padrao modelo amostra frase rapida",
+                    "localId": 4
+                },
+                {
+                    "name": "resposta teste mensagem exemplo",
+                    "localId": 5
+                }
+            ],
+            "pollSelectableOptionsCount": 0,
+            "pollInvalidated": false,
+            "pollContentType": "TEXT",
+            "pollType": "POLL",
+            "pollVotesSnapshot": {
+                "pollVotes": []
+            },
+            "latestEditMsgKey": null,
+            "latestEditSenderTimestampMs": null,
+            "broadcast": false,
+            "mentionedJidList": [],
+            "groupMentions": [],
+            "eventInvalidated": false,
+            "isVcardOverMmsDocument": false,
+            "isForwarded": false,
+            "isQuestion": false,
+            "isSpoiler": false,
+            "questionReplyQuotedMessage": null,
+            "questionResponsesCount": 0,
+            "readQuestionResponsesCount": 0,
+            "forwardsCount": 0,
+            "hasReaction": false,
+            "newsletterAdminProfile": null,
+            "viewMode": "VISIBLE",
+            "messageSecret": [
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            ],
+            "productHeaderImageRejected": false,
+            "lastPlaybackProgress": 0,
+            "isDynamicReplyButtonsMsg": false,
+            "isCarouselCard": false,
+            "parentMsgId": null,
+            "callSilenceReason": null,
+            "isVideoCall": false,
+            "callDuration": null,
+            "callCreator": null,
+            "callParticipants": null,
+            "isCallLink": null,
+            "callLinkToken": null,
+            "terminatedByDeviceSwitch": null,
+            "selfOtherDeviceConnected": null,
+            "bytesSent": null,
+            "bytesReceived": null,
+            "isMdHistoryMsg": true,
+            "stickerSentTs": 0,
+            "isAvatar": false,
+            "lastUpdateFromServerTs": 0,
+            "invokedBotWid": null,
+            "botTargetSenderJid": null,
+            "metaFrom": null,
+            "bizBotType": null,
+            "botDeepLinkToken": null,
+            "aiMediaCollectionInfo": null,
+            "expectedImageCount": null,
+            "expectedVideoCount": null,
+            "botResponseTargetId": null,
+            "botResponseId": null,
+            "botPluginType": null,
+            "botPluginReferenceIndex": null,
+            "botPluginSearchProvider": null,
+            "botPluginSearchUrl": null,
+            "botPluginSearchQuery": null,
+            "botPluginMaybeParent": false,
+            "botReelPluginThumbnailCdnUrl": null,
+            "botMessageDisclaimerText": null,
+            "botSessionTransparencyType": null,
+            "botMsgBodyType": null,
+            "botModeSelection": null,
+            "botModeOverride": null,
+            "hatchMetadataSync": null,
+            "requiresDirectConnection": null,
+            "bizContentPlaceholderType": null,
+            "hostedBizEncStateMismatch": false,
+            "senderOrRecipientAccountTypeHosted": false,
+            "placeholderCreatedWhenAccountIsHosted": false,
+            "galaxyFlowDisabled": false,
+            "groupHistoryBundleMessageKey": null,
+            "groupHistoryBundleMetadata": null,
+            "groupHistoryIndividualMessageInfo": null,
+            "nonJidMentions": null,
+            "links": [],
+            "reactions": null
+        },
+        "id": {
+            "fromMe": false,
+            "remote": "120363000000000001@g.us",
+            "id": "3AAAAA00000000000001",
+            "participant": {
+                "server": "lid",
+                "user": "100000000000001",
+                "_serialized": "100000000000001@lid"
+            },
+            "$1": "false_120363000000000001@g.us_3AAAAA00000000000001_100000000000001@lid",
+            "_serialized": "false_120363000000000001@g.us_3AAAAA00000000000001_100000000000001@lid"
+        },
+        "ack": 0,
+        "hasMedia": false,
+        "body": "teste mensagem exemplo texto simples conteudo neutro aqui linha valor item produto pedido% contato atendimento informacao padrao modelo *amostra frase rapida* resposta teste mensagem exemplo texto simples conteudo neutro aqui linha",
+        "type": "poll_creation",
+        "timestamp": 1760000000,
+        "from": "120363000000000001@g.us",
+        "to": "5511900000000@c.us",
+        "author": "5511911111111@c.us",
+        "deviceType": "ios",
+        "isForwarded": false,
+        "forwardingScore": 0,
+        "isStatus": false,
+        "isStarred": false,
+        "broadcast": false,
+        "fromMe": false,
+        "hasQuotedMsg": false,
+        "hasReaction": false,
+        "vCards": [],
+        "mentionedIds": [],
+        "groupMentions": [],
+        "isGif": false,
+        "links": [],
+        "pollName": "teste mensagem exemplo texto simples conteudo neutro aqui linha valor item produto pedido% contato atendimento informacao padrao modelo *amostra frase rapida* resposta teste mensagem exemplo texto simples conteudo neutro aqui linha",
+        "pollOptions": [
+            {
+                "name": "valor item produto pedido contato atendimento informacao padrao",
+                "localId": 0
+            },
+            {
+                "name": "modelo amostra frase rapida resposta teste mensagem",
+                "localId": 1
+            },
+            {
+                "name": "exemplo texto simples conteudo neutro",
+                "localId": 2
+            },
+            {
+                "name": "aqui linha valor item produto pedido contato atendimento",
+                "localId": 3
+            },
+            {
+                "name": "informacao padrao modelo amostra frase rapida",
+                "localId": 4
+            },
+            {
+                "name": "resposta teste mensagem exemplo",
+                "localId": 5
+            }
+        ],
+        "allowMultipleAnswers": true,
+        "pollInvalidated": false,
+        "messageSecret": [
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+        ],
+        "cid": "120363000000000001@g.us"
+    },
+    "message": {
+        "id": "3AAAAA00000000000001",
+        "serialized_id": "false_120363000000000001@g.us_3AAAAA00000000000001_100000000000001@lid",
+        "chat": "120363000000000001@g.us",
+        "sender": "5511911111111@c.us",
+        "sender_name": null,
+        "from_me": false,
+        "from_me_other_device": false,
+        "timestamp": 1760000000,
+        "type": "poll",
+        "text": "teste mensagem exemplo texto simples conteudo neutro aqui linha valor item produto pedido% contato atendimento informacao padrao modelo *amostra frase rapida* resposta teste mensagem exemplo texto simples conteudo neutro aqui linha",
+        "quoted": null,
+        "forwarded": false,
+        "view_once": false,
+        "mentions": [],
+        "media": null,
+        "location": null,
+        "contacts": null,
+        "poll": {
+            "name": "teste mensagem exemplo texto simples conteudo neutro aqui linha valor item produto pedido% contato atendimento informacao padrao modelo *amostra frase rapida* resposta teste mensagem exemplo texto simples conteudo neutro aqui linha",
+            "options": [
+                "valor item produto pedido contato atendimento informacao padrao",
+                "modelo amostra frase rapida resposta teste mensagem",
+                "exemplo texto simples conteudo neutro",
+                "aqui linha valor item produto pedido contato atendimento",
+                "informacao padrao modelo amostra frase rapida",
+                "resposta teste mensagem exemplo"
+            ],
+            "multiple": true
+        },
+        "reply": null,
+        "link_preview": null,
+        "ack": 0,
+        "edited": false,
+        "reactions": [],
+        "received_at": null,
+        "native_type": "poll_creation"
+    }
+}

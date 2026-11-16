@@ -2,51 +2,60 @@
 
 namespace NotificationChannels\Zapmizer\Connect;
 
-use GuzzleHttp\Client as HttpClient;
-use GuzzleHttp\Exception\GuzzleException;
+use Illuminate\Container\Container;
+use InvalidArgumentException;
+use NotificationChannels\Zapmizer\Connect\Concerns\BuildsZapmizerRequests;
+use NotificationChannels\Zapmizer\Contracts\Transport;
+use NotificationChannels\Zapmizer\Exceptions\ErrorCode;
 use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
+use NotificationChannels\Zapmizer\Messages\Message;
+use NotificationChannels\Zapmizer\Support\ApiError;
 use NotificationChannels\Zapmizer\Support\JsonResponse;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamInterface;
+use RuntimeException;
+use Throwable;
 
 /**
  * Class InstanceClient.
  *
- * Zapmizer's instance-connection and webhook endpoints, authenticated by
- * the connected team's token (the one the connect flow stored). Pairing
- * itself happens on Zapmizer's hosted page — this client only reads the
- * state of the paired instance and manages the webhook. The token is
- * always per connection — there is no single-tenant fallback on purpose:
- * resolve it through `ZapmizerConnection::instanceClient()`.
+ * Zapmizer's endpoints that act for one connection, authenticated by the
+ * connected team's token (the one the connect flow stored). Pairing itself
+ * happens on Zapmizer's hosted page, not here. The token is always per
+ * connection — there is no single-tenant fallback on purpose: resolve it
+ * through `ZapmizerConnection::instanceClient()`.
  */
 class InstanceClient
 {
-    /**
-     * The `api-version` the message endpoints are pinned to. From
-     * `2026-10-20` on, Zapmizer answers `/whatsapp-messages` and fires the
-     * webhook in its message contract, a shape this version does not read:
-     * pinning keeps a newer `zapmizer.api_version` from turning every
-     * synced message into nothing and every new webhook silent.
-     */
-    public const LEGACY_MESSAGE_API_VERSION = '2025-06-27';
+    use BuildsZapmizerRequests;
 
-    /** The webhook version whose `message` event this version reads. */
+    /**
+     * The version of Zapmizer's message contract, which `syncMessages()` and
+     * `createWebhook()` always ask for, whatever `zapmizer.api_version` says.
+     */
+    public const MESSAGE_CONTRACT_VERSION = Message::CONTRACT_VERSION;
+
+    /**
+     * The webhook version before the message contract: messages come as
+     * `message`, in WhatsApp Web's shape, translated by the package.
+     * Deprecated by Zapmizer, with the shutdown date still to be announced.
+     */
     public const LEGACY_WEBHOOK_VERSION = '2024-02-27';
 
-    protected HttpClient $http;
+    protected Transport $transport;
 
     protected string $apiBaseUri;
 
     public function __construct(
         protected string $token,
-        ?HttpClient $httpClient = null,
+        ?Transport $transport = null,
         ?string $apiBaseUri = null,
         protected ?string $apiVersion = null,
     ) {
-        $this->http = $httpClient ?? new HttpClient();
+        $this->transport = $transport ?? Container::getInstance()->make(Transport::class);
         $this->apiBaseUri = rtrim($apiBaseUri ?? 'https://app.zapmizer.com/api/', '/');
     }
 
@@ -71,8 +80,8 @@ class InstanceClient
 
         $this->guardUnauthorized($response);
 
-        if ($response->getStatusCode() >= 400 && $response->getStatusCode() < 500) {
-            throw new InstanceGoneException("Instance {$id} is gone on Zapmizer.");
+        if ($response->getStatusCode() === 404) {
+            throw new InstanceGoneException(ApiError::from($response), $id);
         }
 
         $this->guardFailure($response);
@@ -81,16 +90,238 @@ class InstanceClient
     }
 
     /**
+     * The number as the API sees it (GET /bot-instances/{id}): `isOnline`
+     * and whether it is official (`supportsTemplates`). It is the way to
+     * confirm the number is up on any account: an official number has no
+     * `/connection` route. 404: the number does not exist, or it is not
+     * this connection's.
+     *
+     * @throws ZapmizerConnectException
+     */
+    public function instance(int $botInstanceId): BotInstance
+    {
+        $response = $this->request('GET', "/bot-instances/{$botInstanceId}");
+
+        $this->guardUnauthorized($response);
+
+        if ($response->getStatusCode() === 404) {
+            throw new InstanceGoneException(ApiError::from($response), $botInstanceId);
+        }
+
+        $this->guardFailure($response);
+
+        $data = $this->decode($response)['data'] ?? null;
+
+        if (!is_array($data) || array_is_list($data)) {
+            throw ZapmizerConnectException::unexpectedResponse('bot instance response carries no `data` object');
+        }
+
+        return BotInstance::fromArray($data);
+    }
+
+    /**
+     * The numbers the token sees (GET /bot-instances). With a connect token
+     * that is the connection's number only: zero or one item. Only the first
+     * page is read.
+     *
+     * @return array<int, BotInstance>
+     *
+     * @throws ZapmizerConnectException
+     */
+    public function instances(): array
+    {
+        $response = $this->request('GET', '/bot-instances');
+
+        $this->guardUnauthorized($response);
+        $this->guardFailure($response);
+
+        $data = $this->decode($response)['data'] ?? null;
+
+        if (!is_array($data) || !array_is_list($data)) {
+            throw ZapmizerConnectException::unexpectedResponse('bot instance list carries no `data` list');
+        }
+
+        return array_map(function (mixed $item): BotInstance {
+            if (!is_array($item)) {
+                throw ZapmizerConnectException::unexpectedResponse('bot instance list carries an item that is not an object');
+            }
+
+            return BotInstance::fromArray($item);
+        }, $data);
+    }
+
+    /**
+     * The settings of one conversation of the number
+     * (GET /bot-instances/{id}/conversation-settings). `$wid` is the contact
+     * (`5581999998888` or `...@c.us`) or the group (`...@g.us`); Zapmizer
+     * validates it (422). 404: the number does not exist, or it is not this
+     * connection's.
+     *
+     * @throws ZapmizerConnectException
+     */
+    public function conversationSettings(int $botInstanceId, string $wid): ConversationSettings
+    {
+        return $this->conversationSettingsFrom(
+            $this->request('GET', "/bot-instances/{$botInstanceId}/conversation-settings", ['query' => ['wid' => $wid]]),
+            $botInstanceId,
+        );
+    }
+
+    /**
+     * Change the settings of one conversation
+     * (PUT /bot-instances/{id}/conversation-settings).
+     * `$autoTranscribeAudio` on transcribes every audio received in the
+     * conversation and delivers the text in the `message_transcribed`
+     * webhook event. The number with and without the Brazilian ninth digit
+     * is the same conversation.
+     *
+     * @throws ZapmizerConnectException
+     */
+    public function updateConversationSettings(int $botInstanceId, string $wid, bool $autoTranscribeAudio): ConversationSettings
+    {
+        return $this->conversationSettingsFrom(
+            $this->request('PUT', "/bot-instances/{$botInstanceId}/conversation-settings", [
+                'json' => ['wid' => $wid, 'auto_transcribe_audio' => $autoTranscribeAudio],
+            ]),
+            $botInstanceId,
+        );
+    }
+
+    /**
+     * @throws ZapmizerConnectException
+     */
+    private function conversationSettingsFrom(ResponseInterface $response, int $botInstanceId): ConversationSettings
+    {
+        $this->guardUnauthorized($response);
+
+        if ($response->getStatusCode() === 404) {
+            throw new InstanceGoneException(ApiError::from($response), $botInstanceId);
+        }
+
+        $this->guardFailure($response);
+
+        return ConversationSettings::fromArray($this->decode($response));
+    }
+
+    /**
+     * @throws InvalidArgumentException
+     * @throws ZapmizerConnectException
+     */
+    public function reconnect(int $botInstanceId, string $redirectUri, ?string $state = null, ?int $expiresIn = null): ReconnectResult
+    {
+        $this->guardState($state);
+
+        $response = $this->request('POST', "/bot-instances/{$botInstanceId}/reconnect", [
+            'json' => $this->withoutNulls([
+                'redirect_uri' => $redirectUri,
+                'state' => $state,
+                'expires_in' => $this->clampExpiresIn($expiresIn),
+            ]),
+        ]);
+
+        $this->guardUnauthorized($response);
+
+        $status = $response->getStatusCode();
+
+        if ($status === 404) {
+            throw new InstanceGoneException(ApiError::from($response), $botInstanceId);
+        }
+
+        if ($status === 409) {
+            $error = ApiError::from($response);
+
+            if ($error->error === ErrorCode::NEEDS_RECONNECT) {
+                return ReconnectResult::fromNeedsReconnect($error->payload);
+            }
+
+            throw ZapmizerApi::failure($error);
+        }
+
+        $this->guardFailure($response);
+
+        if ($status !== 200 && $status !== 202) {
+            throw ZapmizerConnectException::unexpectedResponse("HTTP {$status} on the reconnect endpoint");
+        }
+
+        $this->decode($response);
+
+        return new ReconnectResult($status === 200 ? ReconnectResult::ONLINE : ReconnectResult::STARTING);
+    }
+
+    /**
+     * @throws ZapmizerConnectException
+     */
+    public function revokeToken(): void
+    {
+        $response = $this->request('DELETE', '/connect/token', expectsJson: false);
+
+        $status = $response->getStatusCode();
+
+        if ($status === 204 || $status === 401) {
+            return;
+        }
+
+        $this->guardFailure($response);
+
+        throw ZapmizerConnectException::unexpectedResponse("HTTP {$status} on the token revocation endpoint");
+    }
+
+    /**
+     * @param array<string, mixed> $appearance
+     *
+     * @throws ZapmizerConnectException
+     */
+    public function conversationSession(
+        string $phone,
+        string $parentOrigin,
+        array $appearance = [],
+        ?string $userId = null,
+        ?string $userName = null,
+        ?string $userEmail = null,
+    ): EmbedSession {
+        return $this->embedSession($this->withoutNulls([
+            'component' => 'conversation',
+            'phone' => $phone,
+            'parent_origin' => $parentOrigin,
+            'appearance' => $this->withoutNulls($appearance) ?: null,
+            'user' => $this->embedUser($userId, $userName, $userEmail),
+        ]));
+    }
+
+    /**
+     * @param array<string, mixed> $appearance
+     *
+     * @throws ZapmizerConnectException
+     */
+    public function inboxSession(
+        string $parentOrigin,
+        array $appearance = [],
+        ?string $userId = null,
+        ?string $userName = null,
+        ?string $userEmail = null,
+    ): EmbedSession {
+        return $this->embedSession($this->withoutNulls([
+            'component' => 'inbox',
+            'parent_origin' => $parentOrigin,
+            'appearance' => $this->withoutNulls($appearance) ?: null,
+            'user' => $this->embedUser($userId, $userName, $userEmail),
+        ]));
+    }
+
+    /**
      * Register a webhook receiver. Zapmizer returns the `secret` ONLY in this
-     * response — the caller must persist it.
+     * response — the caller must persist it. The webhook is created in the
+     * message contract (`version` and `api-version` `2026-10-20`); a Zapmizer
+     * before 1.148.17 ignores both and creates it in `2024-02-27`, which the
+     * package reads too.
      *
      * @throws ZapmizerConnectException
      */
     public function createWebhook(string $url): WebhookRegistration
     {
         $response = $this->request('POST', '/webhooks', [
-            'json' => ['url' => $url, 'enabled' => true, 'version' => self::LEGACY_WEBHOOK_VERSION],
-            'api_version' => self::LEGACY_MESSAGE_API_VERSION,
+            'json' => ['url' => $url, 'enabled' => true, 'version' => self::MESSAGE_CONTRACT_VERSION],
+            'api_version' => self::MESSAGE_CONTRACT_VERSION,
         ]);
 
         $this->guardUnauthorized($response);
@@ -139,8 +370,9 @@ class InstanceClient
      * `downloading` (ask again later — see `ZapmizerConnection::awaitMedia()`)
      * or `unavailable` (it will never come: outside the 600 s window from
      * `$timestamp`, a type Zapmizer does not download, a view-once message).
-     * On `attached` the bytes are streamed into a temporary file owned by the
-     * returned object — never held in memory as a string.
+     * On `attached` the bytes are copied into a temporary file owned by the
+     * returned object; on the way the transport keeps them in `php://temp`
+     * (memory up to 2 MB, disk beyond).
      *
      * A 200 here is binary by design, so the JSON guard the other endpoints
      * run through is skipped for it; 202 and 404 are JSON with `media_state`.
@@ -149,7 +381,9 @@ class InstanceClient
      * instance on Meta Cloud, which has no media endpoint) and 429 (over the
      * limit of 60 requests a minute per user and instance).
      *
-     * @param string $messageId `id._serialized` or `id.id` of the message
+     * @param string $messageId The message's `id` (`Message::$id`, WhatsApp's
+     *                          id; `id._serialized` of WhatsApp Web's object
+     *                          is accepted too)
      * @param int $timestamp The message's `timestamp` (seconds) — required:
      *                       the 600 s window Zapmizer keeps downloading in
      *                       is counted from it, and it must not be in the future
@@ -164,57 +398,23 @@ class InstanceClient
                 'message_id' => $messageId,
                 'timestamp' => $timestamp,
             ],
-            'stream' => true,
+            'connect_timeout' => ZapmizerApi::TRANSFER_CONNECT_TIMEOUT,
+            'timeout' => ZapmizerApi::TRANSFER_TIMEOUT,
         ], expectsJson: false);
 
-        $this->guardUnauthorized($response);
-
-        $status = $response->getStatusCode();
-
-        if ($status === 422) {
-            throw ZapmizerConnectException::mediaRejected($this->reasonFrom($response));
-        }
-
-        if ($status === 429) {
-            throw ZapmizerConnectException::mediaRateLimited(
-                $response->hasHeader('Retry-After') ? (int) $response->getHeaderLine('Retry-After') : null,
-            );
-        }
-
-        if ($status === 200) {
-            return MediaDownload::attached(
-                path: $this->spool($response->getBody()),
-                mimeType: $response->hasHeader('Content-Type') ? $response->getHeaderLine('Content-Type') : null,
-                filename: $this->filenameFrom($response->getHeaderLine('Content-Disposition')),
-                size: $response->hasHeader('Content-Length') ? (int) $response->getHeaderLine('Content-Length') : null,
-            );
-        }
-
-        if ($status === 202 || $status === 404) {
-            if (($problem = JsonResponse::problem($response)) !== null) {
-                throw ZapmizerConnectException::unexpectedResponse($problem);
-            }
-
-            return match ($this->decode($response)['media_state'] ?? null) {
-                MediaDownload::DOWNLOADING => MediaDownload::downloading(),
-                MediaDownload::UNAVAILABLE => MediaDownload::unavailable(),
-                // A 404 without `media_state`: the instance is not this team's.
-                default => $status === 404
-                    ? MediaDownload::unavailable()
-                    : throw ZapmizerConnectException::unexpectedResponse('media response carries no known `media_state`'),
-            };
-        }
-
-        $this->guardFailure($response);
-
-        throw ZapmizerConnectException::unexpectedResponse("HTTP {$status} on the media endpoint");
+        return $this->mediaFrom($response);
     }
 
     /**
      * Every message of the number stored after `$cursor` (the `cursor`
      * of the previous page). On the very first call, without a cursor, pass
-     * `$since` (seconds) so the whole history is not walked. Only for numbers
-     * by QR (a 422 otherwise); 429 is over the limit of 30 requests a minute.
+     * `$since` (seconds) so the whole history is not walked. Always asks for
+     * the message contract (`api-version: 2026-10-20`), which Zapmizer
+     * answers from 1.148.17 on, for numbers by QR and official ones; an
+     * older Zapmizer answers in WhatsApp Web's shape, which is translated,
+     * and refuses the official number with 422 (a `ZapmizerApiException`).
+     * 429 is over the limit of 30 requests a minute
+     * (`ZapmizerRateLimitedException`). See `SyncedMessages`.
      *
      * @throws ZapmizerConnectException
      */
@@ -227,7 +427,7 @@ class InstanceClient
                 'since' => $cursor === null ? $since : null,
                 'limit' => $limit,
             ], fn ($value) => $value !== null),
-            'api_version' => self::LEGACY_MESSAGE_API_VERSION,
+            'api_version' => self::MESSAGE_CONTRACT_VERSION,
         ]);
 
         $this->guardUnauthorized($response);
@@ -236,52 +436,125 @@ class InstanceClient
         return SyncedMessages::fromResponse($this->decode($response), $cursor);
     }
 
-    /**
-     * The reason of a JSON error answer: Laravel's `message`, plus the first
-     * of each validation error when there is one. The raw body otherwise.
-     */
-    protected function reasonFrom(ResponseInterface $response): string
+    protected function temporaryMediaPath(): ?string
     {
-        $body = (string) $response->getBody();
-        $payload = json_decode($body, true);
+        $path = @tempnam(sys_get_temp_dir(), 'zapmizer-media-');
 
-        if (!is_array($payload)) {
-            return trim($body);
+        return $path === false ? null : $path;
+    }
+
+    protected function mediaFrom(ResponseInterface $response): MediaDownload
+    {
+        $this->guardUnauthorized($response);
+
+        $status = $response->getStatusCode();
+
+        if ($status === 422) {
+            throw ZapmizerConnectException::mediaRejected(ApiError::from($response));
         }
 
-        $errors = array_map(
-            fn ($messages) => is_array($messages) ? (string) reset($messages) : (string) $messages,
-            $payload['errors'] ?? [],
-        );
+        if ($status === 429) {
+            throw ZapmizerConnectException::mediaRateLimited(ApiError::from($response));
+        }
 
-        return implode(' ', array_filter([$payload['message'] ?? null, ...array_values($errors)]))
-            ?: trim($body);
+        if ($status === 200) {
+            $path = $this->spool($response->getBody());
+            $size = $this->storedSize($response, $path);
+
+            return MediaDownload::attached(
+                path: $path,
+                mimeType: $response->hasHeader('Content-Type') ? $response->getHeaderLine('Content-Type') : null,
+                filename: $this->filenameFrom($response->getHeaderLine('Content-Disposition')),
+                size: $size,
+            );
+        }
+
+        if ($status === 202 || $status === 404) {
+            if (($problem = JsonResponse::problem($response)) !== null) {
+                throw ZapmizerConnectException::unexpectedResponse($problem);
+            }
+
+            return match ($this->decode($response)['media_state'] ?? null) {
+                MediaDownload::DOWNLOADING => MediaDownload::downloading(),
+                MediaDownload::UNAVAILABLE => MediaDownload::unavailable(),
+                default => $status === 404
+                    ? MediaDownload::unavailable()
+                    : throw ZapmizerConnectException::unexpectedResponse('media response carries no known `media_state`'),
+            };
+        }
+
+        $this->guardFailure($response);
+
+        throw ZapmizerConnectException::unexpectedResponse("HTTP {$status} on the media endpoint");
     }
 
     /**
-     * Copy the response body into a temporary file, chunk by chunk.
-     *
      * @throws ZapmizerConnectException
      */
     protected function spool(StreamInterface $body): string
     {
-        $path = tempnam(sys_get_temp_dir(), 'zapmizer-media-');
-        $file = $path !== false ? fopen($path, 'wb') : false;
+        if (!$body->isReadable()) {
+            throw ZapmizerConnectException::unexpectedResponse('the media body was lost before it could be stored');
+        }
 
-        if ($path === false || $file === false) {
-            throw ZapmizerConnectException::unexpectedResponse('could not create a temporary file for the media');
+        $path = $this->temporaryMediaPath();
+        $target = $path === null ? false : @fopen($path, 'wb');
+
+        if ($target === false) {
+            if ($path !== null) {
+                @unlink($path);
+            }
+
+            throw ZapmizerUnavailableException::dueTo();
         }
 
         try {
-            while (!$body->eof()) {
-                fwrite($file, $body->read(65536));
+            if ($body->isSeekable()) {
+                $body->rewind();
             }
-        } finally {
-            fclose($file);
-            $body->close();
+
+            while (!$body->eof()) {
+                $chunk = $body->read(65536);
+
+                if ($chunk === '') {
+                    break;
+                }
+
+                if (@fwrite($target, $chunk) !== strlen($chunk)) {
+                    throw new RuntimeException('Could not write the media to the temporary file.');
+                }
+            }
+        } catch (Throwable $exception) {
+            fclose($target);
+            @unlink($path);
+
+            throw $exception instanceof RuntimeException ? ZapmizerUnavailableException::dueTo($exception) : $exception;
         }
 
+        fclose($target);
+
         return $path;
+    }
+
+    protected function storedSize(ResponseInterface $response, string $path): int
+    {
+        clearstatcache(true, $path);
+        $size = (int) @filesize($path);
+        $expected = $response->hasHeader('Content-Length') && !$response->hasHeader('Transfer-Encoding')
+            ? (int) $response->getHeaderLine('Content-Length')
+            : null;
+
+        if ($expected !== null && $size < $expected) {
+            @unlink($path);
+
+            if ($size === 0 && !$response->getBody()->isSeekable()) {
+                throw ZapmizerConnectException::unexpectedResponse('the media body was lost before it could be stored');
+            }
+
+            throw ZapmizerUnavailableException::dueTo();
+        }
+
+        return $size;
     }
 
     /**
@@ -306,48 +579,43 @@ class InstanceClient
     }
 
     /**
-     * @param bool $expectsJson Off for the one endpoint whose 200 is binary
-     *                          (media). A redirect is still refused there —
-     *                          it means the token was rejected.
-     *
      * @throws ZapmizerConnectException
      */
+    private function embedSession(array $body): EmbedSession
+    {
+        $response = $this->request('POST', '/embed/sessions', ['json' => $body]);
+
+        $this->guardFailure($response);
+
+        if ($response->getStatusCode() !== 201) {
+            throw ZapmizerConnectException::unexpectedResponse("HTTP {$response->getStatusCode()} on the embed session endpoint");
+        }
+
+        return EmbedSession::fromArray($this->decode($response));
+    }
+
+    private function embedUser(?string $id, ?string $name, ?string $email): ?array
+    {
+        $user = array_filter(['id' => $id, 'name' => $name], fn (?string $value) => $value !== null && trim($value) !== '');
+        $email = trim((string) $email);
+
+        if ($email !== '' && filter_var($email, FILTER_VALIDATE_EMAIL) !== false) {
+            $user['email'] = $email;
+        }
+
+        return $user === [] ? null : $user;
+    }
+
     protected function request(string $method, string $path, array $options = [], bool $expectsJson = true): ResponseInterface
     {
-        $options['http_errors'] = false;
-        // Redirects are not followed: a refused credential redirects to the
-        // login page, and following it would pass an HTML 200 off as an answer.
-        $options['allow_redirects'] = false;
         // An endpoint whose shape depends on the version pins its own.
         $apiVersion = array_key_exists('api_version', $options) ? $options['api_version'] : $this->apiVersion;
         unset($options['api_version']);
-        $options['headers'] = array_merge($options['headers'] ?? [], array_filter([
+
+        return (new ZapmizerApi($this->transport))->send($method, $this->apiBaseUri . $path, $options, array_filter([
             'Authorization' => 'Bearer ' . $this->token,
-            'Accept' => 'application/json',
             'api-version' => $apiVersion,
-        ]));
-
-        try {
-            $response = $this->http->request($method, $this->apiBaseUri . $path, $options);
-        } catch (GuzzleException $exception) {
-            throw ZapmizerUnavailableException::dueTo($exception);
-        }
-
-        if ($response->getStatusCode() >= 500) {
-            throw ZapmizerUnavailableException::dueTo();
-        }
-
-        if ($response->getStatusCode() < 400) {
-            $problem = $expectsJson
-                ? JsonResponse::problem($response, sniffBody: false)
-                : JsonResponse::redirected($response);
-
-            if ($problem !== null) {
-                throw ZapmizerConnectException::unexpectedResponse($problem);
-            }
-        }
-
-        return $response;
+        ]), $expectsJson);
     }
 
     /**
@@ -356,7 +624,7 @@ class InstanceClient
     protected function guardUnauthorized(ResponseInterface $response): void
     {
         if ($response->getStatusCode() === 401) {
-            throw new ZapmizerUnauthorizedException('Zapmizer refused the connection token.');
+            throw ZapmizerApi::failure($response);
         }
     }
 
@@ -366,9 +634,7 @@ class InstanceClient
     protected function guardFailure(ResponseInterface $response): void
     {
         if ($response->getStatusCode() >= 400) {
-            throw ZapmizerConnectException::unexpectedResponse(
-                "HTTP {$response->getStatusCode()} - " . (string) $response->getBody()
-            );
+            throw ZapmizerApi::failure($response);
         }
     }
 

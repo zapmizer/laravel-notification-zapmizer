@@ -15,7 +15,7 @@ use NotificationChannels\Zapmizer\Connect\WebhookRegistration;
 use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
-use NotificationChannels\Zapmizer\InboundMessage;
+use NotificationChannels\Zapmizer\Messages\Message;
 use NotificationChannels\Zapmizer\Support\PhoneNumber;
 use NotificationChannels\Zapmizer\Zapmizer;
 use NotificationChannels\Zapmizer\ZapmizerMessage;
@@ -32,7 +32,8 @@ use Throwable;
  * serialization — deliberately with no accessor on top of them: an
  * `Attribute` accessor for `api_token` would win over the cast and return
  * the ciphertext. For screens there is `api_token_masked`, a separate
- * attribute.
+ * attribute. The per-connection `webhook_key` is `hidden` too: not a
+ * credential, but nothing outside the server needs it.
  *
  * `$casts` is a property, not the `casts()` method: the method only exists
  * on Laravel 11+, and on 10 the credentials would be written in the clear.
@@ -47,10 +48,12 @@ class ZapmizerConnection extends Model
         'api_token',
         'webhook_secret',
         'webhook_previous_secret',
+        'webhook_key',
     ];
 
     protected $appends = [
         'api_token_masked',
+        'has_webhook_secret',
     ];
 
     protected $casts = [
@@ -104,6 +107,17 @@ class ZapmizerConnection extends Model
     }
 
     /**
+     * Whether a webhook secret is stored, so a screen can tell a connection
+     * that sends but cannot verify what it receives. Read on the raw
+     * (encrypted) attribute: it never decrypts. A subclass that redefines
+     * `$appends` has to list it.
+     */
+    protected function hasWebhookSecret(): Attribute
+    {
+        return Attribute::get(fn (): bool => filled($this->getAttributes()['webhook_secret'] ?? null));
+    }
+
+    /**
      * Whether a token is stored — checked on the raw (encrypted) attribute,
      * so it never decrypts.
      */
@@ -142,6 +156,7 @@ class ZapmizerConnection extends Model
         return app(Zapmizer::class, [
             'api_token' => $this->api_token,
             'api_version' => config('zapmizer.api_version'),
+            'connection' => $this,
         ]);
     }
 
@@ -155,7 +170,7 @@ class ZapmizerConnection extends Model
     public function instanceClient(): InstanceClient
     {
         if (!$this->hasApiToken()) {
-            throw new ZapmizerUnauthorizedException('There is no Zapmizer token for this connection.');
+            throw ZapmizerUnauthorizedException::withoutResponse('There is no Zapmizer token for this connection.');
         }
 
         return app(InstanceClient::class, [
@@ -188,20 +203,25 @@ class ZapmizerConnection extends Model
      * waiting: the answer is `attached`, `downloading` (the webhook fired
      * before the bot finished the download — ask again later) or
      * `unavailable` (it will never come). Needs the paired instance: a
-     * connection that lost it has nothing to ask Zapmizer about.
+     * connection that lost it has nothing to ask Zapmizer about. Asks with
+     * the message's `id` and `timestamp`. Numbers by QR only: on the
+     * official number the media does not come through Zapmizer, which
+     * answers 422 (`MediaRejectedException`).
      *
      * @throws ZapmizerConnectException
      */
-    public function media(InboundMessage $message): MediaDownload
+    public function media(Message $message): MediaDownload
     {
         if (blank($this->bot_instance_id)) {
-            throw new ZapmizerUnauthorizedException('There is no paired Zapmizer instance for this connection.');
+            throw ZapmizerConnectException::notPaired();
         }
 
         return $this->instanceClient()->media(
             (int) $this->bot_instance_id,
             $message->id,
-            $message->sentAt->getTimestamp(),
+            // `sentAt()` falls back to now without a usable timestamp: 0
+            // would read as a long-gone message and a future one as a 422.
+            $message->sentAt()->getTimestamp(),
         );
     }
 
@@ -215,7 +235,7 @@ class ZapmizerConnection extends Model
     public function syncMessages(?string $cursor = null, ?int $since = null, ?int $limit = null): SyncedMessages
     {
         if (blank($this->bot_instance_id)) {
-            throw new ZapmizerUnauthorizedException('There is no paired Zapmizer instance for this connection.');
+            throw ZapmizerConnectException::notPaired();
         }
 
         return $this->instanceClient()->syncMessages((int) $this->bot_instance_id, $cursor, $since, $limit);
@@ -244,7 +264,7 @@ class ZapmizerConnection extends Model
      *
      * @throws ZapmizerConnectException
      */
-    public function awaitMedia(InboundMessage $message, array $waitsSeconds = [2, 5, 10, 20, 30], ?Closure $sleep = null): MediaDownload
+    public function awaitMedia(Message $message, array $waitsSeconds = [2, 5, 10, 20, 30], ?Closure $sleep = null): MediaDownload
     {
         $sleep ??= static fn (int|float $seconds) => usleep((int) ($seconds * 1_000_000));
 
@@ -267,7 +287,7 @@ class ZapmizerConnection extends Model
      * `media()` with the 429 returned instead of thrown, so `awaitMedia()`
      * can wait it out like a `downloading`.
      */
-    private function mediaOrRateLimit(InboundMessage $message): MediaDownload|MediaRateLimitedException
+    private function mediaOrRateLimit(Message $message): MediaDownload|MediaRateLimitedException
     {
         try {
             return $this->media($message);

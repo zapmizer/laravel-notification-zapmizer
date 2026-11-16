@@ -87,7 +87,7 @@ public function getWhatsappNumberForVerification(): ?string
 
 ## 4. Starting a verification
 
-The package auto-registers a named GET route, `zapmizer.verify_number` (at `/zapmizer/verify-number`, behind `web` + `auth`). It starts the verification for the authenticated user and redirects straight to the hosted page — so the frontend is just a link:
+Switch the route on with `ZAPMIZER_ROUTES_VERIFY_NUMBER=true` (`zapmizer.routes.verify_number`; every package route group is off by default, see [instalar.md](instalar.md#as-rotas-da-lib)). The package then registers a named GET route, `zapmizer.verify_number` (at `/zapmizer/verify-number`, behind `web` + `auth`). It starts the verification for the authenticated user and redirects straight to the hosted page — so the frontend is just a link:
 
 ```blade
 <a href="{{ route('zapmizer.verify_number') }}">Verify your WhatsApp</a>
@@ -132,7 +132,7 @@ $result->attemptsLeft; // when invalid (5 attempts by default)
 
 ## 6. The webhook
 
-Terminal states (`verified` / `failed`) are also delivered to the **team's registered webhooks** (the same webhooks resource bot notifications use — register your URL there once). The package's public `POST /zapmizer/webhook` route handles them Cashier-style:
+Terminal states (`verified` / `failed`) are also delivered to the **team's registered webhooks** (the same webhooks resource bot notifications use — register your URL there once). The package's public `POST /zapmizer/webhook` route (the webhook group: `ZAPMIZER_ROUTES_WEBHOOK=true`) handles them Cashier-style:
 
 - each event name maps to a `handle{StudlyName}` method (`verify_number.verified` → `handleVerifyNumberVerified`) — extend the controller to customize;
 - the event is correlated to the state record by the **canonical phone number** (tolerant to the Brazilian extra-9);
@@ -149,7 +149,7 @@ Event::listen(function (WhatsappVerified $event) {
 });
 ```
 
-> **Security note:** `verify_number.*` events are delivered **unsigned** — Zapmizer sends them outside the bot, without the `X-Zapmizer-Signature` every bot event carries (see [docs/connect.md](connect.md#6-receiving-messages-the-signed-webhook)). The package accepts them without a signature — they are the *only* events it does that for — so anyone who knows the URL can POST a `verify_number.verified` for a number. The handlers only ever upgrade state idempotently, but do harden the endpoint: a throttle/IP allowlist via `zapmizer.routes.webhook_middleware`, or disable the package routes and mount the controller behind your own protection (e.g. an unguessable URL prefix).
+> **Security note:** `verify_number.*` events are delivered **unsigned** — Zapmizer sends them outside the bot, without the `X-Zapmizer-Signature` every bot event carries (see [connect.md](connect.md#6-receiving-messages-the-signed-webhook)). The package accepts them without a signature — they are the *only* events it does that for — so anyone who knows the URL can POST a `verify_number.verified` for a number. The handlers only ever upgrade state idempotently, but do harden the endpoint: a throttle/IP allowlist via `zapmizer.routes.webhook_middleware`, or disable the package routes and mount the controller behind your own protection (e.g. an unguessable URL prefix).
 
 Payload shapes, for reference:
 
@@ -180,7 +180,7 @@ abort_unless($user->hasVerifiedWhatsapp(), 403, 'Verify your WhatsApp first.');
 
 ## Error handling
 
-Timeouts and API errors never bubble up as loose Guzzle exceptions:
+Timeouts and API errors never bubble up as loose Guzzle exceptions (a malformed `base_uri` is the exception: it throws as it comes, see [erros.md](erros.md), in Portuguese):
 
 ```php
 use NotificationChannels\Zapmizer\Exceptions\VerificationConnectionFailed; // network/timeout
@@ -188,7 +188,7 @@ use NotificationChannels\Zapmizer\Exceptions\VerificationRequestFailed;    // 4x
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerVerificationException; // base of all of the above
 ```
 
-The client sends `Accept: application/json` and does **not** follow redirects: a revoked token makes Zapmizer redirect to its login page, and a redirect or a non-JSON answer throws `ZapmizerVerificationException` (`unexpectedResponse`) instead of passing an HTML page off as a result. The same holds for the messages client (`Zapmizer::sendMessage()` → `CouldNotSendNotification`).
+The client sends `Accept: application/json` and does **not** follow redirects: a revoked token makes Zapmizer redirect to its login page, and a redirect or a non-JSON answer throws `ZapmizerVerificationException` (`unexpectedResponse`) instead of passing an HTML page off as a result. The same holds for the messages client (`Zapmizer::sendMessage()` → `ZapmizerConnectException`, `unexpectedResponse`). `ZapmizerVerificationException` extends `ZapmizerException`, the root of every exception of the package.
 
 Notable API errors when creating a session: `503` when the team has no online bot, `422` when the `from` number doesn't match any of the team's WhatsApp accounts.
 
@@ -204,5 +204,5 @@ Notable API errors when creating a session: `503` when the team has no online bo
 | `zapmizer.api_token` | the team's API token (shared with the messages API) |
 | `zapmizer.from_number` | which team number receives the verification (optional) |
 | `zapmizer.return_url` | "back to the site" button on the hosted page (optional) |
-| `zapmizer.routes.*` | enable/prefix/middleware of the package routes |
+| `zapmizer.routes.*` | the route groups (`verify_number`, `webhook`... each off by default, `ZAPMIZER_ROUTES_*`), the master switch `enabled`, prefix and middleware |
 | `zapmizer.models.whatsapp_verified` | subclass the state model |

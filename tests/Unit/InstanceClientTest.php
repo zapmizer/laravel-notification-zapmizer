@@ -2,34 +2,58 @@
 
 namespace NotificationChannels\Zapmizer\Test\Unit;
 
-use GuzzleHttp\Client as HttpClient;
 use GuzzleHttp\Handler\MockHandler;
-use GuzzleHttp\HandlerStack;
-use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
+use Illuminate\Http\Client\Request as HttpRequest;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Connect\InstanceConnection;
 use NotificationChannels\Zapmizer\Connect\MediaDownload;
+use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
+use NotificationChannels\Zapmizer\Exceptions\ErrorCode;
 use NotificationChannels\Zapmizer\Exceptions\InstanceGoneException;
 use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\MediaRejectedException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
+use NotificationChannels\Zapmizer\Test\Concerns\AssertsContract;
+use NotificationChannels\Zapmizer\Test\Concerns\FakesZapmizerHttp;
+use NotificationChannels\Zapmizer\Test\Concerns\InvalidBaseUris;
+use NotificationChannels\Zapmizer\Test\Fixtures\RecordingTransport;
 use NotificationChannels\Zapmizer\Test\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class InstanceClientTest extends TestCase
 {
+    use AssertsContract;
+    use FakesZapmizerHttp;
+    use InvalidBaseUris;
+
     /** @var array<int, array{request: Request}> */
     protected array $history = [];
 
     protected function makeClient(MockHandler $mock): InstanceClient
     {
-        $stack = HandlerStack::create($mock);
-        $stack->push(Middleware::history($this->history));
+        $this->fakeZapmizer($mock);
 
-        return new InstanceClient('team-token', new HttpClient(['handler' => $stack]), 'http://localhost/api', '2025-06-27');
+        return new InstanceClient('team-token', new LaravelHttpTransport(), 'http://localhost/api', '2025-06-27');
+    }
+
+    protected function containerClient(): InstanceClient
+    {
+        config()->set('zapmizer.base_uri', 'http://zap.test/api/');
+
+        return app(InstanceClient::class, ['api_token' => 'tok', 'api_version' => '2025-06-27']);
+    }
+
+    protected function connectionJson(): string
+    {
+        return json_encode(['data' => ['id' => 9, 'state' => 'connected', 'state_label' => 'Conectado', 'is_online' => true, 'is_up' => true, 'number' => '5581911110000']]);
     }
 
     public function testConnectionMapsStates()
@@ -68,9 +92,10 @@ class InstanceClientTest extends TestCase
         $this->assertEquals('whsec_x', $registration->secret);
         $this->assertNull($registration->previousSecret);
         $this->assertEquals(
-            ['url' => 'http://app.test/zapmizer/webhook', 'enabled' => true, 'version' => '2024-02-27'],
+            ['url' => 'http://app.test/zapmizer/webhook', 'enabled' => true, 'version' => '2026-10-20'],
             json_decode((string) $this->history[0]['request']->getBody(), true)
         );
+        $this->assertSame('2026-10-20', $this->history[0]['request']->getHeaderLine('api-version'));
     }
 
     public function testRotateWebhookSecretReturnsBoth()
@@ -159,7 +184,7 @@ class InstanceClientTest extends TestCase
         $download = $client->media(9, 'ABC', 1700000000);
 
         $this->assertNull($download->filename);
-        $this->assertNull($download->size);
+        $this->assertSame(5, $download->size);
         parse_str($this->history[0]['request']->getUri()->getQuery(), $query);
         $this->assertEquals('1700000000', $query['timestamp']);
     }
@@ -301,6 +326,127 @@ class InstanceClientTest extends TestCase
         }
     }
 
+    protected function callEndpoint(InstanceClient $client, string $call): mixed
+    {
+        return match ($call) {
+            'connection' => $client->connection(9),
+            'createWebhook' => $client->createWebhook('http://app.test/zapmizer/webhook'),
+            'rotateWebhookSecret' => $client->rotateWebhookSecret(42),
+            'deleteWebhook' => $client->deleteWebhook(42),
+            'media' => $client->media(9, 'ABC', 1700000000),
+        };
+    }
+
+    protected function assertRefusal(string $call, Response $response, string $class): ZapmizerApiException
+    {
+        $client = $this->makeClient(new MockHandler([$response]));
+
+        try {
+            $this->callEndpoint($client, $call);
+        } catch (ZapmizerApiException $exception) {
+            $this->assertSame($class, get_class($exception));
+            $this->assertSame($response->getStatusCode(), $exception->status());
+
+            return $exception;
+        }
+
+        $this->fail("Expected {$class}.");
+    }
+
+    /** @dataProvider refusalsFromTheContract */
+    #[DataProvider('refusalsFromTheContract')]
+    public function testRefusalFromTheContract(string $call, string $method, string $path, int $status, string $body, array $headers, string $class, string $reason)
+    {
+        $this->assertMatchesContract($method, $path, $status, $body, $headers);
+
+        $exception = $this->assertRefusal($call, new Response($status, ['Content-Type' => 'application/json'] + $headers, $body), $class);
+
+        $this->assertSame($reason, $exception->reason());
+    }
+
+    public static function refusalsFromTheContract(): array
+    {
+        return [
+            'M8 connection 404' => ['connection', 'GET', '/bot-instances/{id}/connection', 404, '{"message":"No query results for model."}', [], InstanceGoneException::class, 'No query results for model.'],
+            'M10 connection 401' => ['connection', 'GET', '/bot-instances/{id}/connection', 401, '{"message":"Unauthenticated."}', [], ZapmizerUnauthorizedException::class, 'Unauthenticated.'],
+            'M13 media 422' => ['media', 'GET', '/whatsapp-messages/media', 422, '{"message":"The timestamp field must be a date before or equal to now.","errors":{"timestamp":["The timestamp field must be a date before or equal to now."]}}', [], MediaRejectedException::class, 'The timestamp field must be a date before or equal to now.'],
+            'M13 media 429' => ['media', 'GET', '/whatsapp-messages/media', 429, '{"message":"Too Many Attempts."}', ['Retry-After' => '37'], MediaRateLimitedException::class, 'Too Many Attempts.'],
+            'media 401' => ['media', 'GET', '/whatsapp-messages/media', 401, '{"message":"Unauthenticated."}', [], ZapmizerUnauthorizedException::class, 'Unauthenticated.'],
+        ];
+    }
+
+    /** @dataProvider refusalsOutsideTheContract */
+    #[DataProvider('refusalsOutsideTheContract')]
+    public function testRefusalOutsideTheContract(string $call, Response $response, string $class)
+    {
+        $this->assertRefusal($call, $response, $class);
+    }
+
+    public static function refusalsOutsideTheContract(): array
+    {
+        $json = ['Content-Type' => 'application/json'];
+
+        return [
+            'M9 connection 429' => ['connection', new Response(429, $json + ['Retry-After' => '5'], '{"message":"Too Many Attempts."}'), ZapmizerRateLimitedException::class],
+            'M9 connection 403' => ['connection', new Response(403, $json, '{"message":"This action is unauthorized."}'), ZapmizerApiException::class],
+            'M9 connection 422' => ['connection', new Response(422, $json, '{"message":"Invalid.","errors":{"id":["Invalid."]}}'), ZapmizerApiException::class],
+            'M11 createWebhook 422' => ['createWebhook', new Response(422, $json, '{"message":"The url field must be a valid URL.","errors":{"url":["The url field must be a valid URL."]}}'), ZapmizerApiException::class],
+            'createWebhook 401' => ['createWebhook', new Response(401, $json, '{"message":"Unauthenticated."}'), ZapmizerUnauthorizedException::class],
+            'rotateWebhookSecret 404' => ['rotateWebhookSecret', new Response(404, $json, '{"message":"Not Found"}'), ZapmizerApiException::class],
+            'rotateWebhookSecret 429' => ['rotateWebhookSecret', new Response(429, $json, '{"message":"Too Many Attempts."}'), ZapmizerRateLimitedException::class],
+            'deleteWebhook 403' => ['deleteWebhook', new Response(403, $json, '{"message":"Forbidden."}'), ZapmizerApiException::class],
+            'deleteWebhook 429' => ['deleteWebhook', new Response(429, $json, '{"message":"Too Many Attempts."}'), ZapmizerRateLimitedException::class],
+            'M14 media 403' => ['media', new Response(403, $json, '{"message":"This connection does not grant this number."}'), ZapmizerApiException::class],
+            'media 409' => ['media', new Response(409, $json, '{"message":"Conflict."}'), ZapmizerApiException::class],
+        ];
+    }
+
+    public function testM9ConnectionRateLimitCarriesTheRetryAfter()
+    {
+        $exception = $this->assertRefusal('connection', new Response(429, ['Retry-After' => '5'], '{"message":"Too Many Attempts."}'), ZapmizerRateLimitedException::class);
+
+        $this->assertSame(5, $exception->retryAfter());
+    }
+
+    public function testM11WebhookRefusalKeepsTheFieldErrors()
+    {
+        $exception = $this->assertRefusal('createWebhook', new Response(422, ['Content-Type' => 'application/json'], '{"message":"Invalid.","errors":{"url":["The url field must be a valid URL."]}}'), ZapmizerApiException::class);
+
+        $this->assertSame(['url' => ['The url field must be a valid URL.']], $exception->errors());
+        $this->assertSame('Zapmizer refused the request (HTTP 422): Invalid. The url field must be a valid URL.', $exception->getMessage());
+    }
+
+    public function testMediaRetryAfterThatIsNotANumberIsNull()
+    {
+        $exception = $this->assertRefusal('media', new Response(429, ['Retry-After' => 'Wed, 21 Oct 2026 07:28:00 GMT'], '{"message":"Too Many Attempts."}'), MediaRateLimitedException::class);
+
+        $this->assertNull($exception->retryAfter());
+        $this->assertStringNotContainsString('Retry in', $exception->getMessage());
+    }
+
+    public function testMediaRejectionWithHtmlCutsTheReasonAt500Characters()
+    {
+        $html = '<html>' . str_repeat('x', 800) . '</html>';
+
+        $exception = $this->assertRefusal('media', new Response(422, ['Content-Type' => 'text/html'], $html), MediaRejectedException::class);
+
+        $this->assertSame(substr($html, 0, 500), $exception->reason());
+    }
+
+    public function testAMediaRefusalReadsTheLiveBody()
+    {
+        $client = $this->makeClient(new MockHandler([
+            new Response(422, ['Content-Type' => 'application/json'], '{"message":"Media is not available for Meta Cloud instances."}'),
+        ]));
+
+        try {
+            $client->media(9, 'ABC', 1700000000);
+            $this->fail('Expected MediaRejectedException.');
+        } catch (MediaRejectedException $exception) {
+            $this->assertSame('Media is not available for Meta Cloud instances.', $exception->reason());
+        }
+    }
+
     public function testARedirectIsRefusedInsteadOfFollowed()
     {
         $client = $this->makeClient(new MockHandler([
@@ -317,23 +463,251 @@ class InstanceClientTest extends TestCase
         $this->assertFalse($this->history[0]['options']['allow_redirects']);
     }
 
-    public function testSyncMessagesTranslatesEachMessageLikeTheWebhook()
+    public function testApiVersionNullEmptyOrZeroIsNotSent()
+    {
+        foreach ([null, '', '0'] as $version) {
+            $transport = new RecordingTransport(new Response(200, [], $this->connectionJson()));
+
+            (new InstanceClient('tok', $transport, 'http://zap.test/api', $version))->connection(9);
+
+            $this->assertArrayNotHasKey('api-version', $transport->calls[0]['options']['headers']);
+        }
+    }
+
+    public function testSubclassChangingBaseUriAndTokenAfterConstructionIsHonoured()
+    {
+        $transport = new RecordingTransport(new Response(200, [], $this->connectionJson()));
+        $client = new class ('old', $transport, 'http://old.test/api') extends InstanceClient {
+            public function retarget(): void
+            {
+                $this->apiBaseUri = 'http://new.test/api';
+                $this->token = 'new';
+            }
+        };
+        $client->retarget();
+
+        $client->connection(9);
+
+        $this->assertSame('http://new.test/api/bot-instances/9/connection', $transport->calls[0]['url']);
+        $this->assertSame('Bearer new', $transport->calls[0]['options']['headers']['Authorization']);
+    }
+
+    public function testC23CallHeaderCannotOverrideAuthentication()
+    {
+        $transport = new RecordingTransport(new Response(200, [], '{}'));
+        $client = new class ('tok', $transport, 'http://zap.test/api') extends InstanceClient {
+            public function raw(): void
+            {
+                $this->request('GET', '/x', ['headers' => ['authorization' => 'Bearer evil']]);
+            }
+        };
+
+        $client->raw();
+
+        $this->assertSame(['Accept' => 'application/json', 'Authorization' => 'Bearer tok'], $transport->calls[0]['options']['headers']);
+    }
+
+    public function testT1TheNewInstanceCallsGoThroughTheFake()
+    {
+        $online = '{"status":"online"}';
+        $needsReconnect = '{"error":"needs_reconnect","message":"O número precisa ser reconectado pelo cliente.","url":"https://zap.test/connect/reconnect/9","expires_at":"2026-10-07T15:00:00Z"}';
+        $unauthenticated = '{"message":"Unauthenticated."}';
+        $conversation = '{"url":"https://app.parlichat.com/embed/start/Zr8kQ2","expires_at":"2026-09-26T14:01:00+00:00"}';
+        $inbox = '{"url":"https://app.parlichat.com/embed-inbox/start/Zr8kQ2","expires_at":"2026-09-26T14:01:00+00:00","resume_url":"https://app.parlichat.com/chats?embed_inbox=1","resume_until":"2026-09-26T16:01:00+00:00"}';
+        $this->assertMatchesContract('POST', '/bot-instances/{id}/reconnect', 200, $online);
+        $this->assertMatchesContract('POST', '/bot-instances/{id}/reconnect', 409, $needsReconnect);
+        $this->assertMatchesContract('DELETE', '/connect/token', 204, '');
+        $this->assertMatchesContract('DELETE', '/connect/token', 401, $unauthenticated);
+        $this->assertMatchesContract('POST', '/embed/sessions', 201, $conversation);
+        $this->assertMatchesContract('POST', '/embed/sessions', 201, $inbox);
+        $json = ['Content-Type' => 'application/json'];
+        Http::fake([
+            'zap.test/api/bot-instances/9/reconnect' => Http::sequence()->push($online, 200, $json)->push($needsReconnect, 409, $json),
+            'zap.test/api/connect/token' => Http::sequence()->push('', 204)->push($unauthenticated, 401, $json),
+            'zap.test/api/embed/sessions' => Http::sequence()->push($conversation, 201, $json)->push($inbox, 201, $json),
+        ]);
+        $client = $this->containerClient();
+
+        $this->assertTrue($client->reconnect(9, 'https://app.test/reconnected', 'state-1')->isOnline());
+        $this->assertSame('https://zap.test/connect/reconnect/9', $client->reconnect(9, 'https://app.test/reconnected', 'state-1', 100)->url);
+        $client->revokeToken();
+        $client->revokeToken();
+        $this->assertSame('https://app.parlichat.com', $client->conversationSession('5521988887777', 'https://app.test', ['theme' => 'dark'], 'u-1')->origin);
+        $this->assertSame('https://app.parlichat.com/chats?embed_inbox=1', $client->inboxSession('https://app.test', [], 'u-1', 'Ana')->resumeUrl);
+
+        Http::assertSentCount(6);
+        Http::assertSent(fn (HttpRequest $request) => $request->method() === 'POST'
+            && $request->url() === 'http://zap.test/api/bot-instances/9/reconnect'
+            && $request->data() === ['redirect_uri' => 'https://app.test/reconnected', 'state' => 'state-1', 'expires_in' => 900]
+            && $request->header('Authorization')[0] === 'Bearer tok'
+            && $request->header('api-version')[0] === '2025-06-27');
+        Http::assertSent(fn (HttpRequest $request) => $request->method() === 'DELETE'
+            && $request->url() === 'http://zap.test/api/connect/token'
+            && $request->body() === ''
+            && $request->header('Authorization')[0] === 'Bearer tok');
+        Http::assertSent(fn (HttpRequest $request) => $request->method() === 'POST'
+            && $request->url() === 'http://zap.test/api/embed/sessions'
+            && $request->data() === ['component' => 'conversation', 'phone' => '5521988887777', 'parent_origin' => 'https://app.test', 'appearance' => ['theme' => 'dark'], 'user' => ['id' => 'u-1']]);
+        Http::assertSent(fn (HttpRequest $request) => $request->method() === 'POST'
+            && $request->url() === 'http://zap.test/api/embed/sessions'
+            && $request->data() === ['component' => 'inbox', 'parent_origin' => 'https://app.test', 'user' => ['id' => 'u-1', 'name' => 'Ana']]);
+    }
+
+    public function testT1InstanceRefusalsThroughTheFake()
+    {
+        $tooMany = '{"message":"Too Many Attempts."}';
+        $notFound = '{"message":"Not found."}';
+        $originNotAllowed = '{"error":"origin_not_allowed","message":"Origem não liberada."}';
+        $this->assertMatchesContract('POST', '/bot-instances/{id}/reconnect', 429, $tooMany, ['Retry-After' => '42']);
+        $this->assertMatchesContract('POST', '/bot-instances/{id}/reconnect', 404, $notFound);
+        $this->assertMatchesContract('DELETE', '/connect/token', 404, $notFound);
+        $this->assertMatchesContract('POST', '/embed/sessions', 403, $originNotAllowed);
+        $json = ['Content-Type' => 'application/json'];
+        Http::fake([
+            'zap.test/api/bot-instances/9/reconnect' => Http::sequence()->push($tooMany, 429, $json + ['Retry-After' => '42'])->push($notFound, 404, $json),
+            'zap.test/api/connect/token' => Http::response($notFound, 404, $json),
+            'zap.test/api/embed/sessions' => Http::response($originNotAllowed, 403, $json),
+        ]);
+        $client = $this->containerClient();
+
+        try {
+            $client->reconnect(9, 'https://app.test/reconnected');
+            $this->fail('Expected ZapmizerRateLimitedException.');
+        } catch (ZapmizerRateLimitedException $exception) {
+            $this->assertSame(42, $exception->retryAfter());
+        }
+
+        try {
+            $client->reconnect(9, 'https://app.test/reconnected');
+            $this->fail('Expected InstanceGoneException.');
+        } catch (InstanceGoneException $exception) {
+            $this->assertSame(404, $exception->status());
+        }
+
+        try {
+            $client->revokeToken();
+            $this->fail('Expected ZapmizerApiException.');
+        } catch (ZapmizerApiException $exception) {
+            $this->assertSame(404, $exception->status());
+        }
+
+        try {
+            $client->inboxSession('https://app.test');
+            $this->fail('Expected ZapmizerApiException.');
+        } catch (ZapmizerApiException $exception) {
+            $this->assertSame(403, $exception->status());
+            $this->assertSame(ErrorCode::ORIGIN_NOT_ALLOWED, $exception->error());
+        }
+    }
+
+    /** @dataProvider invalidBaseUris */
+    #[DataProvider('invalidBaseUris')]
+    public function testX18bAnInvalidBaseSendsNothing(string $base)
+    {
+        Http::fake();
+
+        try {
+            (new InstanceClient('team-token', new LaravelHttpTransport(), $base))->connection(1);
+            $this->fail('Expected the invalid base URI.');
+        } catch (ZapmizerConnectException $e) {
+            $this->assertIsTheInvalidBaseUri($e);
+        }
+
+        Http::assertNothingSent();
+    }
+
+    /**
+     * A message of the contract, as `GET /whatsapp-messages` sends it with
+     * `api-version: 2026-10-20`.
+     *
+     * @return array<string, mixed>
+     */
+    protected function contractMessage(array $overrides = []): array
+    {
+        return array_merge([
+            'id' => '3EB0C4A1B2D3E4F5A6B7',
+            'chat' => '5581988887777@c.us',
+            'sender' => '5581988887777@c.us',
+            'sender_name' => 'Maria Souza',
+            'from_me' => false,
+            'from_me_other_device' => false,
+            'timestamp' => 1792193389,
+            'type' => 'document',
+            'text' => null,
+            'quoted' => null,
+            'forwarded' => false,
+            'view_once' => false,
+            'mentions' => [],
+            'media' => ['mime' => 'application/pdf', 'filename' => 'extrato.pdf', 'size' => 555593, 'duration' => null, 'width' => null, 'height' => null, 'page_count' => 2, 'is_gif' => null],
+            'location' => null,
+            'contacts' => null,
+            'poll' => null,
+            'reply' => null,
+            'link_preview' => null,
+        ], $overrides);
+    }
+
+    public function testSyncMessagesReadsTheMessageContract()
+    {
+        $body = json_encode([
+            'wid' => '5581999990000@c.us',
+            'version' => '2026-10-20',
+            'data' => [
+                ['id' => 11, 'message' => $this->contractMessage()],
+                ['id' => 13, 'message' => $this->contractMessage([
+                    'id' => 'BBB', 'sender' => '5581999990000@c.us', 'sender_name' => null, 'from_me' => true,
+                    'type' => 'text', 'text' => 'recebido', 'media' => null,
+                ])],
+                ['id' => 14, 'message' => $this->contractMessage(['id' => 'CCC', 'type' => 'unknown', 'media' => null, 'raw' => ['type' => 'revoked']])],
+            ],
+            'next_cursor' => '14',
+            'has_more' => true,
+        ]);
+        // Against the contract's branch of `message`: the whole body cannot be
+        // checked, because Zapmizer's openapi.json declares `message` as a
+        // `oneOf` whose other branch (WhatsApp Web's object) is any object,
+        // so a message of the contract matches both and fails `oneOf`.
+        $this->assertMatchesSchema('#/paths/~1whatsapp-messages/get/responses/200/content/application~1json/schema/properties/data/items/properties/message/oneOf/0', $this->contractMessage());
+        $client = $this->makeClient(new MockHandler([new Response(200, [], $body)]));
+
+        $page = $client->syncMessages(9, cursor: '10', limit: 50);
+
+        $this->assertCount(3, $page->messages);
+        $this->assertSame('3EB0C4A1B2D3E4F5A6B7', $page->messages[0]->id);
+        $this->assertSame('5581988887777', $page->messages[0]->chatPhone());
+        $this->assertSame('extrato.pdf', $page->messages[0]->media->filename);
+        $this->assertTrue($page->messages[1]->fromMe);
+        $this->assertSame(['type' => 'revoked'], $page->messages[2]->raw);
+        $this->assertSame('BBB', $page->payloads[1]['id']);
+        $this->assertSame('5581999990000@c.us', $page->wid);
+        $this->assertSame('2026-10-20', $page->version);
+        $this->assertSame('14', $page->cursor);
+        $this->assertTrue($page->hasMore);
+        $this->assertSame('2026-10-20', $this->history[0]['request']->getHeaderLine('api-version'));
+        $this->assertEquals(
+            'http://localhost/api/whatsapp-messages?bot_instance_id=9&cursor=10&limit=50',
+            (string) $this->history[0]['request']->getUri(),
+        );
+    }
+
+    public function testSyncMessagesTranslatesTheShapeOfAZapmizerBefore1_148_17()
     {
         $client = $this->makeClient(new MockHandler([
             new Response(200, [], json_encode([
                 'wid' => '5581999990000@c.us',
                 'data' => [
-                    ['id' => 11, 'updated_at' => '2026-10-16T19:29:49+00:00', 'message' => [
+                    ['id' => 11, 'message' => [
                         'id' => ['id' => 'AAA', '_serialized' => 'false_5581988887777@c.us_AAA'],
                         'from' => '5581988887777@c.us',
+                        'to' => '5581999990000@c.us',
                         'type' => 'document',
                         'body' => '',
                         'hasMedia' => true,
                         'timestamp' => 1792193389,
                         '_data' => ['mimetype' => 'application/pdf', 'filename' => 'extrato.pdf', 'size' => 555593],
                     ]],
-                    ['id' => 12, 'updated_at' => '2026-10-16T19:30:00+00:00', 'message' => ['type' => 'chat']],
-                    ['id' => 13, 'updated_at' => '2026-10-16T19:30:01+00:00', 'message' => [
+                    ['id' => 12, 'message' => ['id' => ['id' => 'GP2'], 'from' => '120363000000000000@g.us', 'type' => 'gp2']],
+                    ['id' => 13, 'message' => [
                         'id' => ['id' => 'BBB', '_serialized' => 'true_5581988887777@c.us_BBB'],
                         'from' => '5581999990000@c.us',
                         'to' => '5581988887777@c.us',
@@ -342,65 +716,111 @@ class InstanceClientTest extends TestCase
                         'body' => 'recebido',
                         'timestamp' => 1792193401,
                     ]],
+                    ['id' => 14, 'message' => ['id' => ['id' => 'CIPHER'], 'from' => '5581988887777@c.us', 'type' => 'ciphertext', 'timestamp' => 1792193402]],
                 ],
-                'next_cursor' => '2026-10-16 19:30:01|13',
-                'has_more' => true,
+                'next_cursor' => '14',
+                'has_more' => false,
             ])),
         ]));
 
-        $page = $client->syncMessages(9, cursor: '2026-10-16 19:00:00|10', limit: 50);
+        $page = $client->syncMessages(9, cursor: '10');
 
-        $this->assertCount(2, $page->messages);
-        $this->assertSame('false_5581988887777@c.us_AAA', $page->messages[0]->id);
-        $this->assertSame('5581988887777', $page->messages[0]->fromPhone);
-        $this->assertSame('5581999990000@c.us', $page->messages[0]->to);
-        $this->assertSame('extrato.pdf', $page->messages[0]->mediaFilename());
+        $this->assertSame(['AAA', 'BBB', 'CIPHER'], array_map(fn ($message) => $message->id, $page->messages));
+        $this->assertSame('5581988887777@c.us', $page->messages[0]->chat);
+        $this->assertSame('extrato.pdf', $page->messages[0]->media->filename);
         $this->assertTrue($page->messages[1]->fromMe);
+        $this->assertSame('5581988887777@c.us', $page->messages[1]->chat);
+        $this->assertSame('unknown', $page->messages[2]->type);
+        $this->assertSame('ciphertext', $page->messages[2]->raw['type']);
         $this->assertSame('AAA', $page->payloads[0]['id']['id']);
-        $this->assertSame('2026-10-16 19:30:01|13', $page->cursor);
-        $this->assertTrue($page->hasMore);
-        $this->assertEquals(
-            'http://localhost/api/whatsapp-messages?bot_instance_id=9&cursor=2026-10-16%2019%3A00%3A00%7C10&limit=50',
-            (string) $this->history[0]['request']->getUri(),
-        );
+        $this->assertSame('5581999990000@c.us', $page->wid);
+        $this->assertNull($page->version);
     }
 
-    public function testMessageEndpointsPinTheLegacyVersionWhateverTheConfigSays()
+    /**
+     * @return array<string, array{0: ?string}>
+     */
+    public static function configuredVersions(): array
     {
-        $stack = HandlerStack::create(new MockHandler([
-            new Response(200, [], json_encode(['data' => [], 'has_more' => false])),
-            new Response(201, [], json_encode(['data' => ['id' => 42, 'secret' => 's']])),
+        return ['none' => [null], '2025-06-27' => ['2025-06-27'], '2026-10-20' => ['2026-10-20']];
+    }
+
+    /** @dataProvider configuredVersions */
+    #[DataProvider('configuredVersions')]
+    public function testSyncMessagesAlwaysAsksForTheContractWhateverTheConfigSays(?string $version)
+    {
+        $this->fakeZapmizer(new MockHandler([
+            new Response(200, [], json_encode(['wid' => '5581999990000@c.us', 'version' => '2026-10-20', 'data' => [], 'next_cursor' => '0', 'has_more' => false])),
             new Response(200, [], json_encode(['data' => ['id' => 9, 'state' => 'connected', 'is_online' => true]])),
         ]));
-        $stack->push(Middleware::history($this->history));
-        $client = new InstanceClient('team-token', new HttpClient(['handler' => $stack]), 'http://localhost/api', '2026-10-20');
+        $client = new InstanceClient('team-token', new LaravelHttpTransport(), 'http://localhost/api', $version);
 
         $client->syncMessages(9);
-        $client->createWebhook('http://app.test/zapmizer/webhook');
         $client->connection(9);
 
-        $this->assertSame('2025-06-27', $this->history[0]['request']->getHeaderLine('api-version'));
-        $this->assertSame('2025-06-27', $this->history[1]['request']->getHeaderLine('api-version'));
-        $this->assertSame('2024-02-27', json_decode((string) $this->history[1]['request']->getBody(), true)['version']);
-        $this->assertSame('2026-10-20', $this->history[2]['request']->getHeaderLine('api-version'));
+        $this->assertSame('2026-10-20', $this->history[0]['request']->getHeaderLine('api-version'));
+        $this->assertSame((string) $version, $this->history[1]['request']->getHeaderLine('api-version'));
     }
 
-    public function testSyncMessagesRefusesTheMessageContractInsteadOfDroppingIt()
+    /**
+     * @return array<string, array{0: mixed}>
+     */
+    public static function unknownContractVersions(): array
+    {
+        return ['newer' => ['2027-01-01'], 'not a date' => ['v3'], 'null' => [null], 'a number' => [20261020]];
+    }
+
+    /** @dataProvider unknownContractVersions */
+    #[DataProvider('unknownContractVersions')]
+    public function testSyncMessagesRefusesAVersionOfTheContractItDoesNotKnow(mixed $version)
     {
         $client = $this->makeClient(new MockHandler([
             new Response(200, [], json_encode([
-                'wid' => '5581999990000',
-                'version' => '2026-10-20',
-                'data' => [['id' => 14, 'message' => ['id' => 'AAA', 'chat' => '5581988887777', 'from_me' => false, 'type' => 'text', 'text' => 'oi']]],
+                'wid' => '5581999990000@c.us',
+                'version' => $version,
+                'data' => [['id' => 14, 'message' => $this->contractMessage()]],
                 'next_cursor' => '14',
                 'has_more' => false,
             ])),
         ]));
 
         $this->expectException(ZapmizerConnectException::class);
-        $this->expectExceptionMessage('message contract');
+        $this->expectExceptionMessage('of the message contract, which this version of the package does not know');
 
         $client->syncMessages(9, cursor: '13');
+    }
+
+    public function testAPageOfNoticesOnlyIsEmptyAndGoesOn()
+    {
+        $body = json_encode(['wid' => '5581999990000@c.us', 'version' => '2026-10-20', 'data' => [], 'next_cursor' => '40', 'has_more' => true]);
+        $this->assertMatchesContract('GET', '/whatsapp-messages', 200, $body);
+        $client = $this->makeClient(new MockHandler([new Response(200, [], $body)]));
+
+        $page = $client->syncMessages(9, cursor: '20');
+
+        $this->assertSame([], $page->messages);
+        $this->assertSame('40', $page->cursor);
+        $this->assertTrue($page->hasMore);
+    }
+
+    public function testAnEntryThatIsNotAMessageIsSkippedWithAWarning()
+    {
+        Log::spy();
+        $client = $this->makeClient(new MockHandler([
+            new Response(200, [], json_encode([
+                'wid' => '5581999990000@c.us',
+                'version' => '2026-10-20',
+                'data' => [['id' => 1, 'message' => ['chat' => 'x@c.us']], ['id' => 2], ['id' => 3, 'message' => $this->contractMessage()]],
+                'next_cursor' => '3',
+                'has_more' => false,
+            ])),
+        ]));
+
+        $page = $client->syncMessages(9, cursor: '0');
+
+        $this->assertCount(1, $page->messages);
+        Log::shouldHaveReceived('warning')->once()->withArgs(fn (string $message, array $context) => str_contains($message, 'not a message')
+            && $context === ['skipped' => 2, 'version' => '2026-10-20', 'wid' => '5581999990000@c.us', 'cursor' => '3']);
     }
 
     public function testSyncMessagesKeepsTheCursorWhenNothingNewCame()

@@ -1,0 +1,279 @@
+# Enviar notificações
+
+Em cada `Notification` que deve sair pelo WhatsApp, acrescente `'zapmizer'` ao array do `via()` e escreva um método `toZapmizer()`:
+
+```php
+/**
+ * Get the notification's delivery channels.
+ *
+ * @return array<int, string>
+ */
+public function via(object $notifiable): array
+{
+    return ['mail', 'zapmizer'];
+}
+
+/**
+ * Get the WhatsApp representation of the notification.
+ */
+public function toZapmizer(object $notifiable)
+{
+    $message = 'This is a message!' . PHP_EOL;
+
+    // O WID segue o padrão do WhatsApp, por exemplo: 558181643260; 558181643260@c.us; 128172192@g.us (grupos)
+
+    return ZapmizerMessage::create(from: config('zapmizer.from_number'), to: $notifiable->wid)->type('chat')->text($message)->send();
+}
+```
+
+O WID de destino segue o padrão do WhatsApp: o número com código do país e DDD (`558181643260`), o mesmo com o sufixo `@c.us`, ou o id de um grupo (`128172192@g.us`).
+
+O `toZapmizer()` também pode devolver a mensagem **sem** `->send()`: o canal a envia. Sem `to`, ele usa a rota do notifiable (`routeNotificationForZapmizer()` no model, ou `Notification::route('zapmizer', '5511999999999')`); sem `to` e sem rota, nada sai. Assim o método pode declarar `: ZapmizerMessage`, e o envio fica a cargo do canal:
+
+```php
+public function toZapmizer(object $notifiable): ZapmizerMessage
+{
+    return ZapmizerMessage::create(from: config('zapmizer.from_number'))->text('Seu pedido saiu para entrega.');
+}
+
+// no model
+public function routeNotificationForZapmizer(): string
+{
+    return $this->whatsapp;
+}
+```
+
+Os dois jeitos dão o mesmo `SentMessage` ao `NotificationSent` (veja abaixo), e nenhum envia duas vezes: o canal não envia um `SentMessage`, nem uma mensagem que o `toZapmizer()` já enviou (`$message->send(); return $message;`). `$message->sentMessage()` devolve o que o último `send()` respondeu, ou `null`.
+
+## Model com número próprio
+
+Um model que usa o trait `Connectable` (um `Team`, um `User`) manda pelo número dele, sem passar por `config('zapmizer.from_number')`:
+
+```php
+$team->zapmizerMessage('5511999999999')->text('Hello')->send();
+```
+
+O pareamento do número, o webhook assinado e as mensagens recebidas estão em [connect.md](connect.md) (em inglês).
+
+## O que o envio devolve
+
+`send()` (e `Zapmizer::sendMessage()`/`sendMessageWithFile()`) devolve um `Messages\SentMessage`: a mensagem foi **aceita** para envio, ainda não foi entregue.
+
+```php
+use NotificationChannels\Zapmizer\Messages\SentMessage;
+
+$sent = $team->zapmizerMessage('5511999999999')->text('Hello')->send();
+
+$sent->id;         // id do envio (sempre string), para acompanhar
+$sent->selfUrl;    // o `links.self`: guarde este para acompanhar depois
+$sent->widTo;      // o destino como a Zapmizer conferiu no WhatsApp
+$sent->status;     // -2 (MessageStatus::QUEUED) na resposta do envio
+$sent->raw();      // o corpo JSON decodificado, como veio
+```
+
+- **Chave do contato:** guarde o `widTo`, não o `to` que você mandou. A Zapmizer pode completar o `55` ou tirar o nono dígito, e é o `widTo` que volta em `from` no webhook `message`.
+- **Número oficial com fila:** `id` e `selfUrl` vêm `null` quando o envio entra na fila. Não há como acompanhar esse envio, e isso não é erro: `$sent->isTrackable()` é `false`.
+- **`api-version`:** configure `ZAPMIZER_API_VERSION=2025-06-27`. Sem ele (o padrão da config), o número por QR responde o formato antigo. O `SentMessage` ainda traz `id` e `widTo`, mas o `links.self` aponta para `/messages/{id}`, que não é link de acompanhamento: `isTrackable()` é `false`, e `track($sent)` devolve `null`.
+
+Numa notificação, o `toZapmizer()` que chama `->send()` devolve o `SentMessage`. O Laravel o repassa ao evento `NotificationSent`, em `$event->response['message']`. Um listener pode então ligar a notificação ao envio:
+
+```php
+use Illuminate\Notifications\Events\NotificationSent;
+use NotificationChannels\Zapmizer\Messages\SentMessage;
+
+Event::listen(function (NotificationSent $event) {
+    if ($event->channel === 'zapmizer' && ($event->response['message'] ?? null) instanceof SentMessage) {
+        $sent = $event->response['message'];
+        // guarde $sent->selfUrl junto da notificação
+    }
+});
+```
+
+## Testes
+
+A forma recomendada é o `Zapmizer::fake()`, no estilo do `Mail::fake()` e do `Notification::fake()`: ele pega **todo** envio da lib, por qualquer caminho, e nenhuma requisição sai.
+
+```php
+use NotificationChannels\Zapmizer\Facades\Zapmizer;
+use NotificationChannels\Zapmizer\Testing\FakeSend;
+
+Zapmizer::fake();
+
+$user->notify(new PedidoSaiu($pedido));
+
+Zapmizer::assertSent(fn (FakeSend $send) => $send->to === '5511999999999'
+    && str_contains($send->text, 'saiu para entrega'));
+Zapmizer::assertSentTimes(1);
+```
+
+**O import é `NotificationChannels\Zapmizer\Facades\Zapmizer`**, a facade, e não `NotificationChannels\Zapmizer\Zapmizer`, o cliente: as duas classes têm o mesmo nome curto. Num arquivo que usa as duas, dê um alias a uma delas (`use NotificationChannels\Zapmizer\Zapmizer as ZapmizerClient;`). Um `$this->mock(Zapmizer::class)` com a facade importada mocka o nome da facade, que ninguém resolve, e o envio sai de verdade.
+
+O fake pega o `Zapmizer::sendMessage()`/`sendMessageWithFile()`/`sendTemplate()` (pela facade ou por um cliente do container), o `ZapmizerMessage::send()`, o canal `zapmizer`, o `zapmizer:send-message`, e os envios pelo número de um model conectado (`$team->zapmizerMessage()`, `$team->zapmizer()`, `$connection->message()`), que montam um cliente novo com o token da conexão: todo envio passa pela classe `NotificationChannels\Zapmizer\Zapmizer`, e ela entrega ao fake enquanto ele está ligado, seja qual for o jeito com que o cliente foi feito (container, parâmetros, `new`). O fake não pede `ZAPMIZER_API_TOKEN`.
+
+Cada envio devolve um `SentMessage::fake()` com `id` próprio e o `widTo`/`widFrom` dos números enviados (`5511999999999` vira `5511999999999@c.us`; um wid fica como veio); o template devolve um `SentTemplate` com `wamid`. O `track()` (e `sentMessage()`/`metaMessage()`) de um envio do fake responde o status `QUEUED`, sem chamar a API.
+
+| Asserção | |
+| --- | --- |
+| `Zapmizer::assertSent(?callable $callback = null)` | algum envio (que o callback aceita) |
+| `Zapmizer::assertSentTimes(int $times, ?callable $callback = null)` | exatamente `$times` envios (que o callback aceita) |
+| `Zapmizer::assertNotSent(?callable $callback = null)` | nenhum envio que o callback aceita |
+| `Zapmizer::assertNothingSent()` | nenhum envio |
+| `Zapmizer::sent(?callable $callback = null)` | os envios, uma `Collection` de `FakeSend` |
+
+O callback recebe um `Testing\FakeSend`:
+
+| Campo | |
+| --- | --- |
+| `kind` | `FakeSend::MESSAGE` (texto), `FakeSend::FILE` (`image()`/`document()`, `sendMessageWithFile()`) ou `FakeSend::TEMPLATE` |
+| `to`, `from` | como o app passou (sem normalizar) |
+| `text` | o texto, a legenda do arquivo, ou `null` no template |
+| `type` | `chat`, `image`, `document`...; `template` no template |
+| `file`, `filename()`, `hasFile()` | o caminho do arquivo e o nome que iria no upload |
+| `template`, `language`, `body`, `header` | os campos do template |
+| `token`, `baseUri` | os do cliente que enviou |
+| `connection` | a `ZapmizerConnection` do envio pelo número de um model, ou `null` (token do app) |
+| `params` | os parâmetros como iriam à API |
+| `response` | o `SentMessage` (ou `SentTemplate`) que o envio devolveu |
+
+**Falha.** Para testar os caminhos de erro do app:
+
+```php
+use NotificationChannels\Zapmizer\Exceptions\ErrorCode;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
+
+// como a API responderia: 401 vira ZapmizerUnauthorizedException, 429 ZapmizerRateLimitedException,
+// o resto ZapmizerApiException, com error(), reason() e payload() lidos do corpo
+Zapmizer::fake()->failWithApiError(409, ['error' => ErrorCode::WINDOW_CLOSED, 'message' => 'Janela fechada.']);
+
+// uma exceção pronta, para todo envio
+Zapmizer::fake()->failWith(new ZapmizerUnavailableException('fora do ar'));
+
+// só alguns envios: o closure recebe o FakeSend e devolve a exceção, ou null para deixar passar
+Zapmizer::fake()->failWith(fn (FakeSend $send) => $send->to === '5511000000000' ? new ZapmizerUnavailableException('fora do ar') : null);
+```
+
+Um envio que falha não entra nas asserções (não foi enviado). `->failWith(null)` volta a deixar passar.
+
+O fake não cobre a verificação de número (`VerificationClient`), o connect, o parceiro nem as chamadas de instância (`InstanceClient`): para esses, `Http::fake()`.
+
+**Pelo HTTP**, com `Http::fake()`, quando o teste quer provar a requisição em si (veja [transporte.md](transporte.md#testes)). Responda com um corpo JSON: um `Http::fake()` vazio responde 200 sem corpo, e o envio lança `unexpectedResponse`.
+
+```php
+use Illuminate\Http\Client\Request;
+use Illuminate\Support\Facades\Http;
+
+Http::fake(['*/api/messages' => Http::response(['id' => 'abc', 'wid_to' => '5511999999999@c.us'], 201)]);
+
+$user->notify(new PedidoSaiu($pedido));
+
+Http::assertSent(fn (Request $request) => $request->url() === 'https://app.zapmizer.com/api/messages'
+    && $request['to'] === '5511999999999');
+```
+
+Um `MockHandler` num `GuzzleHttp\Client` registrado no container não pega mais o envio.
+
+**Com um mock do `Zapmizer`** (o cliente, não a facade): o `Messages\SentMessage` é `final`, então o Mockery não fabrica o retorno de `sendMessage()` sozinho e um mock sem `andReturn()` quebra no envio. Devolva `SentMessage::fake()`:
+
+```php
+use NotificationChannels\Zapmizer\Messages\SentMessage;
+use NotificationChannels\Zapmizer\Zapmizer;
+
+$this->mock(Zapmizer::class)
+    ->shouldReceive('sendMessage')
+    ->once()
+    ->withArgs(fn (array $params) => $params['to'] === '5511999999999')
+    ->andReturn(SentMessage::fake());
+```
+
+`SentMessage::fake(array $overrides = [])` é a resposta de um envio por QR aceito (na fila, com `links.self`, `isTrackable()` verdadeiro), cada chamada com um `id` próprio. As chaves de `$overrides` têm a forma da resposta da API, não a dos campos do objeto: `SentMessage::fake(['id' => 'abc', 'wid_to' => '5511988887777@c.us'])`. O `links.self` acompanha o `id` quando não é dado, e `SentMessage::fake(['id' => null])` é um envio oficial que entrou na fila (sem nada a acompanhar). Para um corpo exato, `SentMessage::fromArray($corpo)` lê qualquer resposta, inclusive a do formato antigo (`['data' => [...]]`).
+
+O mock só vale para quem resolve o `Zapmizer` pelo container sem parâmetros (`ZapmizerMessage::create()`, `app(Zapmizer::class)`). Quem passa parâmetros (`app(Zapmizer::class, ['api_version' => ...])`) ou usa o número de um model conectado (`$team->zapmizerMessage()`) ganha um cliente novo: use o `Zapmizer::fake()`.
+
+## Acompanhar o envio
+
+`Zapmizer::track()` segue o `links.self`, e aceita o `SentMessage` ou o link guardado. O link guardado pode ser `null` (envio oficial que entrou na fila), e `track(null)` devolve `null`. O link diz se o número é por QR (`sent-messages`) ou oficial (`meta-messages`). A chamada sai pela `base_uri` da config, com o token do cliente, e nunca pelo host escrito no link. Use o cliente da mesma conexão que enviou: um token vale para um número só.
+
+```php
+use NotificationChannels\Zapmizer\Messages\MessageStatus;
+
+$status = $team->zapmizer()->track($sent->selfUrl);   // ou ->track($sent)
+
+if ($status === null) {
+    // nada a acompanhar: envio oficial que entrou na fila, ou formato antigo
+} elseif ($status->isFailed()) {
+    // -4 ou -1
+} elseif ($status->status === MessageStatus::READ) {
+    // lida
+} elseif ($status->isDelivered()) {
+    // 2 (entregue) ou 4 (reproduzida)
+}
+```
+
+- Número por QR: `track()` devolve `Messages\QrMessageStatus`, com `wappMessageId` (o mesmo id do webhook `message_status`, que aparece quando o número envia), `statusLabel`, `error`, `errorMessage` e `timestamp`.
+- Número oficial: devolve `Messages\MetaMessageStatus`, com `wamid`, `botInstanceId`, `errorReason` (o motivo da Meta) e `createdAt`.
+- Os dois têm `id`, `status`, `statusName`, `widFrom`, `widTo`, `selfUrl` e `raw()`.
+- Também dá para chamar direto: `sentMessage(string $id)` e `metaMessage(int|string $id)`.
+
+**Compare sempre pelo número.** O `statusName` muda de texto entre a resposta do envio e o acompanhamento. As constantes de `Messages\MessageStatus` seguem a escala do contrato, a mesma do `ack` do webhook:
+
+| Constante | Valor | Significado |
+| --- | --- | --- |
+| `FAILED_BEFORE_SENDING` | `-4` | Falhou antes de sair (só QR). Final. |
+| `WAITING` | `-3` | Aguardando para ser enviada |
+| `QUEUED` | `-2` | Na fila da Zapmizer |
+| `FAILED` | `-1` | O WhatsApp recusou. Final. |
+| `SENDING` | `0` | Enviando |
+| `SENT` | `1` | Chegou ao servidor do WhatsApp |
+| `DELIVERED` | `2` | Entregue no aparelho |
+| `READ` | `3` | Lida. Final, mas nem todo contato manda confirmação de leitura. |
+| `PLAYED` | `4` | Áudio ou vídeo reproduzido. Final. |
+
+`MessageStatus::isFailure()`, `isFinal()` e `reached($status, MessageStatus::DELIVERED)` funcionam com qualquer número, inclusive o `ack` do webhook. Um valor novo da API chega como `int`, sem quebrar nada.
+
+No webhook, o `MessageStatusUpdated` traz um `Webhook\StatusUpdate` com o `ack` nessa mesma escala e os mesmos atalhos do `SentMessage` (`isFailed()`, `isDelivered()`, `isRead()`, `isFinal()`). Ali só chegam de `-1` a `4`, e o `0` vem com o nome `pending`. Veja [webhook.md](webhook.md#message_status).
+
+Erros: lançam as mesmas exceções do envio (veja [erros.md](erros.md)).
+- **401**: token inválido ou revogado.
+- **403** `missing_ability`: o token não tem `messages:read`; use o token do connect.
+- **404**: id desconhecido, inclusive um id de outra conexão (o token de outro número recebe 404, não 403).
+- **429** e **5xx**.
+
+Um link passado como string que não é de acompanhamento (o `/messages/{id}` do formato antigo, por exemplo), ou um id vazio, `.` ou `..`, lança `InvalidArgumentException` antes de chamar a API.
+
+## Template (número oficial)
+
+No número oficial, texto livre só vale até 24 h depois da última mensagem do contato. Fora da janela, o envio responde `409 window_closed`, e o caminho é um template aprovado na Meta, por `Zapmizer::sendTemplate()` (`POST /template-messages`):
+
+```php
+use NotificationChannels\Zapmizer\Exceptions\ErrorCode;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
+use NotificationChannels\Zapmizer\Support\PhoneNumber;
+
+try {
+    $sent = $team->zapmizerMessage('5511999999999')->text('Seu pedido saiu para entrega.')->send();
+} catch (ZapmizerApiException $e) {
+    if ($e->error() !== ErrorCode::WINDOW_CLOSED) {
+        throw $e;
+    }
+
+    $closedAt = $e->payload()['window_expires_at'] ?? null;   // quando a janela fechou
+
+    $template = $team->zapmizer()->sendTemplate(
+        from: PhoneNumber::digits($team->zapmizerConnection->phone_number),
+        to: '5511999999999',
+        template: 'pedido_saiu',     // o nome aprovado na Meta
+        body: ['Ana', '123'],        // as variáveis do corpo, na ordem
+    );
+
+    $template->wamid;        // id do WhatsApp (null se entrou na fila)
+    $template->previewText;  // o texto como o contato recebeu
+}
+```
+
+- `language` só é obrigatório quando o mesmo nome existe em mais de um idioma (`language: 'pt_BR'`). `header` é a variável do cabeçalho, quando o template tem uma.
+- A resposta é um `Messages\SentTemplate`, com `wamid`, `widFrom`, `widTo`, `previewText` e `raw()`. Ela não traz `id` nem `links.self`, então não há `track()` para template.
+- Os erros chegam como `ZapmizerApiException`:
+  - **422**, só com `message` em `reason()`: número sem template (número por QR), template inexistente, em mais de um idioma, não aprovado, variáveis erradas ou recusa da Meta. Não repita igual.
+  - **409** `bot_offline`.
+  - **401**, **403**, **404** e **429** valem como no envio.
+- O `window_expires_at` vem no `409 window_closed` do `POST /messages`, não na resposta do template.

@@ -1,0 +1,6 @@
+## Zapmizer (WhatsApp)
+
+- `zapmizer/laravel-notification-zapmizer` sends WhatsApp through Zapmizer: the `zapmizer` notification channel, a WhatsApp number per model (`Connectable` and the hosted connect popup) and the embedded inbox (the `zapmizer.inbox.*` routes plus `@zapmizer/embed` in the front).
+- Always activate the `zapmizer-whatsapp` skill when installing or configuring the package, connecting a WhatsApp number, adding the inbox to a screen, or sending WhatsApp messages.
+- The package routes are opt-in by group (`ZAPMIZER_ROUTES_CONNECT`, `ZAPMIZER_ROUTES_WEBHOOK`, `ZAPMIZER_ROUTES_INBOX`, `ZAPMIZER_ROUTES_VERIFY_NUMBER`, all off by default): an app that only sends gets none.
+- Install with `php artisan zapmizer:install` and verify with `php artisan zapmizer:check --json`. Never invent `ZAPMIZER_PARTNER_ID` or `ZAPMIZER_PARTNER_SECRET`: ask the human.

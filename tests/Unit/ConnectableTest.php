@@ -2,10 +2,7 @@
 
 namespace NotificationChannels\Zapmizer\Test\Unit;
 
-use GuzzleHttp\Client as HttpClient;
 use GuzzleHttp\Handler\MockHandler;
-use GuzzleHttp\HandlerStack;
-use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Support\Facades\DB;
 use NotificationChannels\Zapmizer\Connect\MediaDownload;
@@ -13,10 +10,12 @@ use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\MediaRejectedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
-use NotificationChannels\Zapmizer\InboundMessage;
+use NotificationChannels\Zapmizer\Messages\Message;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
 use NotificationChannels\Zapmizer\Test\Fixtures\CreatesConnectionTables;
+use NotificationChannels\Zapmizer\Test\Fixtures\ExternalIdTeam;
 use NotificationChannels\Zapmizer\Test\Fixtures\Team;
+use NotificationChannels\Zapmizer\Test\Concerns\FakesZapmizerHttp;
 use NotificationChannels\Zapmizer\Test\TestCase;
 use NotificationChannels\Zapmizer\Zapmizer;
 use NotificationChannels\Zapmizer\ZapmizerMessage;
@@ -24,6 +23,7 @@ use NotificationChannels\Zapmizer\ZapmizerMessage;
 class ConnectableTest extends TestCase
 {
     use CreatesConnectionTables;
+    use FakesZapmizerHttp;
 
     /** @var array<int, array{request: \GuzzleHttp\Psr7\Request}> */
     protected array $history = [];
@@ -37,10 +37,35 @@ class ConnectableTest extends TestCase
 
     protected function fakeHttp(Response ...$responses): void
     {
-        $stack = HandlerStack::create(new MockHandler($responses));
-        $stack->push(Middleware::history($this->history));
+        $this->fakeZapmizer(new MockHandler($responses));
+    }
 
-        $this->instance(HttpClient::class, new HttpClient(['handler' => $stack]));
+    protected function tearDown(): void
+    {
+        ExternalIdTeam::$externalId = null;
+
+        parent::tearDown();
+    }
+
+    public function testTheExternalIdIsTheKey()
+    {
+        $team = new Team();
+        $team->id = 5;
+
+        $this->assertSame('5', $team->zapmizerExternalId());
+    }
+
+    public function testAnOverriddenExternalId()
+    {
+        $team = new ExternalIdTeam();
+        $team->id = 5;
+        ExternalIdTeam::$externalId = 'tenant-9';
+
+        $this->assertSame('tenant-9', $team->zapmizerExternalId());
+
+        ExternalIdTeam::$externalId = null;
+
+        $this->assertSame('5', $team->zapmizerExternalId());
     }
 
     public function testMigrationCreatesTableWithUniqueConnectable()
@@ -89,6 +114,20 @@ class ConnectableTest extends TestCase
         $this->assertEquals('5581911110000', $serialized['phone_number']);
         $this->assertEquals('Acme on Zapmizer', $serialized['zapmizer_team_name']);
         $this->assertTrue($serialized['is_active']);
+    }
+
+    public function testM1TheSerializationSaysWhetherASecretIsStored()
+    {
+        $with = $this->connectedTeam('whsec_abcdef')->zapmizerConnection->fresh()->toArray();
+        $without = $this->connectedTeam(number: '5581922220000', overrides: ['webhook_secret' => null])->zapmizerConnection->fresh()->toArray();
+
+        $this->assertTrue($with['has_webhook_secret']);
+        $this->assertFalse($without['has_webhook_secret']);
+
+        foreach ([$with, $without] as $serialized) {
+            $this->assertArrayNotHasKey('webhook_secret', $serialized);
+            $this->assertArrayNotHasKey('webhook_previous_secret', $serialized);
+        }
     }
 
     public function testSigningSecretsOfferThePreviousOneDuringRotation()
@@ -174,7 +213,7 @@ class ConnectableTest extends TestCase
         $request = $this->history[0]['request'];
         $this->assertEquals('http://localhost/api/webhooks', (string) $request->getUri());
         $this->assertEquals(
-            ['url' => 'http://localhost/zapmizer/webhook', 'enabled' => true, 'version' => '2024-02-27'],
+            ['url' => 'http://localhost/zapmizer/webhook', 'enabled' => true, 'version' => '2026-10-20'],
             json_decode((string) $request->getBody(), true)
         );
 
@@ -253,8 +292,14 @@ class ConnectableTest extends TestCase
         $connection = $this->connectedTeam(overrides: ['api_token' => null])->zapmizerConnection;
 
         // Never the single-tenant token in a connection's name.
-        $this->expectException(ZapmizerUnauthorizedException::class);
-        $connection->instanceClient();
+        try {
+            $connection->instanceClient();
+            $this->fail('expected a ZapmizerUnauthorizedException');
+        } catch (ZapmizerUnauthorizedException $exception) {
+            $this->assertSame(401, $exception->status());
+            $this->assertSame('There is no Zapmizer token for this connection.', $exception->getMessage());
+            $this->assertSame('There is no Zapmizer token for this connection.', $exception->reason());
+        }
     }
 
     public function testDeleteRemoteWebhook()
@@ -303,16 +348,34 @@ class ConnectableTest extends TestCase
         $this->assertTrue(ZapmizerConnection::first()->connectable->is($team));
     }
 
-    protected function inboundMessage(): InboundMessage
+    protected function inboundMessage(): Message
     {
-        return InboundMessage::fromMessage([
-            'id' => ['_serialized' => 'true_5581999998888@c.us_3EB0ABC123', 'id' => '3EB0ABC123'],
+        return Message::fromContract([
+            'id' => '3EB0ABC123',
+            'chat' => '5581999998888@c.us',
+            'sender' => '5581999998888@c.us',
+            'type' => 'image',
+            'timestamp' => 1700000000,
+            'media' => ['mime' => 'image/png'],
+        ]);
+    }
+
+    public function testMediaAsksWithTheIdOfAMessageFromTheLegacyWebhookToo()
+    {
+        $this->fakeHttp(new Response(202, ['Content-Type' => 'application/json'], '{"media_state":"downloading"}'));
+        $connection = $this->connectedTeam(overrides: ['api_token' => 'team-token', 'bot_instance_id' => 77])->zapmizerConnection;
+
+        $connection->media(Message::fromLegacy([
+            'id' => ['_serialized' => 'false_5581999998888@c.us_3EB0ABC123', 'id' => '3EB0ABC123'],
             'from' => '5581999998888@c.us',
             'type' => 'image',
             'hasMedia' => true,
             'timestamp' => 1700000000,
             '_data' => ['mimetype' => 'image/png'],
-        ], '5581911110000@c.us');
+        ]));
+
+        parse_str(parse_url((string) $this->history[0]['request']->getUri(), PHP_URL_QUERY), $query);
+        $this->assertEquals(['bot_instance_id' => '77', 'message_id' => '3EB0ABC123', 'timestamp' => '1700000000'], $query);
     }
 
     public function testMediaAsksForTheConnectionsInstanceAndTheMessage()
@@ -326,16 +389,51 @@ class ConnectableTest extends TestCase
         $this->assertEquals('png-bytes', $download->contents());
         $request = $this->history[0]['request'];
         parse_str($request->getUri()->getQuery(), $query);
-        $this->assertEquals(['bot_instance_id' => '77', 'message_id' => 'true_5581999998888@c.us_3EB0ABC123', 'timestamp' => '1700000000'], $query);
+        $this->assertEquals(['bot_instance_id' => '77', 'message_id' => '3EB0ABC123', 'timestamp' => '1700000000'], $query);
         $this->assertEquals('Bearer team-token', $request->getHeaderLine('Authorization'));
+    }
+
+    public function testMediaWithoutAUsableTimestampAsksWithNow()
+    {
+        // 0 would read as a long-gone message (`unavailable` at once) and a
+        // future one as a 422: sentAt() falls back to now, as before.
+        \Illuminate\Support\Carbon::setTestNow('2026-11-16 12:00:00');
+        \Carbon\CarbonImmutable::setTestNow('2026-11-16 12:00:00');
+        $this->fakeHttp(new Response(200, ['Content-Type' => 'image/png'], 'png-bytes'));
+        $connection = $this->connectedTeam(overrides: ['api_token' => 'team-token', 'bot_instance_id' => 77])->zapmizerConnection;
+
+        $connection->media(Message::fromContract(['id' => '3EB0ABC123', 'chat' => '5581999998888@c.us', 'type' => 'image', 'media' => ['mime' => 'image/png']]));
+
+        parse_str($this->history[0]['request']->getUri()->getQuery(), $query);
+        $this->assertSame((string) \Carbon\CarbonImmutable::parse('2026-11-16 12:00:00')->getTimestamp(), $query['timestamp']);
+        \Illuminate\Support\Carbon::setTestNow();
+        \Carbon\CarbonImmutable::setTestNow();
     }
 
     public function testMediaRequiresAPairedInstance()
     {
         $connection = $this->connectedTeam(overrides: ['bot_instance_id' => null])->zapmizerConnection;
 
-        $this->expectException(ZapmizerUnauthorizedException::class);
-        $connection->media($this->inboundMessage());
+        try {
+            $connection->media($this->inboundMessage());
+            $this->fail('expected a ZapmizerConnectException');
+        } catch (ZapmizerConnectException $exception) {
+            $this->assertNotInstanceOf(ZapmizerUnauthorizedException::class, $exception);
+            $this->assertSame('There is no paired Zapmizer instance for this connection.', $exception->getMessage());
+        }
+    }
+
+    public function testSyncMessagesRequiresAPairedInstance()
+    {
+        $connection = $this->connectedTeam(overrides: ['bot_instance_id' => null])->zapmizerConnection;
+
+        try {
+            $connection->syncMessages();
+            $this->fail('expected a ZapmizerConnectException');
+        } catch (ZapmizerConnectException $exception) {
+            $this->assertNotInstanceOf(ZapmizerUnauthorizedException::class, $exception);
+            $this->assertSame('There is no paired Zapmizer instance for this connection.', $exception->getMessage());
+        }
     }
 
     public function testAwaitMediaRetriesWhileDownloading()

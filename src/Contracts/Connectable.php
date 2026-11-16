@@ -54,4 +54,13 @@ interface Connectable
      * A message from the model's paired number to `$to`.
      */
     public function zapmizerMessage(string $to): ZapmizerMessage;
+
+    /**
+     * The model's customer id on Zapmizer, sent as the connect session's
+     * `external_id`: it keys the customer's subscription and checkout.
+     * Override it to send another value (a tenant id, a prefixed key). It
+     * must be unique among the connectables, and Zapmizer does not tell
+     * upper from lower case.
+     */
+    public function zapmizerExternalId(): string;
 }

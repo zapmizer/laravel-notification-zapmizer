@@ -1,6 +1,15 @@
 {
     "name": "zapmizer/laravel-notification-zapmizer",
-    "description": "A Laravel package to send WhatsApp notifications using Zapmizer API",
+    "description": "WhatsApp through Zapmizer for Laravel: notification channel, a number per model through the hosted connect flow, signed webhooks, embedded inbox and number verification.",
+    "keywords": [
+        "laravel",
+        "notifications",
+        "notification-channel",
+        "whatsapp",
+        "zapmizer",
+        "webhook",
+        "multi-tenant"
+    ],
     "homepage": "https://github.com/zapmizer/laravel-notification-zapmizer",
     "license": "MIT",
     "authors": [
@@ -15,12 +24,18 @@
         "php": "^8.1",
         "guzzlehttp/guzzle": "^7.2 || ^8.0",
         "illuminate/notifications": "^8.83 || ^9.52 || ^10.0 || ^11.0 || ^12.0 || ^13.0",
-        "illuminate/support": "^8.83 || ^9.52 || ^10.0 || ^11.0 || ^12.0 || ^13.0"
+        "illuminate/http": "^8.83 || ^9.52 || ^10.0 || ^11.0 || ^12.0 || ^13.0",
+        "illuminate/support": "^8.83 || ^9.52 || ^10.0 || ^11.0 || ^12.0 || ^13.0",
+        "symfony/polyfill-intl-idn": "^1.26"
     },
     "require-dev": {
         "mockery/mockery": "^1.0",
-        "phpunit/phpunit": "^9.5.10 || ^10.0 || ^11.0 || ^12.0",
-        "orchestra/testbench": "^6.48 || ^7.58 || ^8.18 || ^9.0 || ^10.0 || ^11.0"
+        "opis/json-schema": "^2.4",
+        "orchestra/testbench": "^6.48 || ^7.58 || ^8.18 || ^9.0 || ^10.0 || ^11.0",
+        "phpunit/phpunit": "^9.5.10 || ^10.0 || ^11.0 || ^12.0"
+    },
+    "suggest": {
+        "ext-curl": "Enforces the 600 s total limit of media downloads; without it Guzzle's stream handler applies the timeout per read."
     },
     "autoload": {
         "psr-4": {
@@ -31,6 +46,9 @@
         "psr-4": {
             "NotificationChannels\\Zapmizer\\Test\\": "tests"
         }
+    },
+    "scripts": {
+        "contract:update": "@php tests/contract/update.php"
     },
     "config": {
         "sort-packages": true

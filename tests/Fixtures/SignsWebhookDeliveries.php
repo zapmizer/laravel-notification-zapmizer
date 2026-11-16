@@ -7,17 +7,17 @@ use Illuminate\Testing\TestResponse;
 trait SignsWebhookDeliveries
 {
     /**
-     * A `message` envelope as whatsapp-web.js hands it over.
+     * A `message` envelope as whatsapp-web.js hands it over. With `$wid`,
+     * the envelope carries the signed `wid` next to the name.
      *
      * @param array<string, mixed> $overrides
      */
-    protected function messageEnvelope(string $from = '5581999998888@c.us', array $overrides = []): array
+    protected function messageEnvelope(string $from = '5581999998888@c.us', array $overrides = [], ?string $wid = null): array
     {
         $id = $overrides['id'] ?? 'MSG' . random_int(10000000, 99999999);
         unset($overrides['id']);
 
-        return [
-            'name' => 'message',
+        return ['name' => 'message'] + ($wid === null ? [] : ['wid' => $wid]) + [
             'data' => [array_merge([
                 'id' => ['id' => $id, '_serialized' => "false_{$from}_{$id}"],
                 'from' => $from,
@@ -33,14 +33,56 @@ trait SignsWebhookDeliveries
     }
 
     /**
-     * Deliver a signed webhook, exactly as Zapmizer does.
+     * A `message_received` (or `message_sent`) envelope of a webhook in
+     * version `2026-10-20`: the message contract, as Zapmizer's openapi.json
+     * describes it.
+     *
+     * @param array<string, mixed> $overrides Of the message (`data`).
+     */
+    protected function contractEnvelope(string $name = 'message_received', array $overrides = [], ?string $wid = '5581911110000@c.us', string $version = '2026-10-20'): array
+    {
+        $fromMe = $name === 'message_sent';
+
+        return [
+            'id' => '0199a3c2-7f1e-7b6a-9d2e-' . random_int(100000000000, 999999999999),
+            'created_at' => '2026-10-20T14:03:11.482Z',
+            'wid' => $wid,
+            'name' => $name,
+            'version' => $version,
+            'data' => array_merge([
+                'id' => '3EB0' . random_int(10000000, 99999999),
+                'chat' => '5581999998888@c.us',
+                'sender' => $fromMe ? $wid : '5581999998888@c.us',
+                'sender_name' => $fromMe ? null : 'Maria Souza',
+                'from_me' => $fromMe,
+                'from_me_other_device' => false,
+                'timestamp' => now()->getTimestamp(),
+                'type' => 'text',
+                'text' => 'hi',
+                'quoted' => null,
+                'forwarded' => false,
+                'view_once' => false,
+                'mentions' => [],
+                'media' => null,
+                'location' => null,
+                'contacts' => null,
+                'poll' => null,
+                'reply' => null,
+                'link_preview' => null,
+            ], $overrides),
+        ];
+    }
+
+    /**
+     * Deliver a signed webhook, exactly as Zapmizer does. A `null` wid
+     * leaves the X-Wid header out.
      */
     protected function deliverSigned(
         array $envelope,
         string $secret,
         ?int $timestamp = null,
         ?string $signature = null,
-        string $wid = '5581911110000@c.us',
+        ?string $wid = '5581911110000@c.us',
         string $path = '/zapmizer/webhook',
     ): TestResponse {
         $body = json_encode($envelope, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -49,7 +91,7 @@ trait SignsWebhookDeliveries
 
         return $this->call('POST', $path, [], [], [], [
             'CONTENT_TYPE' => 'application/json',
-            'HTTP_X_WID' => $wid,
+        ] + ($wid === null ? [] : ['HTTP_X_WID' => $wid]) + [
             'HTTP_X_ZAPMIZER_TIMESTAMP' => (string) $timestamp,
             'HTTP_X_ZAPMIZER_SIGNATURE' => $signature,
         ], $body);

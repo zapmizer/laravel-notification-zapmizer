@@ -7,9 +7,11 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use NotificationChannels\Zapmizer\Events\MessageReceived;
+use NotificationChannels\Zapmizer\Events\MessageSent;
 use NotificationChannels\Zapmizer\Events\WebhookReceived;
 use NotificationChannels\Zapmizer\Test\Fixtures\SignsWebhookDeliveries;
 use NotificationChannels\Zapmizer\Test\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * A single-tenant application: `ZAPMIZER_API_TOKEN` + `ZAPMIZER_WEBHOOK_SECRET`,
@@ -51,10 +53,45 @@ class SingleTenantWebhookTest extends TestCase
 
         Event::assertDispatched(MessageReceived::class, function (MessageReceived $event) {
             return $event->connection === null
-                && $event->message->fromPhone === '5581999998888'
-                && $event->message->body === 'hello';
+                && $event->message->chatPhone() === '5581999998888'
+                && $event->message->text === 'hello';
         });
         Event::assertDispatched(WebhookReceived::class, fn (WebhookReceived $event) => $event->connection === null);
+    }
+
+    /** @dataProvider messageContractEvents */
+    #[DataProvider('messageContractEvents')]
+    public function testAMessageOfTheContractFiresItsEventOnTheApplicationSecret(string $name, string $event)
+    {
+        Log::spy();
+        Event::fake([MessageReceived::class, MessageSent::class]);
+        $envelope = $this->contractEnvelope($name, ['id' => 'AAA', 'text' => 'oi']);
+
+        $this->deliverSigned($envelope, 'app-secret')
+            ->assertOk()
+            ->assertSeeText('Webhook Handled');
+
+        Event::assertDispatched($event, fn ($dispatched) => $dispatched->connection === null
+            && $dispatched->message->id === 'AAA'
+            && $dispatched->message->text === 'oi'
+            && $dispatched->envelope->version === '2026-10-20'
+            && $dispatched->payload === $envelope);
+        Event::assertNotDispatched($event === MessageSent::class ? MessageReceived::class : MessageSent::class);
+        Log::shouldNotHaveReceived('warning');
+    }
+
+    public static function messageContractEvents(): array
+    {
+        return ['message_received' => ['message_received', MessageReceived::class], 'message_sent' => ['message_sent', MessageSent::class]];
+    }
+
+    public function testTheMessageEventDoesNotWarnAboutTheContract()
+    {
+        Log::spy();
+
+        $this->deliverSigned($this->messageEnvelope(), 'app-secret')->assertOk();
+
+        Log::shouldNotHaveReceived('warning');
     }
 
     public function testWrongSecretIsRefusedWithoutTheConnectionsTable()

@@ -6,7 +6,7 @@ A rota do webhook (`POST /zapmizer/webhook`, e a rota por conexão quando ligada
 
 1. `WebhookReceived`, com o payload cru, para toda entrega que passou pela assinatura.
 2. O evento tipado do catálogo (tabela abaixo), quando o `data` dá para ler.
-3. O `handle{NomeEmStudly}` do controller, se existir. Para `message` é o da lib, que dispara `MessageReceived`; um `handle*` que o app escreveu numa subclasse roda aqui. Depois de um `handle*`, sai o `WebhookHandled`.
+3. O `handle{NomeEmStudly}` do controller, se existir. Para `message_received`, `message_sent` e `message` é o da lib, que dispara `MessageReceived` ou `MessageSent` (veja "Mensagens" abaixo); um `handle*` que o app escreveu numa subclasse roda aqui. Depois de um `handle*`, sai o `WebhookHandled`.
 
 Os eventos do catálogo não têm `handle*` na lib. Por isso continuam respondendo `Webhook Received`, não disparam `WebhookHandled` e passam pelo `missingMethod`, como antes. O evento tipado se soma ao `WebhookReceived`.
 
@@ -36,7 +36,7 @@ Todo evento tipado também tem:
 - `$event->connection`: a `ZapmizerConnection` cujo segredo assinou a entrega, `null` no single-tenant;
 - `$event->payload`: o corpo decodificado.
 
-O `MessageReceived` também ganhou o `$event->envelope`. Um `MessageReceived` serializado antes do deploy (listener na fila) volta sem a propriedade: num listener `ShouldQueue`, leia `$event->envelope ?? null` até a fila antiga esvaziar.
+O `MessageReceived` e o `MessageSent` também têm o `$event->envelope`.
 
 O `created_at` só é lido em ISO 8601 estrito, com fuso (`2025-10-17T12:00:00.000000Z`); outro formato vira `createdAt` `null` e uma linha de log.
 
@@ -48,7 +48,66 @@ Um `name` fora do catálogo não dispara nada novo.
 
 ### Versão do webhook
 
-Cada webhook da Zapmizer tem uma versão, fixada na criação, que vem em `version` no envelope. Esta versão da lib lê a **`2024-02-27`**: o catálogo acima e o `message`, que vira `MessageReceived`. Na `2026-10-20` (o contrato de mensagens) as mensagens chegam como `message_received` e `message_sent`, que esta versão não lê. Uma entrega dessas continua respondida com 200 (`Webhook Received`), não dispara `MessageReceived` e loga um warning por entrega (`zapmizer: the webhook delivers in version 2026-10-20 (the message contract), …`, com `name`, `version`, `connection_id` e `wid`). Troque o webhook para a versão `2024-02-27` na tela de Webhooks da Zapmizer (o token do connect não pode mexer em `/webhooks`). O webhook que o connect cria já nasce em `2024-02-27`, mas um webhook que o time já tinha na mesma URL é reaproveitado com a versão dele; veja "The webhook version" em [connect.md](connect.md#the-webhook-version).
+Cada webhook da Zapmizer tem uma versão, fixada na criação, que vem em `version` no envelope (Zapmizer 1.148.17 ou posterior; antes, `version` vem `null`). A lib lê as duas que existem:
+
+- **`2026-10-20`**, o contrato de mensagem: as mensagens chegam como `message_received` e `message_sent`, no mesmo formato para número por QR e oficial. É a versão do webhook que o connect e o `createWebhook()` criam (veja "The webhook version" em [connect.md](connect.md#the-webhook-version)).
+- **`2024-02-27`**, descontinuada pela Zapmizer (a data de desligamento ainda vai ser anunciada): as mensagens recebidas chegam como `message`, no formato do WhatsApp Web, e a lib as traduz para o mesmo `Message`. Funciona igual, com duas diferenças: `MessageSent` nunca dispara (o `message` só traz o que o número recebeu) e só número por QR entrega `message`.
+
+O catálogo acima não muda entre as duas.
+
+## Mensagens
+
+```php
+use NotificationChannels\Zapmizer\Events\MessageReceived;
+use NotificationChannels\Zapmizer\Events\MessageSent;
+use NotificationChannels\Zapmizer\Messages\MessageType;
+
+Event::listen(function (MessageReceived $event) {
+    $message = $event->message; // Messages\Message
+
+    if ($message->type === MessageType::DOCUMENT && $message->media?->mime === 'application/pdf') {
+        ProcessBill::dispatch($event->connection, $message);
+    }
+});
+
+Event::listen(function (MessageSent $event) {
+    if ($event->message->fromMeOtherDevice) {
+        // a pessoa respondeu pelo celular
+    }
+});
+```
+
+| `name` | Versão | Evento |
+|---|---|---|
+| `message_received` | `2026-10-20` | `MessageReceived` |
+| `message_sent` | `2026-10-20` | `MessageSent` |
+| `message` | `2024-02-27` | `MessageReceived`, traduzido |
+
+Os dois eventos recebem `Message $message`, `?ZapmizerConnection $connection`, `array $payload` (o corpo decodificado) e `?Envelope $envelope`. O número que recebeu ou enviou a mensagem é o `$event->envelope->wid` (e a `$event->connection`, no multi-tenant): o contrato não traz esse campo na mensagem.
+
+- **`Messages\Message`** tem os campos do `data` de `message_received`, em camelCase: `id`, `chat`, `sender`, `senderName`, `fromMe`, `fromMeOtherDevice`, `timestamp`, `type`, `text`, `quoted`, `forwarded`, `viewOnce`, `mentions`, `media`, `location`, `contacts`, `poll`, `reply`, `linkPreview` e `raw`. Os aninhados são DTOs pequenos (`MessageMedia`, `QuotedMessage`, `MessageLocation`, `MessagePoll`, `MessageReply`, `LinkPreview`); `contacts` é a lista de `{name, vcard}` como veio. Atalhos: `sentAt()`, `chatPhone()` (os dígitos de um `...@c.us`; `null` em grupo, `@lid`, transmissão e canal), `senderPhone()`, `isGroup()`, `isBroadcast()` e `hasMedia()`.
+- **`type`** é uma das constantes de `Messages\MessageType` (`text`, `image`, `video`, `audio`, `voice`, `document`, `sticker`, `location`, `contact`, `poll`, `button_reply`, `list_reply`, `unknown`). É uma string: um tipo novo da Zapmizer chega sem release da lib. `unknown` traz a mensagem original em `raw`: guarde, não descarte.
+- **`id`** é o id da mensagem no WhatsApp (`wamid...` no número oficial). Ele pode se repetir entre conversas: deduplique por `chat` + `id`.
+- **`chat`** pode ser `...@lid` quando o WhatsApp não revelou o número; aí `chatPhone()` é `null`.
+- **Avisos do WhatsApp não são mensagens.** A entrada de alguém num grupo, o aviso de criptografia, a mensagem apagada ou editada e a que ainda não chegou inteira não disparam `MessageReceived`, em nenhuma das versões: a Zapmizer não os entrega no contrato, e a lib aplica a mesma regra ao `message` da `2024-02-27`. A mensagem editada chega no `message_edited` e a apagada no `message_revoked`.
+- **`MessageSent` dispara para tudo o que o número envia**: pela API (inclusive as notificações do próprio app), pelo bot e pelo celular. `fromMeOtherDevice` separa o que saiu de outro aparelho, como o celular (em grupo é sempre `false`). A lib não separa o que saiu da API do que saiu do bot: o `id` do `SentMessage` é o id interno da Zapmizer, não o do WhatsApp, e o `wapp_message_id` só aparece depois, no `message_status` ou no `track()`.
+- **Número oficial.** Os dois eventos chegam no mesmo formato. A mídia não se baixa pela lib (`media()` responde 422, `MediaRejectedException`), e `media` traz só `mime` e `filename`.
+
+### O formato `2024-02-27`
+
+O `message` traz em `data[0]` a mensagem do WhatsApp Web, o mesmo objeto que o `syncMessages()` de uma Zapmizer anterior à 1.148.17 devolve. A lib o traduz com `Message::fromLegacy()` (`Messages\LegacyMessageTranslator`), um port da tradução da própria Zapmizer (`from-wwebjs.ts` e `toPartnerMessage()` do bot): o mesmo evento vira o mesmo `Message` que chegaria em `message_received`. Os testes da lib comparam campo a campo com as fixtures do servidor. O original continua em `$event->payload['data'][0]`.
+
+- O que não dá para ler (sem id, sem tipo, um cartão de contato vazio) vira `unknown`, com o original em `raw`, como no contrato: nada some em silêncio.
+- `fromMe` é sempre `false` aqui.
+
+### O que a lib loga
+
+- **Evento de mensagem que não traz mensagem** (`message` sem objeto em `data[0]`, `message_received` sem `id`): responde 200 (`Webhook Received`), não dispara nada e loga o warning `zapmizer: a message event could not be read, and nothing fired.` com `name`, `version`, `id`, `connection_id` e `wid`. Uma nova tentativa traria o mesmo corpo.
+- **Versão desconhecida** (`message_received`/`message_sent` com `version` diferente de `2026-10-20`: mais nova, fora do formato de data ou ausente): a lib lê do mesmo jeito, porque o webhook não repete e descartar seria perder a mensagem. Se der um `Message`, o evento dispara; nos dois casos sai o warning `zapmizer: the webhook delivers a message in version …, which this version of the package does not know: …`. Atualize a lib.
+
+### Fila
+
+Um `MessageReceived` serializado por uma versão anterior da lib (listener `ShouldQueue`) não volta: ele carregava um `InboundMessage`, que não existe mais. Esvazie a fila desses listeners antes do deploy. O de/para do `InboundMessage` está no CHANGELOG ("Upgrade da 0.3 e da 0.4").
 
 ## `message_status`
 

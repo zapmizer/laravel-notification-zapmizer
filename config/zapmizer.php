@@ -10,9 +10,9 @@ return [
     // Zapmizer versions its contract by header. Sent as `api-version` by
     // every client (single-tenant and connected models) when set; leave
     // null for the legacy shape. It decides the shape of sending
-    // (2025-06-27 or later to track it) and of the calls that do not read
-    // messages: syncMessages() and createWebhook() always ask for the
-    // message contract (2026-10-20) on their own.
+    // (2025-06-27 to track it; 2026-10-20 too, from Zapmizer 1.148.17) and
+    // of the calls that do not read messages: syncMessages() and
+    // createWebhook() always ask for the message contract (2026-10-20).
     'api_version' => env('ZAPMIZER_API_VERSION'),
     // Country code prepended to numbers typed in national format (10 or 11
     // digits). The Brazilian ninth-digit tolerance only applies to 55.

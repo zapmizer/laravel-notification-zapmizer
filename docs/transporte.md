@@ -151,9 +151,9 @@ Passar um transporte no construtor também vale. Uma config inválida falha no c
 
 ## Mídia num job da fila
 
-O webhook responde na hora e o bot pode ainda estar baixando a mídia. Por isso o listener (`QueueInboundMedia`) só despacha um job quando a mensagem tem mídia (`hasMedia`) e há conexão, sem HTTP no webhook. O job pergunta uma vez (`media()`) e se devolve à fila em vez de segurar um worker:
+O webhook responde na hora e o bot pode ainda estar baixando a mídia. Por isso o listener (`QueueInboundMedia`) só despacha um job quando a mensagem tem mídia (`hasMedia()`) e há conexão, sem HTTP no webhook. O job pergunta uma vez (`media()`) e se devolve à fila em vez de segurar um worker:
 
-- `retryUntil()` é `sentAt` mais 600 s: a Zapmizer guarda a mídia por esse tempo.
+- `retryUntil()` é `sentAt()` mais 600 s: a Zapmizer guarda a mídia por esse tempo.
 - `MediaRateLimitedException`: `release($e->retryAfter() ?? 60)`.
 - `MediaRejectedException`: registra no log e chama `fail()`.
 - `downloading`: `release(5)`.
@@ -175,7 +175,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\MediaRejectedException;
-use NotificationChannels\Zapmizer\InboundMessage;
+use NotificationChannels\Zapmizer\Messages\Message;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
 use Symfony\Component\Mime\MimeTypes;
 
@@ -188,19 +188,19 @@ class StoreInboundMedia implements ShouldQueue
 
     public function __construct(
         public ZapmizerConnection $zapmizerConnection,
-        public InboundMessage $message,
+        public Message $message,
     ) {
     }
 
     public function retryUntil(): DateTime
     {
-        return $this->message->sentAt->copy()->addSeconds(600)->toDateTime();
+        return $this->message->sentAt()->addSeconds(600)->toDateTime();
     }
 
     public function handle(): void
     {
         $disk = Storage::disk(config('services.zapmizer.media_disk'));
-        $path = $this->pathFor($this->zapmizerConnection->getKey(), $this->message->id, $this->message->mediaMimeType());
+        $path = $this->pathFor($this->zapmizerConnection->getKey(), $this->message->id, $this->message->media?->mime);
 
         if ($disk->exists($path)) {
             return;

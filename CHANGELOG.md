@@ -20,8 +20,35 @@ A 0.4 só acrescentou o `syncMessages()` à 0.3, que segue igual aqui: a lista v
 10. **`base_uri` sem esquema** (`localhost:8001/api/`): ponha o esquema (`http://localhost:8001/api/`), senão nada sai.
 11. **Código que usa `PartnerClient`, `ConnectToken`, `ConnectSession` ou `InstanceClient` direto, ou estende classes da lib:** confira as seções "Parceiro", "Instância", "Connect" e "Embed", e as notas de subclasses em cada uma.
 12. **Quem usa o retorno do envio** (`sendMessage()`, `sendMessageWithFile()`, `ZapmizerMessage::send()` ou um listener de `NotificationSent`): ele passa a ser um `Messages\SentMessage`. Troque `getBody()` por `$sent->raw()` ou pelos campos. Num listener, `$event->response['message'] instanceof ZapmizerMessage` falha em silêncio: troque por `instanceof SentMessage`. Uma subclasse de `ZapmizerMessage` que sobrescreve `send()` precisa declarar `: SentMessage`. Configure `ZAPMIZER_API_VERSION=2025-06-27` para acompanhar o envio. Veja "Envio tipado, acompanhamento e template" em "Envio".
-13. **Não use `ZAPMIZER_API_VERSION=2026-10-20` com esta versão.** A lib fixa a versão legada só onde o formato das mensagens muda (`syncMessages()` e `createWebhook()` mandam `api-version: 2025-06-27`; o webhook nasce em `2024-02-27`, veja a 0.4.2), mas o envio e as demais chamadas seguem `zapmizer.api_version`. Deixe a chave vazia ou em `2025-06-27`. Uma versão que o Zapmizer não conhece responde 400 `unknown_api_version` em `POST /webhooks` e `GET /whatsapp-messages`.
-14. **Single-tenant com webhook cadastrado à mão:** crie o webhook na tela de Webhooks do Zapmizer na versão `2024-02-27` (a tela sugere `2026-10-20`). Em `2026-10-20` as mensagens chegam como `message_received`/`message_sent`, o `MessageReceived` não dispara e a lib só loga um warning.
+13. **A mensagem é o contrato `2026-10-20`.** `InboundMessage` saiu. `MessageReceived`, o novo `MessageSent`, `syncMessages()`, `media()` e `awaitMedia()` usam `Messages\Message`, com a forma do contrato de mensagem da Zapmizer, nos dois formatos de webhook. Troque o tipo nos listeners, jobs e testes e use o de/para abaixo. Veja "Mensagens".
+14. **O `id` da mensagem muda para as mesmas mensagens.** Era o `id._serialized` do WhatsApp Web (`true_5521…@c.us_3AAA…`); agora é o id curto do WhatsApp (`3AAA…`), o mesmo que o contrato entrega e que o `GET /whatsapp-messages/media` aceita. Ele pode se repetir entre conversas: deduplique por `chat` + `id`. Um id guardado antes não casa com o novo: na transição, compare com o terceiro segmento do `_serialized` antigo separado por `_` (`<fromMe>_<conversa>_<id>`, e em grupo `_<participante>` no fim), a mesma regra com que a Zapmizer lê o `_serialized` no `GET /whatsapp-messages/media`.
+15. **Fila:** um `MessageReceived` (ou um job seu com `InboundMessage`) serializado antes do deploy não volta: esvazie as filas desses listeners e jobs antes de atualizar.
+16. **Webhooks e versão.** O connect e o `createWebhook()` criam o webhook em `2026-10-20`, e o `syncMessages()` pede `api-version: 2026-10-20`, qualquer que seja a config. Um webhook em `2024-02-27` continua funcionando, traduzido, e o single-tenant pode cadastrar o webhook à mão em qualquer das duas versões (a recomendada é `2026-10-20`, a que a tela sugere). `ZAPMIZER_API_VERSION` volta a valer só para o envio e as rotas que não leem mensagem: `2025-06-27` para acompanhar o envio, ou `2026-10-20` a partir do Zapmizer 1.148.17 (antes dele, o envio só conhece `2025-06-27`). Acrescente `connect.webhook_version` a uma `config/zapmizer.php` publicada se quiser outra versão (sem a chave, vale `2026-10-20`).
+
+De/para do `InboundMessage` para `Messages\Message`:
+
+| `InboundMessage` | `Message` |
+| --- | --- |
+| `id` (`id._serialized`) | `id` (id curto do WhatsApp); deduplique por `chat` + `id` |
+| `from` | `chat` (a conversa: o contato, o grupo ou `...@lid`) |
+| `fromPhone` | `chatPhone()` (`null` em grupo, `@lid`, transmissão e canal; antes era `''` ou os dígitos do grupo) |
+| `to` (o número que recebeu, do `X-Wid`) | `$event->envelope->wid`, `$event->connection`, `SyncedMessages::$wid` |
+| `author` / `authorPhone` | `sender` / `senderPhone()`; fora de grupo, `sender` é o contato (ou o próprio número quando `fromMe`) |
+| `body` | `text` (o texto, a legenda, a pergunta da enquete ou a opção escolhida) |
+| `type` (`chat`, `ptt`, `vcard`, `multi_vcard`, `poll_creation`, `buttons_response`, `list_response`...) | `type` (`text`, `voice`, `contact`, `contact`, `poll`, `button_reply`, `list_reply`...; `Messages\MessageType`); o que o contrato não cobre vem `unknown`, com o original em `raw` |
+| `fromMe` | `fromMe` (verdadeiro no `MessageSent` e no sync); `fromMeOtherDevice` é novo |
+| `hasMedia` | `hasMedia()` |
+| `mediaMetadata`, `mediaMimeType()` | `media->mime` (e `size`, `duration`, `width`, `height`, `pageCount`, `isGif`) |
+| `mediaFilename()` | `media->filename` |
+| `mediaMetadata['caption']` | `text` |
+| `mediaMetadata` (`media_key`, `direct_path`, `filehash`...) | sem equivalente; o original segue em `$event->payload` (só no webhook `2024-02-27`) |
+| `isGroup` / `isBroadcast` (propriedades) | `isGroup()` / `isBroadcast()` |
+| `hasUnresolvedSender` | `chat` ou `sender` terminando em `@lid` (`chatPhone()`/`senderPhone()` `null`). A lib não procura mais o número em `_data.from`: segue a Zapmizer, que mantém o `@lid` |
+| `sentAt` (propriedade `Carbon`) | `sentAt()` (`CarbonImmutable`) e `timestamp` (segundos) |
+| `raw` (o objeto do WhatsApp Web) | `$event->payload['data'][0]` no `2024-02-27`; `raw` do `Message` só existe em `unknown` |
+| `InboundMessage::fromEnvelope($payload, $wid)` / `fromMessage($message, $wid)` | `Message::fromLegacy($payload['data'][0])` / `Message::fromLegacy($message)`; o contrato, `Message::fromContract($data)` |
+| aviso do WhatsApp (entrada em grupo, mensagem apagada, aviso de criptografia...) virava `MessageReceived` | não dispara nada, como no contrato |
+| `message` sem `id` era ignorado em silêncio | dispara `MessageReceived` com `type` `unknown` e o original em `raw` |
 
 ## Transporte
 
@@ -139,7 +166,8 @@ Subclasses: `Zapmizer` ganhou os métodos públicos `sentMessage()`, `metaMessag
 | `?error=subscription_required` → `exchange_failed` | `subscription_required` |
 | status `qr_unavailable` | sai (a Zapmizer não envia desde 1.148.8) |
 | `?error=` respondido antes do `state` | `state` conferido antes; com `state` inválido, `invalid_state` |
-| webhook reaproveitado em outra versão: silêncio | conecta (`ok`) e loga um warning: o webhook entrega em `2026-10-20` e o `MessageReceived` não dispara para essa conexão (troque o webhook para `2024-02-27` na tela de Webhooks) |
+| `start` sem `webhook_version` (o webhook nascia na versão padrão da conta de parceiro) | manda `webhook_version` de `zapmizer.connect.webhook_version`, `2026-10-20` por padrão |
+| webhook reaproveitado em `2024-02-27`: silêncio | conecta (`ok`) e loga um `info`: as mensagens chegam traduzidas, e para migrar o webhook é preciso outra `webhook_url` ou revogar e conectar de novo |
 | um callback com `state` errado consumia o pending | o pending só sai quando o `state` bate |
 | token sem número gravado inativo (ou ativo sem instância) | `exchange_failed`, nada gravado, token revogado |
 | `connect/token` sem `user_id`/`team_id` válidos gravava a conexão com `zapmizer_team_id` null | `exchange_failed`, nada gravado |
@@ -185,13 +213,13 @@ Subclasses do `ConnectController`: saem `obtainWebhookSecret()` e `forgetRemoteW
 - `PartnerClient::checkout(string $externalId, string $redirectUri, ?string $state = null): PartnerCheckout` cria o checkout (`POST /partner/users/{externalId}/checkout`). `Connect\PartnerCheckout` tem `url` e `expiresAt` (`?CarbonImmutable`). 404 → `ZapmizerApiException` com `status()` 404; 409 → `ZapmizerApiException` com `error()` `already_subscribed` ou `payment_incomplete`; 422 do redirect → `errors()['redirect_uri']`.
 - `createSession()` ganha `externalId` (o id do cliente no app, chave das duas chamadas acima) e limita `expires_in` a 900..86400 (`PartnerClient::MAX_EXPIRES_IN`).
 - `ConnectToken` ganha `userId` e `hasNumber()` (`false` quando `phone_number` ou `bot_instance_id` vieram `null`).
-- `createSession()` com `webhookUrl` manda `webhook_version: 2024-02-27` (`InstanceClient::LEGACY_WEBHOOK_VERSION`): o webhook que o connect cria nasce na versão do evento `message`, que a lib lê. Zapmizer anterior à 1.148.17 ignora o campo. Sem `webhookUrl`, nada muda no corpo.
-- `ConnectToken` ganha `webhookVersion` (`?string`, o `webhook_version` do `connect/token`; `null` sem webhook ou em Zapmizer anterior à 1.148.17) e `hasUnreadableWebhookVersion()`.
+- `createSession()` ganha `webhookVersion` no fim e, com `webhookUrl`, manda `webhook_version`: o argumento ou `zapmizer.connect.webhook_version` (`ZAPMIZER_WEBHOOK_VERSION`, padrão `2026-10-20`). Vazio deixa o campo de fora, e o webhook nasce na versão padrão da conta de parceiro. Zapmizer anterior à 1.148.17 ignora o campo. Sem `webhookUrl`, nada muda no corpo.
+- `ConnectToken` ganha `webhookVersion` (`?string`, o `webhook_version` do `connect/token`; `null` sem webhook ou em Zapmizer anterior à 1.148.17) e `hasLegacyWebhookVersion()` (o webhook reaproveitado ficou em `2024-02-27`).
 - Datas ilegíveis (`expires_at`, `trial_ends_at`) viram `null` e logam `zapmizer: unreadable date.` (warning) com `field`, `value` e `external_id`.
 
 Quebras:
 
-- `createSession()`: `state` passa a ser opcional e o 2º parâmetro; entra `externalId` no fim. Quem chama com argumentos nomeados não muda; posicionais seguem na mesma ordem. Subclasse que sobrescreve `createSession()` com a assinatura antiga dá erro fatal de assinatura incompatível ao carregar e precisa atualizar a assinatura.
+- `createSession()`: `state` passa a ser opcional e o 2º parâmetro; entram `externalId` e `webhookVersion` no fim. Quem chama com argumentos nomeados não muda; posicionais seguem na mesma ordem. Subclasse que sobrescreve `createSession()` com a assinatura antiga dá erro fatal de assinatura incompatível ao carregar e precisa atualizar a assinatura.
 - `createSession()`, `subscription()` e `checkout()` lançam `InvalidArgumentException` para `external_id`/`state` inválidos (`state` vazio, `"0"` ou com espaço no começo ou no fim) antes de chamar a API.
 - `createSession()`: `expires_in` acima de 86400 é cortado; `redirect_uri`/`webhook_url` vazios vão no corpo (422 da API) em vez de sumirem.
 - `ConnectSession::$expiresAt` passa de `?string` a `?CarbonImmutable`; o JSON segue ISO 8601.
@@ -229,6 +257,13 @@ Mídia recebida:
 - `ZapmizerConnection::media()` e `syncMessages()` sem instância pareada passam de `ZapmizerUnauthorizedException` a `ZapmizerConnectException` (`notPaired()`).
 - `Retry-After` não numérico na mídia passa de `0` para `null` (mensagem sem `Retry in`). O `reason()` da mídia corta HTML em 500 caracteres e deixa de incluir valor escalar não-string de `errors` (número).
 
+Mensagens do número:
+
+- `syncMessages()` pede sempre `api-version: 2026-10-20` e lê o contrato (veja "Mensagens"). Na 0.4.2 ele fixava `2025-06-27` e recusava a resposta no contrato; agora a recusa vale só para uma `version` que a lib não conhece.
+- `createWebhook()` (e com ele `registerWebhook()`) cria o webhook em `2026-10-20` e manda `api-version: 2026-10-20`; na 0.4.2 era `2024-02-27` com `api-version: 2025-06-27`. Zapmizer anterior à 1.148.17 ignora os dois e cria em `2024-02-27`.
+- Constantes: sai `InstanceClient::LEGACY_MESSAGE_API_VERSION` (da 0.4.2); entra `InstanceClient::MESSAGE_CONTRACT_VERSION` (`2026-10-20`, igual a `Message::CONTRACT_VERSION`); `LEGACY_WEBHOOK_VERSION` (`2024-02-27`) fica, agora para reconhecer o webhook legado.
+- `media()` e `awaitMedia()` recebem `Messages\Message` e pedem com `id` e `timestamp`.
+
 Subclasses: `InstanceClient::reasonFrom()` saiu (a regra está em `Support\ApiError`). Subclasses de `InstanceClient` ganham `reconnect()`, `revokeToken()`, `conversationSession()`, `inboxSession()` e, do trait `Connect\Concerns\BuildsZapmizerRequests`, `guardState()`, `withoutNulls()` e `clampExpiresIn()`. Esses nomes podem colidir com métodos já existentes nelas.
 
 ## Embed
@@ -256,14 +291,14 @@ Webhook com endereço por conexão, opt-in. Desligado, nada muda: as conexões e
 
 Veja "Per-connection webhook URL (opt-in)" em `docs/connect.md`.
 
-**Versão do webhook (2026-10-20):**
+**Versão do webhook:**
 
 - `Webhook\Envelope::$version` (`?string`): a versão do webhook que veio no envelope (`null` em Zapmizer anterior à 1.148.17).
-- Uma entrega `message_received` ou `message_sent` (eventos do contrato de mensagens, webhook na versão `2026-10-20`) continua respondida com 200 `Webhook Received`, mas loga um warning (uma vez por entrega, com `name`, `version`, `connection_id` e `wid`): esta versão não lê esses eventos, o `MessageReceived` não dispara e o webhook precisa ser recriado na versão `2024-02-27`. Constante `WebhookController::MESSAGE_CONTRACT_EVENTS`; método protegido `warnAboutTheMessageContract()`, que pode colidir com o de uma subclasse.
+- As mensagens das duas versões viram `Messages\Message`: veja "Mensagens". O aviso de "webhook em `2026-10-20` não suportado", que entrou neste ciclo, saiu (com a constante `WebhookController::MESSAGE_CONTRACT_EVENTS` e o método `warnAboutTheMessageContract()`).
 
 ### Eventos do catálogo e deduplicação
 
-Só acréscimos: a rota, os middlewares, `MessageReceived`, `WebhookReceived`, `WebhookHandled` e as chaves que já existiam em `zapmizer.webhook.*` não mudam. Veja `docs/webhook.md`.
+Só acréscimos: a rota, os middlewares, `WebhookReceived`, `WebhookHandled` e as chaves que já existiam em `zapmizer.webhook.*` não mudam (o `MessageReceived` muda por outro motivo, veja "Mensagens"). Veja `docs/webhook.md`.
 
 - Eventos tipados para os 13 eventos do catálogo além de `message`, disparados logo depois do `WebhookReceived`: `MessageStatusUpdated`, `ConnectionStateChanged`, `MessageReacted`, `MessageEdited`, `MessageRevoked`, `MessageTranscribed`, `CallReceived`, `PollVoted`, `ContactNumberChanged`, `GroupMembershipChanged`, `GroupAdminsChanged`, `GroupJoinRequested` e `GroupUpdated`. Todos estendem `Events\WebhookEvent` (`envelope`, `connection`, `payload`) e trazem um DTO só leitura de `Webhook\*`. Esses eventos continuam respondendo `Webhook Received`, sem `WebhookHandled`, e passando pelo `missingMethod`.
 - `MessageStatusUpdated`: `$event->status` é um `Webhook\StatusUpdate`, com o `ack` na escala de `Messages\MessageStatus` (só de -1 a 4 no webhook), `status` derivado do `ack` e os atalhos do `SentMessage` (`isFailed()`, `isDelivered()`, `isRead()`, `isFinal()`, `reached()`); `unknown` ou `ack` fora da faixa não disparam o evento.
@@ -272,9 +307,23 @@ Só acréscimos: a rota, os middlewares, `MessageReceived`, `WebhookReceived`, `
 - Um `handle*` que o app já tinha numa subclasse para um desses eventos continua rodando, e o evento tipado sai também. `WebhookController::catalogEvents()` troca ou desliga os eventos.
 - **Subclasses do `WebhookController`:** o controller ganhou os métodos protegidos `processWebhook()`, `catalogEvents()`, `dispatchCatalogEvent()`, `duplicateMethod()` e `deduplicator()`. Uma subclasse que já tinha um método com um desses nomes passa a sobrescrevê-lo (e, com assinatura incompatível, dá erro fatal): renomeie o seu.
 - **Listeners curinga e testes:** um `Event::listen('*', ...)`, um listener de `NotificationChannels\Zapmizer\Events\*` ou um `Event::fake()` sem lista de eventos passam a ver os eventos novos em cada entrega do catálogo. Uma asserção que contava todos os eventos disparados muda de número.
-- **Correção:** um `message` com `timestamp` fora de uma faixa sensata (≤ 0 ou ≥ 2^37, como `PHP_INT_MAX`) dava 500, porque o Carbon lançava exceção; agora `sentAt` cai em `now()`, como num `timestamp` que não é número. Nos eventos novos, `occurredAt` fica `null` nesse caso.
-- `Webhook\Envelope` (`id`, `name`, `createdAt`, `wid`, `version`) nos eventos novos e, como argumento opcional no fim, no `MessageReceived` (`$event->envelope`).
+- **Correção:** um `message` com `timestamp` fora de uma faixa sensata (≤ 0 ou ≥ 2^37, como `PHP_INT_MAX`) dava 500, porque o Carbon lançava exceção; agora `sentAt()` cai em `now()`, como num `timestamp` que não é número. Nos eventos novos, `occurredAt` fica `null` nesse caso.
+- `Webhook\Envelope` (`id`, `name`, `createdAt`, `wid`, `version`) nos eventos novos e, como argumento opcional no fim, no `MessageReceived` e no `MessageSent` (`$event->envelope`).
 - Deduplicação opcional pelo `id` do envelope, desligada por padrão: `zapmizer.webhook.deduplicate`, `deduplicate_ttl` (21600 s) e `deduplicate_store` (`ZAPMIZER_WEBHOOK_DEDUPLICATE*`). Uma repetição responde 200 sem disparar nada. Em duas fases: o `id` fica reservado por 120 s enquanto a entrega roda e só é gravado pelo TTL cheio depois de uma resposta que não é 5xx; uma falha (exceção ou 5xx) apaga a reserva, e a retentativa passa. Uma retentativa que chega enquanto a primeira ainda roda recebe 200, e se a primeira falhar depois disso o evento se perde. TTL vazio ou ≤ 0 vale 21600. Com o cache fora do ar a entrega é processada e logada. `verify_number.*` nunca é deduplicado. Uma `config/zapmizer.php` publicada precisa das chaves acrescentadas à mão.
+
+## Mensagens
+
+**Breaking:** `InboundMessage` saiu, e toda mensagem é um `Messages\Message`, com a forma do contrato de mensagem da Zapmizer (`2026-10-20`, Zapmizer 1.148.17 ou posterior). O de/para está em "Upgrade da 0.3 e da 0.4". A mínima continua 1.148.10: com Zapmizer anterior, tudo chega no formato do WhatsApp Web e é traduzido.
+
+- `Messages\Message`: `id`, `chat`, `sender`, `senderName`, `fromMe`, `fromMeOtherDevice`, `timestamp`, `type`, `text`, `quoted` (`QuotedMessage`), `forwarded`, `viewOnce`, `mentions`, `media` (`MessageMedia`), `location` (`MessageLocation`), `contacts` (lista de `{name, vcard}`), `poll` (`MessagePoll`), `reply` (`MessageReply`), `linkPreview` (`LinkPreview`) e `raw` (só em `unknown`), com `sentAt()`, `chatPhone()`, `senderPhone()`, `isGroup()`, `isBroadcast()` e `hasMedia()`. `Messages\MessageType` tem os tipos do contrato. `Message::fromContract()` é tolerante (campo desconhecido é ignorado; `null` só sem `id`).
+- `Message::fromLegacy()` e `Messages\LegacyMessageTranslator` traduzem a mensagem do WhatsApp Web (o `data[0]` do `message` e o sync de Zapmizer anterior à 1.148.17) para o contrato. É um port da tradução da Zapmizer (`from-wwebjs.ts` + `toPartnerMessage()`), com o mesmo mapa de avisos (`LegacyMessageTranslator::NOTICES`): `forEvent()` deixa de fora todo aviso, como o webhook do contrato; `forSync()` só os de sistema, e os outros viram `unknown`, como o sync. Os testes comparam campo a campo com as fixtures do servidor (`tests/contract/message-contract`, atualizadas por `update.php` com o commit de origem).
+- Webhook: `message_received` → `MessageReceived`; `message_sent` → o novo `Events\MessageSent`, para tudo o que o número envia (API, bot ou celular; `fromMeOtherDevice` separa o celular); `message` (`2024-02-27`) → `MessageReceived`, traduzido. Um aviso do WhatsApp não dispara nada. Um evento de mensagem sem mensagem responde 200 e loga `zapmizer: a message event could not be read, and nothing fired.`. Uma `version` desconhecida é lida do mesmo jeito, com um warning, porque o webhook não repete.
+- `syncMessages()`: com `version` `2026-10-20` lê o contrato, em número por QR e oficial; sem `version` traduz o legado; com outra `version` lança `unexpectedResponse`. `SyncedMessages` ganha `wid` e `version`. Uma página pode vir sem mensagens e com `hasMore`: a Zapmizer deixa os avisos de fora, mas o cursor passa por eles. Entrada que não é mensagem sai com warning.
+- `media()`/`awaitMedia()` recebem `Message`. No número oficial a mídia não vem pela lib (422, `MediaRejectedException`).
+- `zapmizer.connect.webhook_version` (`ZAPMIZER_WEBHOOK_VERSION`, padrão `2026-10-20`): veja "Parceiro" e "Connect".
+- Veja "Mensagens" em `docs/webhook.md` e "The webhook version" e "Recovering what the webhook missed" em `docs/connect.md`.
+
+Subclasses do `WebhookController`: entram os métodos protegidos `handleMessageReceived()`, `handleMessageSent()`, `dispatchContractMessage()`, `unreadableMessage()` e `messageLogContext()`, que podem colidir com os de uma subclasse; um `handleMessageReceived()` que o app já tinha passa a substituir o da lib.
 
 ## Base da API
 

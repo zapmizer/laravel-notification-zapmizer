@@ -369,7 +369,7 @@ class InstanceClientTest extends TestCase
         return [
             'M8 connection 404' => ['connection', 'GET', '/bot-instances/{id}/connection', 404, '{"message":"No query results for model."}', [], InstanceGoneException::class, 'No query results for model.'],
             'M10 connection 401' => ['connection', 'GET', '/bot-instances/{id}/connection', 401, '{"message":"Unauthenticated."}', [], ZapmizerUnauthorizedException::class, 'Unauthenticated.'],
-            'M13 media 422' => ['media', 'GET', '/whatsapp-messages/media', 422, '{"message":"The timestamp field must be a date before or equal to now.","errors":{"timestamp":["The timestamp field must be a date before or equal to now."]}}', [], MediaRejectedException::class, 'The timestamp field must be a date before or equal to now. The timestamp field must be a date before or equal to now.'],
+            'M13 media 422' => ['media', 'GET', '/whatsapp-messages/media', 422, '{"message":"The timestamp field must be a date before or equal to now.","errors":{"timestamp":["The timestamp field must be a date before or equal to now."]}}', [], MediaRejectedException::class, 'The timestamp field must be a date before or equal to now.'],
             'M13 media 429' => ['media', 'GET', '/whatsapp-messages/media', 429, '{"message":"Too Many Attempts."}', ['Retry-After' => '37'], MediaRateLimitedException::class, 'Too Many Attempts.'],
             'media 401' => ['media', 'GET', '/whatsapp-messages/media', 401, '{"message":"Unauthenticated."}', [], ZapmizerUnauthorizedException::class, 'Unauthenticated.'],
         ];

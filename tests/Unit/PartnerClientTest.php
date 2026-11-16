@@ -399,8 +399,8 @@ class PartnerClientTest extends TestCase
             $this->assertSame(422, $exception->status());
             $this->assertNull($exception->error());
             $this->assertSame(['redirect_uri' => ['The redirect uri field is required.']], $exception->errors());
-            $this->assertSame('The redirect uri field is required. The redirect uri field is required.', $exception->reason());
-            $this->assertSame('Zapmizer refused the request (HTTP 422): The redirect uri field is required. The redirect uri field is required.', $exception->getMessage());
+            $this->assertSame('The redirect uri field is required.', $exception->reason());
+            $this->assertSame('Zapmizer refused the request (HTTP 422): The redirect uri field is required.', $exception->getMessage());
         }
 
         Log::shouldHaveReceived('error')->once()->withArgs(fn (string $message, array $context) => $message === 'zapmizer: partner call failed.'
@@ -558,7 +558,7 @@ class PartnerClientTest extends TestCase
             $client->createSession('http://app.test/cb', 'state');
             $this->fail('Expected ZapmizerApiException.');
         } catch (ZapmizerApiException $exception) {
-            $this->assertSame('The redirect uri field is required. required', $exception->reason());
+            $this->assertSame('The redirect uri field is required.', $exception->reason());
             $this->assertSame(['redirect_uri' => ['required']], $exception->errors());
         }
 

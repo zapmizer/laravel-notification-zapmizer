@@ -98,8 +98,26 @@ return [
         'whatsapp_verified' => \NotificationChannels\Zapmizer\Models\WhatsappVerified::class,
         'connection' => \NotificationChannels\Zapmizer\Models\ZapmizerConnection::class,
     ],
+    // The package routes come in groups, each registered only when switched
+    // on: an app that only sends gets no route. `zapmizer:install` switches
+    // on the groups the app asked for. `enabled` is the master switch
+    // (false: no package route, mount your own). A published
+    // config/zapmizer.php without the group keys still gets them (the
+    // provider fills `routes` in from here).
     'routes' => [
         'enabled' => env('ZAPMIZER_ROUTES_ENABLED', true),
+        // Connect and reconnect, authenticated (`zapmizer.connect.*`).
+        'connect' => env('ZAPMIZER_ROUTES_CONNECT', false),
+        // The public, signed webhook (`zapmizer.webhook`, and the
+        // per-connection one with `webhook.per_connection`). Off, the connect
+        // creates connections without a webhook: they send, but receive
+        // nothing. On, `webhook.secret` (ZAPMIZER_WEBHOOK_SECRET) signs it.
+        'webhook' => env('ZAPMIZER_ROUTES_WEBHOOK', false),
+        // The embedded inbox (`zapmizer.inbox.*`, see `inbox` below). Needs
+        // the connect group.
+        'inbox' => env('ZAPMIZER_ROUTES_INBOX', false),
+        // The start of the number verification (`zapmizer.verify_number`).
+        'verify_number' => env('ZAPMIZER_ROUTES_VERIFY_NUMBER', false),
         'prefix' => 'zapmizer',
         'middleware' => ['web', 'auth'],
         // The webhook route is public and stateless. The package verifies the
@@ -114,11 +132,10 @@ return [
     // the `openSession` of @zapmizer/embed) and GET {prefix}/inbox/keepalive
     // (`zapmizer.inbox.keepalive`, 204). The session opens for the connection
     // of the model `connect.resolver` returns, with the logged-in user as the
-    // attendant. Off by default; `php artisan zapmizer:install --inbox` turns
-    // it on. Off too when `routes.enabled` is false. A published
+    // attendant. Switched on by `routes.inbox` (ZAPMIZER_ROUTES_INBOX; `php
+    // artisan zapmizer:install --inbox` turns it on). A published
     // config/zapmizer.php without this key still gets it (top-level merge).
     'inbox' => [
-        'enabled' => env('ZAPMIZER_INBOX_ENABLED', false),
         'middleware' => ['web', 'auth'],
         // The page's public origin, sent as `parent_origin`. Empty: read from
         // the request (scheme, host and port). Set it when the app sits behind

@@ -85,6 +85,7 @@ PHP;
         $this->assertCount(1, $this->publishedMigrations());
         $this->assertFileEquals(__DIR__ . '/../../database/migrations/create_zapmizer_connections_table.php.stub', $this->publishedMigrations()[0]);
         $this->assertSame(self::USER_MODEL, $this->readAppFile('app/Models/User.php'), 'no model without --model');
+        $this->assertStringNotContainsString('ZAPMIZER_ROUTES_', $this->readAppFile('.env'), 'no route group without a flag');
         $this->assertFileDoesNotExist($this->appFile('resources/js/zapmizer/InboxScreen.vue'));
         $this->assertFalse(Schema::hasTable('zapmizer_connections'), 'no migrate without --migrate');
 
@@ -266,6 +267,34 @@ PHP;
         $this->assertStringContainsString("use NotificationChannels\\Zapmizer\\Connectable as ConnectsZapmizer;\nuse NotificationChannels\\Zapmizer\\Contracts\\Connectable;\n", $model);
         $this->assertStringContainsString('class User extends Authenticatable implements Connectable', $model);
         $this->assertStringContainsString("    use HasFactory, Notifiable;\n    use ConnectsZapmizer;\n", $model);
+
+        foreach (['.env', '.env.example'] as $file) {
+            $this->assertStringEndsWith("VITE_ZAPMIZER_BRAND=zapmizer\nZAPMIZER_ROUTES_CONNECT=true\n", $this->readAppFile($file), 'the connect routes, in the same block');
+            $this->assertStringNotContainsString('ZAPMIZER_ROUTES_WEBHOOK', $this->readAppFile($file));
+        }
+    }
+
+    public function testTheConnectWithoutTheWebhookTellsWhatItMisses()
+    {
+        config()->set('zapmizer.routes.webhook', false);
+
+        $this->assertInstall(['--model' => 'App\\Models\\User'], 0, [
+            'as conexões enviam, mas não recebem mensagens',
+            '--webhook',
+        ]);
+    }
+
+    public function testWebhookTurnsTheWebhookRouteOn()
+    {
+        $this->appFile('.env', self::ENV . "ZAPMIZER_ROUTES_WEBHOOK=false\n");
+
+        $output = $this->assertInstall(['--model' => 'App\\Models\\User', '--webhook' => true], 0, ['ZAPMIZER_ROUTES_WEBHOOK=true']);
+
+        $this->assertStringNotContainsString('não recebem mensagens', $output);
+        $this->assertStringContainsString("ZAPMIZER_ROUTES_WEBHOOK=true\n", $this->readAppFile('.env'));
+        $this->assertStringNotContainsString('ZAPMIZER_ROUTES_WEBHOOK=false', $this->readAppFile('.env'), 'an explicit ask switches it on');
+        $this->assertStringContainsString("ZAPMIZER_ROUTES_CONNECT=true\n", $this->readAppFile('.env'));
+        $this->assertStringEndsWith("ZAPMIZER_ROUTES_CONNECT=true\nZAPMIZER_ROUTES_WEBHOOK=true\n", $this->readAppFile('.env.example'));
     }
 
     public function testAShortModelNameIsLookedUpInAppModels()
@@ -303,7 +332,7 @@ PHP;
 
     public function testInboxTurnsTheRoutesOnAndPublishesTheComponents()
     {
-        $this->appFile('.env', self::ENV . "ZAPMIZER_INBOX_ENABLED=false\n");
+        $this->appFile('.env', self::ENV . "ZAPMIZER_ROUTES_INBOX=false\n");
 
         $this->assertInstall(['--inbox' => true], 0, [
             'componentes Vue em resources/js/zapmizer',
@@ -313,9 +342,10 @@ PHP;
             'Rebuilde o front',
         ]);
 
-        $this->assertStringContainsString("ZAPMIZER_INBOX_ENABLED=true\n", $this->readAppFile('.env'));
-        $this->assertStringNotContainsString('ZAPMIZER_INBOX_ENABLED=false', $this->readAppFile('.env'));
-        $this->assertStringEndsWith("ZAPMIZER_PARTNER_SECRET=\nVITE_ZAPMIZER_BRAND=zapmizer\nZAPMIZER_INBOX_ENABLED=true\n", $this->readAppFile('.env.example'), 'one block, no blank line');
+        $this->assertStringContainsString("ZAPMIZER_ROUTES_INBOX=true\n", $this->readAppFile('.env'));
+        $this->assertStringNotContainsString('ZAPMIZER_ROUTES_INBOX=false', $this->readAppFile('.env'));
+        // The inbox opens for the connection the connect made: it needs it.
+        $this->assertStringEndsWith("ZAPMIZER_PARTNER_SECRET=\nVITE_ZAPMIZER_BRAND=zapmizer\nZAPMIZER_ROUTES_CONNECT=true\nZAPMIZER_ROUTES_INBOX=true\n", $this->readAppFile('.env.example'), 'one block, no blank line');
 
         foreach (['ConnectButton.vue', 'ConnectionPanel.vue', 'useZapmizerIntegration.ts', 'zapmizerRoute.ts', 'types.ts'] as $file) {
             $this->assertFileEquals(__DIR__ . '/../../stubs/inertia-vue/' . $file, $this->appFile('resources/js/zapmizer/' . $file));
@@ -381,7 +411,7 @@ PHP;
         $this->assertStringNotContainsString('lucide-vue-next', $output);
 
         $this->assertFileDoesNotExist($this->appFile('resources/js/zapmizer/InboxScreen.vue'));
-        $this->assertStringContainsString('ZAPMIZER_INBOX_ENABLED=true', $this->readAppFile('.env'));
+        $this->assertStringContainsString('ZAPMIZER_ROUTES_INBOX=true', $this->readAppFile('.env'));
     }
 
     public function testMigrateCreatesTheTable()
@@ -397,14 +427,17 @@ PHP;
 
         $this->artisan('zapmizer:install')
             ->expectsConfirmation('Ligar a caixa de entrada embutida (rotas da lib + componente Vue)?', 'yes')
+            ->expectsConfirmation('Ligar o webhook da lib (rota pública assinada, para receber mensagens e eventos)?', 'yes')
             ->expectsQuestion('URL da API da conta de parceiro (ZAPMIZER_BASE_URI): https://app.zapmizer.com/api/ ou https://app.parlichat.com/api/', 'https://app.parlichat.com/api/')
             ->expectsConfirmation('Adicionar Connectable ao App\\Models\\User (o usuário logado é o dono do número)?', 'yes')
             ->expectsConfirmation('Rodar as migrations agora?', 'no')
             ->assertExitCode(0);
 
         $this->assertStringContainsString('implements Connectable', $this->readAppFile('app/Models/User.php'));
-        $this->assertStringContainsString('ZAPMIZER_INBOX_ENABLED=true', $this->readAppFile('.env'));
+        $this->assertStringContainsString('ZAPMIZER_ROUTES_INBOX=true', $this->readAppFile('.env'));
         $this->assertStringContainsString('VITE_ZAPMIZER_BRAND=parli', $this->readAppFile('.env'));
+        $this->assertStringContainsString('ZAPMIZER_ROUTES_CONNECT=true', $this->readAppFile('.env'));
+        $this->assertStringContainsString('ZAPMIZER_ROUTES_WEBHOOK=true', $this->readAppFile('.env'));
         $this->assertFalse(Schema::hasTable('zapmizer_connections'));
     }
 
@@ -415,6 +448,7 @@ PHP;
 
         $this->artisan('zapmizer:install')
             ->expectsConfirmation('Ligar a caixa de entrada embutida (rotas da lib + componente Vue)?', 'no')
+            ->expectsConfirmation('Ligar o webhook da lib (rota pública assinada, para receber mensagens e eventos)?', 'no')
             ->expectsConfirmation('Adicionar Connectable ao App\\Models\\User (o usuário logado é o dono do número)?', 'no')
             ->expectsQuestion('Outro model dono do número? (vazio para pular)', '')
             ->expectsConfirmation('Rodar as migrations agora?', 'no')
@@ -425,7 +459,7 @@ PHP;
 
     public function testFlagsSkipTheQuestions()
     {
-        $this->artisan('zapmizer:install', ['--model' => 'App\\Models\\User', '--inbox' => true, '--migrate' => true, '--base-uri' => 'https://app.zapmizer.com/api/'])
+        $this->artisan('zapmizer:install', ['--model' => 'App\\Models\\User', '--inbox' => true, '--webhook' => true, '--migrate' => true, '--base-uri' => 'https://app.zapmizer.com/api/'])
             ->assertExitCode(0);
 
         $this->assertTrue(Schema::hasTable('zapmizer_connections'));

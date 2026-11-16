@@ -3,10 +3,9 @@
 use Illuminate\Support\Facades\Route;
 use NotificationChannels\Zapmizer\Http\Controllers\ConnectController;
 use NotificationChannels\Zapmizer\Http\Controllers\ReconnectController;
-use NotificationChannels\Zapmizer\Http\Controllers\VerifyNumberController;
 
-Route::get('verify-number', VerifyNumberController::class)->name('verify_number');
-
+// The connect group (`zapmizer.routes.connect`).
+//
 // Hosted connect flow (Connectable models): authorization AND pairing happen
 // on Zapmizer's page, in a popup. `show?live=1` reaches Zapmizer, hence the
 // throttle on it too.

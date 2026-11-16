@@ -47,7 +47,7 @@ try {
 
 - `status()`: o status HTTP.
 - `error()`: o código da Zapmizer (`window_closed`, `bot_offline`, `recipient_not_found`, ...) ou `null`. É uma string simples, então um código que a Zapmizer acrescentar chega ao app sem release novo da lib; `ErrorCode` tem uma constante para cada código que a API documenta.
-- `reason()`: o `message` da Zapmizer seguido do primeiro erro de cada campo; sem nenhum dos dois, o corpo cru, cortado em 500 caracteres.
+- `reason()`: o `message` da Zapmizer seguido do primeiro erro de cada campo, sem repetir o primeiro erro quando o `message` já o traz (o 422 do Laravel repete o primeiro erro no `message`); sem nenhum dos dois, o corpo cru, cortado em 500 caracteres.
 - `errors()`: os erros de validação por campo, `array<string, string[]>`.
 - `payload()`: o corpo JSON decodificado, com os campos extras (`window_expires_at`, ...).
 - `getMessage()`: `Zapmizer refused the request (HTTP 409, window_closed): <reason>.`

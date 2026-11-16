@@ -28,6 +28,26 @@ Recomendamos `ZAPMIZER_HTTP_CONNECT_TIMEOUT=10` e `ZAPMIZER_HTTP_TIMEOUT=30`.
 
 O envio com arquivo (`sendMessageWithFile()`, `ZapmizerMessage::image()`/`document()`) ignora esses valores e usa os mesmos 60 s para conectar e 600 s no total (`ZapmizerApi::TRANSFER_CONNECT_TIMEOUT` e `TRANSFER_TIMEOUT`), para que um timeout curto pensado nas chamadas JSON não o corte. O envio de texto segue a config.
 
+Os valores chegam ao transporte como `float` (`10` vira `10.0`): num teste que confere as opções que o `Http` recebeu, compare com `assertEquals`/`toEqual`, não com `assertSame`/`toBe`.
+
+### Timeouts de um envio só
+
+Para um envio com timeouts próprios (uma resposta curta dentro de um request, por exemplo), passe `timeout` e `connect_timeout`, em segundos, ao resolver o `Zapmizer`. Eles substituem os de `zapmizer.http.*` só nesse cliente; o resto vem da config, como sempre:
+
+```php
+use NotificationChannels\Zapmizer\Zapmizer;
+
+$zapmizer = app(Zapmizer::class, [
+    'timeout' => 10,
+    'connect_timeout' => 5,
+    'api_version' => '2025-06-27',   // opcional, como `api_token` e `base_uri`
+]);
+
+$zapmizer->sendMessage([...]);
+```
+
+É a troca do `setHttpClient(new GuzzleHttp\Client(['timeout' => 10, 'connect_timeout' => 5]))` das versões 0.x, que saiu. Só um número maior que zero conta, como na config. Com um transporte próprio em `zapmizer.http.transport`, os valores chegam ao construtor dele pelos mesmos nomes (`connectTimeout`, `timeout`), mesmo que o app tenha registrado a classe no container. Para outro transporte nesse cliente, passe a instância: `app(Zapmizer::class, ['transport' => $transporte])` (um `Contracts\Transport`; outra coisa lança `InvalidArgumentException`). O envio com arquivo continua com os limites fixos acima.
+
 ## Mídia
 
 O download de mídia ignora esses timeouts e usa limites fixos de 60 s para conectar e 600 s no total (`ZapmizerApi::TRANSFER_CONNECT_TIMEOUT` e `TRANSFER_TIMEOUT`).

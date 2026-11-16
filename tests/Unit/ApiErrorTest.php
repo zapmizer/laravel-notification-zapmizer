@@ -16,6 +16,33 @@ class ApiErrorTest extends TestCase
         return new Response($status, ['Content-Type' => 'application/json'] + $headers, json_encode($body));
     }
 
+    public function testTheReasonDoesNotRepeatTheFirstErrorTheMessageAlreadyCarries()
+    {
+        // Laravel's 422 `message` is the first error (plus "(and N more
+        // errors)"): repeating it read "The to field is invalid. invalid.".
+        $this->assertSame('The to field is invalid.', ApiError::from($this->jsonResponse(422, [
+            'message' => 'The to field is invalid.',
+            'errors' => ['to' => ['invalid.']],
+        ]))->reason());
+
+        $this->assertSame('The to field is invalid.', ApiError::from($this->jsonResponse(422, [
+            'message' => 'The to field is invalid.',
+            'errors' => ['to' => ['The to field is invalid.']],
+        ]))->reason());
+
+        // Only the first error is folded in: the others still go along.
+        $this->assertSame('The to field is invalid. (and 1 more error) The from field is required.', ApiError::from($this->jsonResponse(422, [
+            'message' => 'The to field is invalid. (and 1 more error)',
+            'errors' => ['to' => ['The to field is invalid.'], 'from' => ['The from field is required.']],
+        ]))->reason());
+
+        // A first error the message does not carry is kept.
+        $this->assertSame('Invalid. The to field is required.', ApiError::from($this->jsonResponse(422, [
+            'message' => 'Invalid.',
+            'errors' => ['to' => ['The to field is required.']],
+        ]))->reason());
+    }
+
     public function testValidationFormat()
     {
         $error = ApiError::from($this->jsonResponse(422, [
@@ -27,7 +54,7 @@ class ApiErrorTest extends TestCase
         $this->assertNull($error->error);
         $this->assertSame('The redirect uri field is required. (and 1 more error)', $error->message);
         $this->assertSame(['redirect_uri' => ['The redirect uri field is required.', 'second'], 'state' => ['The state field is required.']], $error->errors);
-        $this->assertSame('The redirect uri field is required. (and 1 more error) The redirect uri field is required. The state field is required.', $error->reason());
+        $this->assertSame('The redirect uri field is required. (and 1 more error) The state field is required.', $error->reason());
     }
 
     public function testCodeFormatKeepsTheExtraFieldsInThePayload()
@@ -217,7 +244,7 @@ class ApiErrorTest extends TestCase
         $body = new NoSeekStream(Utils::streamFor('{"message":"The redirect uri field is required.","errors":{"redirect_uri":["required"]}}'));
         $error = ApiError::from(new Response(422, ['Content-Type' => 'application/json'], $body));
 
-        $this->assertSame('The redirect uri field is required. required', $error->reason());
+        $this->assertSame('The redirect uri field is required.', $error->reason());
         $this->assertSame(['redirect_uri' => ['required']], $error->errors);
     }
 

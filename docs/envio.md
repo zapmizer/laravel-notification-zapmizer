@@ -28,6 +28,23 @@ public function toZapmizer(object $notifiable)
 
 O WID de destino segue o padrão do WhatsApp: o número com código do país e DDD (`558181643260`), o mesmo com o sufixo `@c.us`, ou o id de um grupo (`128172192@g.us`).
 
+O `toZapmizer()` também pode devolver a mensagem **sem** `->send()`: o canal a envia. Sem `to`, ele usa a rota do notifiable (`routeNotificationForZapmizer()` no model, ou `Notification::route('zapmizer', '5511999999999')`); sem `to` e sem rota, nada sai. Assim o método pode declarar `: ZapmizerMessage`, e o envio fica a cargo do canal:
+
+```php
+public function toZapmizer(object $notifiable): ZapmizerMessage
+{
+    return ZapmizerMessage::create(from: config('zapmizer.from_number'))->text('Seu pedido saiu para entrega.');
+}
+
+// no model
+public function routeNotificationForZapmizer(): string
+{
+    return $this->whatsapp;
+}
+```
+
+Os dois jeitos dão o mesmo `SentMessage` ao `NotificationSent` (veja abaixo), e nenhum envia duas vezes: o canal não envia um `SentMessage`, nem uma mensagem que o `toZapmizer()` já enviou (`$message->send(); return $message;`). `$message->sentMessage()` devolve o que o último `send()` respondeu, ou `null`.
+
 ## Model com número próprio
 
 Um model que usa o trait `Connectable` (um `Team`, um `User`) manda pelo número dele, sem passar por `config('zapmizer.from_number')`:
@@ -71,6 +88,43 @@ Event::listen(function (NotificationSent $event) {
     }
 });
 ```
+
+## Testes
+
+Duas formas, conforme o que o teste quer provar.
+
+**Pelo HTTP**, com `Http::fake()`: o envio passa pelo `Http` do Laravel (veja [transporte.md](transporte.md#testes)). Responda com um corpo JSON: um `Http::fake()` vazio responde 200 sem corpo, e o envio lança `unexpectedResponse`.
+
+```php
+use Illuminate\Http\Client\Request;
+use Illuminate\Support\Facades\Http;
+
+Http::fake(['*/api/messages' => Http::response(['id' => 'abc', 'wid_to' => '5511999999999@c.us'], 201)]);
+
+$user->notify(new PedidoSaiu($pedido));
+
+Http::assertSent(fn (Request $request) => $request->url() === 'https://app.zapmizer.com/api/messages'
+    && $request['to'] === '5511999999999');
+```
+
+Um `MockHandler` num `GuzzleHttp\Client` registrado no container não pega mais o envio.
+
+**Com um mock do `Zapmizer`**: o `Messages\SentMessage` é `final`, então o Mockery não fabrica o retorno de `sendMessage()` sozinho e um mock sem `andReturn()` quebra no envio. Devolva `SentMessage::fake()`:
+
+```php
+use NotificationChannels\Zapmizer\Messages\SentMessage;
+use NotificationChannels\Zapmizer\Zapmizer;
+
+$this->mock(Zapmizer::class)
+    ->shouldReceive('sendMessage')
+    ->once()
+    ->withArgs(fn (array $params) => $params['to'] === '5511999999999')
+    ->andReturn(SentMessage::fake());
+```
+
+`SentMessage::fake(array $overrides = [])` é a resposta de um envio por QR aceito (na fila, com `links.self`, `isTrackable()` verdadeiro), cada chamada com um `id` próprio. As chaves de `$overrides` têm a forma da resposta da API, não a dos campos do objeto: `SentMessage::fake(['id' => 'abc', 'wid_to' => '5511988887777@c.us'])`. O `links.self` acompanha o `id` quando não é dado, e `SentMessage::fake(['id' => null])` é um envio oficial que entrou na fila (sem nada a acompanhar). Para um corpo exato, `SentMessage::fromArray($corpo)` lê qualquer resposta, inclusive a do formato antigo (`['data' => [...]]`).
+
+O mock só vale para quem resolve o `Zapmizer` pelo container sem parâmetros (`ZapmizerMessage::create()`, `app(Zapmizer::class)`). Quem passa parâmetros (`app(Zapmizer::class, ['api_version' => ...])`) ou usa o número de um model conectado (`$team->zapmizerMessage()`) ganha um cliente novo: teste esses pelo HTTP.
 
 ## Acompanhar o envio
 

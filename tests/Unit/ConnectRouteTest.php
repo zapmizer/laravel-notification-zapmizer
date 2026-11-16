@@ -22,6 +22,7 @@ use NotificationChannels\Zapmizer\Events\NumberConnected;
 use NotificationChannels\Zapmizer\Http\Controllers\ConnectController;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
 use NotificationChannels\Zapmizer\Exceptions\NoConnectableException;
+use NotificationChannels\Zapmizer\Exceptions\NotConnectableException;
 use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
@@ -818,21 +819,37 @@ class ConnectRouteTest extends TestCase
         $this->assertCount(0, $this->history);
     }
 
-    public function testX18iStartWithAUserThatIsNotConnectableAnswersUnavailableAndReports()
+    public function testX18iAUserThatIsNotConnectableIsNoConnectableOnEveryConnectRoute()
     {
+        // The default resolver with a user model that lacks Connectable: a
+        // setup defect answered as nothing to connect (as the inbox does),
+        // never a 500 with a stack trace.
         Log::spy();
         config()->set('zapmizer.connect.resolver', ResolvesAuthenticatedUser::class);
         $this->actingAs(PlainUser::create(['name' => 'Plain']));
         $this->fakeHttp();
         $this->recordReports();
 
-        $this->postJson(route('zapmizer.connect.start'))
-            ->assertStatus(503)
-            ->assertExactJson(['code' => 'zapmizer_unavailable']);
+        $this->getJson(route('zapmizer.connect.show'))->assertForbidden()->assertExactJson(['code' => 'no_connectable']);
+        $this->getJson(route('zapmizer.connect.show', ['live' => 1]))->assertForbidden()->assertExactJson(['code' => 'no_connectable']);
+        $this->deleteJson(route('zapmizer.connect.destroy'))->assertForbidden()->assertExactJson(['code' => 'no_connectable']);
+        $this->postJson(route('zapmizer.connect.start'))->assertForbidden()->assertExactJson(['code' => 'no_connectable']);
+        $this->postJson(route('zapmizer.connect.reconnect'))->assertForbidden()->assertExactJson(['code' => 'no_connectable']);
 
-        $this->assertCount(1, $this->reported);
-        $this->assertStringContainsString(PlainUser::class, $this->reported[0]->getMessage());
+        $this->withSession($this->pendingSession())
+            ->get(route('zapmizer.connect.callback', ['code' => 'c', 'state' => 's']))
+            ->assertOk()
+            ->assertSee('status: "no_connectable"', false);
+
+        $this->get(route('zapmizer.connect.reconnect.callback', ['status' => 'reconnected', 'state' => 's']))
+            ->assertOk()
+            ->assertSee('status: "no_connectable"', false);
+
+        $this->assertCount(0, $this->reported);
         $this->assertCount(0, $this->history);
+        Log::shouldHaveReceived('warning')
+            ->with('zapmizer: the connect resolver returned a model that is not Connectable.', \Mockery::on(fn (array $context) => str_contains($context['reason'], PlainUser::class)))
+            ->times(7);
     }
 
     public function testX18hTheCallbackWithAnInvalidBaseIsAnExchangeFailureWithoutTheUrl()
@@ -2757,15 +2774,16 @@ class ConnectRouteTest extends TestCase
 
     public function testDefaultResolverRefusesAUserWithoutTheTrait()
     {
-        $this->fakeHttp();
-        config()->set('zapmizer.connect.resolver', ResolvesAuthenticatedUser::class);
-        $this->actingAs(PlainUser::create(['name' => 'Plain']));
-        $this->withoutExceptionHandling();
+        $request = Request::create('/zapmizer/connect');
+        $request->setUserResolver(fn () => PlainUser::create(['name' => 'Plain']));
 
         try {
-            $this->getJson(route('zapmizer.connect.show'));
-            $this->fail('Expected ZapmizerConnectException.');
-        } catch (ZapmizerConnectException $exception) {
+            (new ResolvesAuthenticatedUser())->resolve($request);
+            $this->fail('Expected NotConnectableException.');
+        } catch (NotConnectableException $exception) {
+            // Still a ZapmizerConnectException: a catch of the base keeps
+            // catching it.
+            $this->assertInstanceOf(ZapmizerConnectException::class, $exception);
             $this->assertStringContainsString(PlainUser::class, $exception->getMessage());
             $this->assertStringContainsString('Contracts\\Connectable', $exception->getMessage());
         }

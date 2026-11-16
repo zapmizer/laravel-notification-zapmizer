@@ -12,7 +12,9 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
 use NotificationChannels\Zapmizer\Install\ConnectableModel;
 use NotificationChannels\Zapmizer\Install\EnvFile;
 use NotificationChannels\Zapmizer\Support\BaseUri;
+use NotificationChannels\Zapmizer\Support\ConnectionWebhook;
 use NotificationChannels\Zapmizer\Support\EmbedBrand;
+use NotificationChannels\Zapmizer\Support\RouteGroups;
 use Symfony\Component\Console\Formatter\OutputFormatter;
 use Throwable;
 
@@ -73,6 +75,7 @@ class CheckCommand extends Command
         $this->checkMigration();
         $this->checkConnectable();
         $this->checkConnectRoutes();
+        $this->checkWebhookRoutes();
         $inbox = $this->inboxEnabled();
         $this->checkInboxRoutes($inbox);
         $this->checkEmbedPackage($inbox);
@@ -258,31 +261,91 @@ class CheckCommand extends Command
 
     protected function checkConnectRoutes(): void
     {
-        $missing = array_values(array_filter(
-            ['zapmizer.connect.show', 'zapmizer.connect.start', 'zapmizer.connect.callback', 'zapmizer.connect.destroy', 'zapmizer.webhook'],
-            fn (string $name) => !Route::has($name),
-        ));
+        if (!RouteGroups::switchedOn(RouteGroups::CONNECT)) {
+            $this->record('connect_routes', self::FAIL, 'rotas do connect desligadas (ZAPMIZER_ROUTES_CONNECT)', 'ZAPMIZER_ROUTES_CONNECT=true no .env (o zapmizer:install --model liga), e php artisan config:clear se a config estiver em cache.');
+
+            return;
+        }
+
+        $missing = $this->missingRoutes(['zapmizer.connect.show', 'zapmizer.connect.start', 'zapmizer.connect.callback', 'zapmizer.connect.destroy', 'zapmizer.connect.reconnect', 'zapmizer.connect.reconnect.callback']);
 
         $missing === []
             ? $this->record('connect_routes', self::OK, 'rotas do connect registradas')
-            : $this->record('connect_routes', self::FAIL, 'rotas ausentes: ' . implode(', ', $missing), filter_var(config('zapmizer.routes.enabled', true), FILTER_VALIDATE_BOOLEAN)
-                ? 'Rode php artisan route:clear (rotas em cache).'
-                : 'ZAPMIZER_ROUTES_ENABLED=false: monte as rotas da lib no app ou ligue de novo.');
+            : $this->record('connect_routes', self::FAIL, 'rotas ausentes: ' . implode(', ', $missing), $this->missingRoutesHint());
+    }
+
+    /**
+     * The webhook is what the connections receive through. Off, the connect
+     * still works (connections that only send): a warning, not a failure.
+     */
+    protected function checkWebhookRoutes(): void
+    {
+        if (!RouteGroups::switchedOn(RouteGroups::WEBHOOK)) {
+            RouteGroups::switchedOn(RouteGroups::CONNECT)
+                ? $this->record('webhook_routes', self::WARN, 'webhook da lib desligado (ZAPMIZER_ROUTES_WEBHOOK): as conexões novas nascem sem webhook e não recebem mensagens nem eventos', 'Se o app recebe mensagens pela lib, ZAPMIZER_ROUTES_WEBHOOK=true (o zapmizer:install --webhook liga); as conexões feitas sem ele precisam conectar de novo.')
+                : $this->record('webhook_routes', self::SKIP, 'webhook da lib desligado (ZAPMIZER_ROUTES_WEBHOOK)');
+
+            return;
+        }
+
+        $missing = $this->missingRoutes(array_merge(['zapmizer.webhook'], ConnectionWebhook::enabled() ? ['zapmizer.webhook.connection'] : []));
+
+        $missing === []
+            ? $this->record('webhook_routes', self::OK, 'rota do webhook registrada')
+            : $this->record('webhook_routes', self::FAIL, 'rotas ausentes: ' . implode(', ', $missing), $this->missingRoutesHint());
     }
 
     protected function checkInboxRoutes(bool $inbox): void
     {
         if (!$inbox) {
-            $this->record('inbox_routes', self::SKIP, 'caixa de entrada desligada (ZAPMIZER_INBOX_ENABLED)');
+            $legacy = $this->legacyInboxSwitch();
+
+            $legacy
+                ? $this->record('inbox_routes', self::WARN, 'ZAPMIZER_INBOX_ENABLED não liga mais a caixa de entrada (desde a 2.0.0-beta.4)', 'Troque por ZAPMIZER_ROUTES_INBOX=true no .env (e tire a chave antiga), ou apague a chave antiga se o app não usa a caixa da lib.')
+                : $this->record('inbox_routes', self::SKIP, 'caixa de entrada desligada (ZAPMIZER_ROUTES_INBOX)');
 
             return;
         }
 
-        $missing = array_values(array_filter(['zapmizer.inbox.session', 'zapmizer.inbox.keepalive'], fn (string $name) => !Route::has($name)));
+        if (!RouteGroups::switchedOn(RouteGroups::CONNECT)) {
+            $this->record('inbox_routes', self::FAIL, 'a caixa de entrada está ligada, mas o connect não (ZAPMIZER_ROUTES_CONNECT): a caixa abre para a conexão feita pelo connect', 'ZAPMIZER_ROUTES_CONNECT=true no .env.');
+
+            return;
+        }
+
+        $missing = $this->missingRoutes(['zapmizer.inbox.session', 'zapmizer.inbox.keepalive']);
 
         $missing === []
             ? $this->record('inbox_routes', self::OK, 'rotas da caixa de entrada registradas')
-            : $this->record('inbox_routes', self::FAIL, 'rotas ausentes: ' . implode(', ', $missing), 'Rode php artisan route:clear e confira ZAPMIZER_ROUTES_ENABLED.');
+            : $this->record('inbox_routes', self::FAIL, 'rotas ausentes: ' . implode(', ', $missing), $this->missingRoutesHint());
+    }
+
+    /**
+     * @param array<int, string> $names
+     * @return array<int, string>
+     */
+    protected function missingRoutes(array $names): array
+    {
+        return array_values(array_filter($names, fn (string $name) => !Route::has($name)));
+    }
+
+    protected function missingRoutesHint(): string
+    {
+        return RouteGroups::routesEnabled()
+            ? 'Rode php artisan route:clear (rotas em cache).'
+            : 'ZAPMIZER_ROUTES_ENABLED=false: monte as rotas da lib no app ou ligue de novo.';
+    }
+
+    /**
+     * `ZAPMIZER_INBOX_ENABLED` (`inbox.enabled`) switched the inbox on until
+     * 2.0.0-beta.3; it does nothing now.
+     */
+    protected function legacyInboxSwitch(): bool
+    {
+        $file = new EnvFile($this->laravel->environmentFilePath());
+
+        return filter_var(config('zapmizer.inbox.enabled', false), FILTER_VALIDATE_BOOLEAN)
+            || ($file->exists() && $file->has('ZAPMIZER_INBOX_ENABLED'));
     }
 
     protected function checkEmbedPackage(bool $inbox): void
@@ -439,7 +502,7 @@ class CheckCommand extends Command
 
     protected function inboxEnabled(): bool
     {
-        return filter_var(config('zapmizer.inbox.enabled', false), FILTER_VALIDATE_BOOLEAN);
+        return RouteGroups::switchedOn(RouteGroups::INBOX);
     }
 
     protected function implementsConnectable(string $class): bool

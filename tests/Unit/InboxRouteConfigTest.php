@@ -10,16 +10,22 @@ class InboxRouteConfigTest extends TestCase
 {
     use TogglesConnectionWebhook;
 
+    protected function defineEnvironment($app)
+    {
+        // As the package config has it by default.
+        $app['config']->set('zapmizer.routes.inbox', false);
+    }
+
     public function testTheInboxRoutesAreOffByDefault()
     {
         $this->assertFalse(Route::has('zapmizer.inbox.session'));
         $this->assertFalse(Route::has('zapmizer.inbox.keepalive'));
-        $this->assertTrue(Route::has('zapmizer.connect.start'));
+        $this->assertTrue(Route::has('zapmizer.connect.start'), 'the other groups do not depend on it');
     }
 
     public function testTheEnvStringTurnsThemOnWithTheConfiguredMiddlewareAndPrefix()
     {
-        config()->set('zapmizer.inbox.enabled', 'true');
+        config()->set('zapmizer.routes.inbox', 'true');
         config()->set('zapmizer.inbox.middleware', ['web', 'auth:admin']);
         config()->set('zapmizer.routes.prefix', 'whatsapp');
         $this->reloadPackageRoutes();
@@ -33,7 +39,18 @@ class InboxRouteConfigTest extends TestCase
 
     public function testAFalseStringKeepsThemOff()
     {
-        config()->set('zapmizer.inbox.enabled', 'false');
+        config()->set('zapmizer.routes.inbox', 'false');
+        $this->reloadPackageRoutes();
+
+        $this->assertFalse(Route::has('zapmizer.inbox.session'));
+    }
+
+    public function testTheOldInboxEnabledKeyNoLongerTurnsThemOn()
+    {
+        // `inbox.enabled` (ZAPMIZER_INBOX_ENABLED, until 2.0.0-beta.3) gave
+        // way to `routes.inbox`: an app that used the name for something
+        // else gets no route from it.
+        config()->set('zapmizer.inbox.enabled', true);
         $this->reloadPackageRoutes();
 
         $this->assertFalse(Route::has('zapmizer.inbox.session'));
@@ -41,7 +58,7 @@ class InboxRouteConfigTest extends TestCase
 
     public function testRoutesDisabledTakesTheInboxWithThem()
     {
-        config()->set('zapmizer.inbox.enabled', true);
+        config()->set('zapmizer.routes.inbox', true);
         config()->set('zapmizer.routes.enabled', false);
         $this->reloadPackageRoutes();
 

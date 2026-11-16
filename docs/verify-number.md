@@ -87,7 +87,7 @@ public function getWhatsappNumberForVerification(): ?string
 
 ## 4. Starting a verification
 
-The package auto-registers a named GET route, `zapmizer.verify_number` (at `/zapmizer/verify-number`, behind `web` + `auth`). It starts the verification for the authenticated user and redirects straight to the hosted page — so the frontend is just a link:
+Switch the route on with `ZAPMIZER_ROUTES_VERIFY_NUMBER=true` (`zapmizer.routes.verify_number`; every package route group is off by default, see [instalar.md](instalar.md#as-rotas-da-lib)). The package then registers a named GET route, `zapmizer.verify_number` (at `/zapmizer/verify-number`, behind `web` + `auth`). It starts the verification for the authenticated user and redirects straight to the hosted page — so the frontend is just a link:
 
 ```blade
 <a href="{{ route('zapmizer.verify_number') }}">Verify your WhatsApp</a>
@@ -132,7 +132,7 @@ $result->attemptsLeft; // when invalid (5 attempts by default)
 
 ## 6. The webhook
 
-Terminal states (`verified` / `failed`) are also delivered to the **team's registered webhooks** (the same webhooks resource bot notifications use — register your URL there once). The package's public `POST /zapmizer/webhook` route handles them Cashier-style:
+Terminal states (`verified` / `failed`) are also delivered to the **team's registered webhooks** (the same webhooks resource bot notifications use — register your URL there once). The package's public `POST /zapmizer/webhook` route (the webhook group: `ZAPMIZER_ROUTES_WEBHOOK=true`) handles them Cashier-style:
 
 - each event name maps to a `handle{StudlyName}` method (`verify_number.verified` → `handleVerifyNumberVerified`) — extend the controller to customize;
 - the event is correlated to the state record by the **canonical phone number** (tolerant to the Brazilian extra-9);
@@ -204,5 +204,5 @@ Notable API errors when creating a session: `503` when the team has no online bo
 | `zapmizer.api_token` | the team's API token (shared with the messages API) |
 | `zapmizer.from_number` | which team number receives the verification (optional) |
 | `zapmizer.return_url` | "back to the site" button on the hosted page (optional) |
-| `zapmizer.routes.*` | enable/prefix/middleware of the package routes |
+| `zapmizer.routes.*` | the route groups (`verify_number`, `webhook`... each off by default, `ZAPMIZER_ROUTES_*`), the master switch `enabled`, prefix and middleware |
 | `zapmizer.models.whatsapp_verified` | subclass the state model |

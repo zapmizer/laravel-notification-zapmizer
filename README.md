@@ -11,7 +11,7 @@ Instale a lib zapmizer/laravel-notification-zapmizer (2.0 beta) neste app, com o
 The commands, in order (Inertia + Vue 3 app; the guide covers Blade):
 
 ```bash
-composer require "zapmizer/laravel-notification-zapmizer:^2.0.0-beta.3@beta"
+composer require "zapmizer/laravel-notification-zapmizer:^2.0.0-beta.4@beta"
 php artisan zapmizer:install --base-uri=https://app.zapmizer.com/api/ --model=App\\Models\\User --inbox --no-interaction   # or https://app.parlichat.com/api/
 php artisan migrate
 npm install github:zapmizer/embed#v0.1.3 axios lucide-vue-next   # or bun/pnpm/yarn add, as the install output says
@@ -43,7 +43,9 @@ Publish the config file:
 php artisan vendor:publish --provider="NotificationChannels\Zapmizer\ZapmizerServiceProvider" --tag=config
 ```
 
-Upgrading from 0.3 or 0.4? Read the "Upgrade da 0.3 e da 0.4" list at the top of the [CHANGELOG](CHANGELOG.md) first: this version breaks the 0.3/0.4 API, and a published `config/zapmizer.php` does not get the new keys by itself.
+Upgrading from 0.x? Read the upgrade lists at the top of the [CHANGELOG](CHANGELOG.md) first ("Upgrade das versões 0.0, 0.1 e 0.2" and "Upgrade da 0.3 e da 0.4"): this version breaks the 0.x API, and a published `config/zapmizer.php` does not get the new keys by itself.
+
+**Routes are opt-in.** The package registers no route until you switch a group on: `ZAPMIZER_ROUTES_CONNECT`, `ZAPMIZER_ROUTES_WEBHOOK`, `ZAPMIZER_ROUTES_INBOX`, `ZAPMIZER_ROUTES_VERIFY_NUMBER` (all `false` by default; `zapmizer:install` switches on what its flags ask for). An app that only sends needs none. See [the route groups](docs/instalar.md#as-rotas-da-lib).
 
 ## Setting up your Zapmizer account
 
@@ -59,7 +61,7 @@ That is the single-tenant setup: one token and one number for the whole applicat
 
 **API version.** Set `ZAPMIZER_API_VERSION=2025-06-27` to track what you send (`2026-10-20` works the same from Zapmizer 1.148.17 on; an older Zapmizer only knows `2025-06-27` for sending). The routes that read messages do not follow it: `syncMessages()` and `createWebhook()` always ask for the message contract, `2026-10-20`.
 
-**Receiving messages (single-tenant).** Create the webhook on Zapmizer's "Webhooks" screen in version **`2026-10-20`** (the message contract; `2024-02-27` also works, translated into the same `Message`), point it at `https://your-app/zapmizer/webhook` and put its secret in `ZAPMIZER_WEBHOOK_SECRET`. Received messages fire `MessageReceived`, and what the number sends fires `MessageSent`. See [Receiving messages](docs/connect.md#6-receiving-messages-the-signed-webhook).
+**Receiving messages (single-tenant).** Create the webhook on Zapmizer's "Webhooks" screen in version **`2026-10-20`** (the message contract; `2024-02-27` also works, translated into the same `Message`), point it at `https://your-app/zapmizer/webhook`, put its secret in `ZAPMIZER_WEBHOOK_SECRET` and switch the route on with `ZAPMIZER_ROUTES_WEBHOOK=true`. Received messages fire `MessageReceived`, and what the number sends fires `MessageSent`. See [Receiving messages](docs/connect.md#6-receiving-messages-the-signed-webhook).
 
 ## Documentation
 

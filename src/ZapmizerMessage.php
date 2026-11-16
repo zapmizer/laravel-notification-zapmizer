@@ -13,6 +13,9 @@ class ZapmizerMessage
 
     public ?string $file = null;
 
+    /** What the last `send()` answered. */
+    protected ?SentMessage $sent = null;
+
     public function __construct(
         public readonly string $from = '',
         public readonly string $to = '',
@@ -75,9 +78,18 @@ class ZapmizerMessage
     public function send(): SentMessage
     {
         if (is_null($this->file)) {
-            return $this->zapmizer->sendMessage($this->params);
+            return $this->sent = $this->zapmizer->sendMessage($this->params);
         }
 
-        return $this->zapmizer->sendMessageWithFile($this->params, $this->file);
+        return $this->sent = $this->zapmizer->sendMessageWithFile($this->params, $this->file);
+    }
+
+    /**
+     * What `send()` answered, or null while it was not sent. The channel
+     * reads it to not send twice a message `toZapmizer()` already sent.
+     */
+    public function sentMessage(): ?SentMessage
+    {
+        return $this->sent;
     }
 }

@@ -6,6 +6,8 @@ use NotificationChannels\Zapmizer\Messages\MessageStatus;
 use NotificationChannels\Zapmizer\Messages\SentMessage;
 use NotificationChannels\Zapmizer\Test\Concerns\AssertsContract;
 use NotificationChannels\Zapmizer\Test\TestCase;
+use NotificationChannels\Zapmizer\Zapmizer;
+use NotificationChannels\Zapmizer\ZapmizerMessage;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 class SentMessageTest extends TestCase
@@ -163,5 +165,50 @@ class SentMessageTest extends TestCase
         $sent = $this->sent(self::QR);
 
         $this->assertEquals($sent, unserialize(serialize($sent)));
+    }
+
+    public function testAFakeIsATrackableQrSendOfTheContract()
+    {
+        $sent = SentMessage::fake();
+
+        $this->assertMatchesContract('POST', '/messages', 200, json_encode($sent->raw()));
+        $this->assertIsString($sent->id);
+        $this->assertNotSame('', $sent->id);
+        $this->assertSame('https://app.zapmizer.com/api/sent-messages/' . $sent->id, $sent->selfUrl);
+        $this->assertSame(MessageStatus::QUEUED, $sent->status);
+        $this->assertNotNull($sent->widTo);
+        $this->assertTrue($sent->isTrackable());
+        $this->assertNotSame($sent->id, SentMessage::fake()->id, 'each fake has its own id');
+    }
+
+    public function testAFakeTakesOverridesInTheShapeOfTheAnswer()
+    {
+        $sent = SentMessage::fake(['id' => 'abc', 'wid_to' => '5511988887777@c.us', 'message_status' => MessageStatus::SENT, 'metadata' => ['text' => 'oi']]);
+
+        $this->assertSame('abc', $sent->id);
+        $this->assertSame('https://app.zapmizer.com/api/sent-messages/abc', $sent->selfUrl, 'the link follows the id');
+        $this->assertSame('5511988887777@c.us', $sent->widTo);
+        $this->assertSame(MessageStatus::SENT, $sent->status);
+        $this->assertSame(['text' => 'oi'], $sent->raw()['metadata']);
+
+        $official = SentMessage::fake(['id' => 42, 'links' => ['self' => 'https://app.zapmizer.com/api/meta-messages/42']]);
+
+        $this->assertSame('42', $official->id);
+        $this->assertSame('https://app.zapmizer.com/api/meta-messages/42', $official->selfUrl);
+
+        $queued = SentMessage::fake(['id' => null]);
+
+        $this->assertNull($queued->id);
+        $this->assertNull($queued->selfUrl);
+        $this->assertFalse($queued->isTrackable());
+    }
+
+    public function testAFakeIsWhatAMockOfTheSendReturns()
+    {
+        // SentMessage is final: Mockery cannot make up a return for
+        // sendMessage() by itself, so the mock returns a fake.
+        $this->mock(Zapmizer::class)->shouldReceive('sendMessage')->once()->andReturn(SentMessage::fake(['id' => 'x1']));
+
+        $this->assertSame('x1', ZapmizerMessage::create('5511900000000', '5511999999999')->text('oi')->send()->id);
     }
 }

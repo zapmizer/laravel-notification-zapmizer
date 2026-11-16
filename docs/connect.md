@@ -30,7 +30,7 @@ Zapmizer validates `webhook_url` the way it validates `redirect_uri`: **https in
 
 ## 2. Package setup
 
-The quick way is `php artisan zapmizer:install --base-uri=https://app.zapmizer.com/api/ --model=App\\Models\\User` (add `--inbox` for the embedded inbox): it publishes the config and the migration, adds the missing `ZAPMIZER_*` keys to `.env` and `.env.example`, makes the model `Connectable` and prints what is left. `php artisan zapmizer:check` verifies the result. See [instalar.md](instalar.md) (Portuguese). By hand:
+The quick way is `php artisan zapmizer:install --base-uri=https://app.zapmizer.com/api/ --model=App\\Models\\User --webhook` (add `--inbox` for the embedded inbox): it publishes the config and the migration, adds the missing `ZAPMIZER_*` keys to `.env` and `.env.example` (with the route groups the flags ask for), makes the model `Connectable` and prints what is left. `php artisan zapmizer:check` verifies the result. See [instalar.md](instalar.md) (Portuguese). By hand:
 
 ```bash
 php artisan vendor:publish --provider="NotificationChannels\Zapmizer\ZapmizerServiceProvider" --tag=config
@@ -99,7 +99,7 @@ The `ZapmizerConnection` model (`zapmizer.models.connection` to subclass it) exp
 
 ## 4. Who gets connected: the resolver
 
-The controller asks a resolver which model the current request connects. The default returns `$request->user()` (which must implement `Contracts\Connectable`, or it throws a `ZapmizerConnectException` naming the class). For team-scoped connections, point `zapmizer.connect.resolver` at your own — the return type is the contract. When there is nothing to connect (a user without a team), throw `ZapmizerConnectException::noConnectable()`: the JSON endpoints answer 403 `{"code": "no_connectable"}` and the popup callback reports `no_connectable` on its result page. Returning `null` is not an option — it would surface as a `TypeError` (500).
+The controller asks a resolver which model the current request connects. The default returns `$request->user()` (which must implement `Contracts\Connectable`, or it throws a `NotConnectableException` naming the class; the package routes answer that like `no_connectable` below, 403, with the warning `zapmizer: the connect resolver returned a model that is not Connectable.`). For team-scoped connections, point `zapmizer.connect.resolver` at your own — the return type is the contract. When there is nothing to connect (a user without a team), throw `ZapmizerConnectException::noConnectable()`: the JSON endpoints answer 403 `{"code": "no_connectable"}` and the popup callback reports `no_connectable` on its result page. Returning `null` is not an option — it would surface as a `TypeError` (500).
 
 ```php
 use Illuminate\Database\Eloquent\Model;
@@ -128,6 +128,8 @@ The state stored at `start` is bound to the resolved model, so a callback for an
 ## 5. The connect flow
 
 ### Routes
+
+**The package routes are opt-in, by group** (all off by default; [instalar.md](instalar.md#as-rotas-da-lib) has the table): the connect routes below need `ZAPMIZER_ROUTES_CONNECT=true` (`zapmizer.routes.connect`), and the webhook of section 6 `ZAPMIZER_ROUTES_WEBHOOK=true` (`zapmizer.routes.webhook`). With the connect on and the webhook off, `start` sends no `webhook_url` (nor `webhook_version`): the connections send but receive nothing, and turning the webhook on later does not give one to the connections made before (they connect again). `zapmizer.routes.enabled = false` still turns every package route off; then `start` sends `route('zapmizer.webhook')` as before, and the app mounts it.
 
 All under the package prefix (`zapmizer`), behind `web` + `auth`:
 
@@ -288,7 +290,7 @@ The JSON endpoints (`show`, `start`, `destroy`, `reconnect`) answer these themse
 |---|---|---|
 | `zapmizer_unavailable` | 503 | Zapmizer is down, misbehaving or refused the session (404, 409, 422, 429), the configuration is missing or invalid (partner credentials, `base_uri`, an authenticated user that is not `Connectable` with the default resolver), or the answer was unexpected — back off and retry. Reported: the report says which. |
 | `partner_unauthorized` | 503 | Your partner credentials were refused — configuration error, logged and reported. |
-| `no_connectable` | 403 | The resolver found nothing to connect on this request (no user, a user without a team). |
+| `no_connectable` | 403 | The resolver found nothing to connect on this request (no user, a user without a team), or the default resolver's user model does not implement `Connectable` (logged as a warning). |
 | `no_instance` | 409 | `reconnect` only: nothing to reconnect (above). |
 | `reauth_required` | 409 | `reconnect` only: the token is no longer valid or no longer decrypts (above). |
 
@@ -330,7 +332,7 @@ onMounted(startPolling);
 </template>
 ```
 - `types.ts` — `ZapmizerConnection`, `ZapmizerConnectStatus`, `ZapmizerConnectMessage`, `ZapmizerReconnectStatus`, `ZapmizerReconnectMessage`, `ZapmizerRelinkResult`.
-- `InboxScreen.vue` (tag `zapmizer-inbox`) — the embedded inbox over the package's inbox routes (`zapmizer.inbox.enabled`), with `@zapmizer/embed/vue`. Without a connection, or when the session asks for a new connect, it shows `ConnectButton`. See [instalar.md](instalar.md).
+- `InboxScreen.vue` (tag `zapmizer-inbox`) — the embedded inbox over the package's inbox routes (`zapmizer.routes.inbox`, `ZAPMIZER_ROUTES_INBOX`), with `@zapmizer/embed/vue`. Without a connection, or when the session asks for a new connect, it shows `ConnectButton`. See [instalar.md](instalar.md).
 - `zapmizerEmbed.ts` (tag `zapmizer-inbox`) — the `openSession` and `keepAlive` of `@zapmizer/embed` against those routes (with Laravel's CSRF), `listenToZapmizerLogout()` and `endZapmizerEmbeds()`. The embed brand comes from `VITE_ZAPMIZER_BRAND` and must be the one of the deploy `base_uri` points at (see "A marca do embed" in [instalar.md](instalar.md#a-marca-do-embed)).
 - `zapmizerBrand.ts` — the brand of the deploy (`VITE_ZAPMIZER_BRAND`) and its name with the article for the texts ("com a Parli", "do Zapmizer"), so the button and the panel never say "Zapmizer" on a Parli deploy.
 - `zapmizerRoute.ts` — the package's URLs: Ziggy's `route()` when the app has it, else the paths under the default `/zapmizer` prefix.
@@ -340,6 +342,8 @@ The lasting warning of a `webhook_failed` is the panel's: the button emits `conn
 They expect `axios` and `lucide-vue-next` (and `@zapmizer/embed` for the inbox screen); Ziggy's `route()` is used when present, not required; the markup uses utility classes from the app they came from (`gp-*`) — restyle them as yours. The popup pages are Blade views you can publish with `--tag=views` (`resources/views/vendor/zapmizer/connect-result.blade.php`, `connect-wait.blade.php` and `reconnect-result.blade.php`).
 
 ## 6. Receiving messages: the signed webhook
+
+The webhook route (`POST {prefix}/webhook`, `zapmizer.webhook`) is registered only with the webhook group on: `ZAPMIZER_ROUTES_WEBHOOK=true` (`zapmizer.routes.webhook`; `zapmizer:install --webhook` writes it). With it on, `zapmizer.webhook.secret` (`ZAPMIZER_WEBHOOK_SECRET`) signs this route: an app that used that key for something else renames its own before switching the group on.
 
 Every webhook on Zapmizer has a secret, and every bot event (`message`, `qr`, ...) is signed with it:
 
@@ -865,7 +869,7 @@ The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceCli
 | `zapmizer.webhook.tolerance` | accepted timestamp drift in seconds (default 300) |
 | `zapmizer.webhook.per_connection` | each connection made through the connect flow gets its own webhook URL (`ZAPMIZER_WEBHOOK_PER_CONNECTION`, default off; [section 6](#per-connection-webhook-url-opt-in)) |
 | `zapmizer.models.connection` | subclass the connection model |
-| `zapmizer.routes.*` | enable/prefix/middleware of the package routes |
+| `zapmizer.routes.*` | the route groups (`connect`, `webhook`, `inbox`, `verify_number`, each off by default, `ZAPMIZER_ROUTES_*`), the master switch `enabled`, prefix and middleware |
 
 On the model, `zapmizerExternalId()` (section 3). For behaviour after a connect or a refused reconnect, the `NumberConnected` and `ReconnectRefused` events (section 5).
 
@@ -873,6 +877,7 @@ On the model, `zapmizerExternalId()` (section 3). For behaviour after a connect 
 
 The partner client changed, and so did the connect flow ("Connect flow" below).
 
+- **The package routes are opt-in now.** 0.3/0.4 registered the connect, the webhook and the verify-number routes on their own; 2.0 registers none until switched on. Keep what you used: `ZAPMIZER_ROUTES_CONNECT=true` (connect and reconnect), `ZAPMIZER_ROUTES_WEBHOOK=true` (the signed webhook, the per-connection one included) and, if you link to `zapmizer.verify_number`, `ZAPMIZER_ROUTES_VERIFY_NUMBER=true`. A published `config/zapmizer.php` needs no edit: the provider adds the group keys. Without them the connect answers 404 and every webhook delivery too (Zapmizer retries, then gives up).
 - Needs Zapmizer **1.148.10 or later** (section 1).
 - `PartnerClient::createSession($redirectUri, $state = null, $webhookUrl = null, $expiresIn = null, $externalId = null, $webhookVersion = null)`: `state` became optional and `externalId` and `webhookVersion` were added at the end. Named and positional calls keep working; a subclass that overrides `createSession()` must update its signature.
 - `createSession()`, `subscription()` and `checkout()` throw `InvalidArgumentException` for an invalid `external_id` or `state` (`""`, `"0"` or whitespace at either end) before calling Zapmizer.
@@ -881,7 +886,7 @@ The partner client changed, and so did the connect flow ("Connect flow" below).
 - `ConnectToken`: `teamId` is an `int` (never `null`), `userId` was added as the second constructor argument, and an answer without a valid `user_id`/`team_id` throws `unexpectedResponse`. The callback then reports `exchange_failed` and stores nothing (it used to store the connection with a `null` `zapmizer_team_id`).
 - A partner call answered 404 or 409 no longer logs `zapmizer: partner call failed.`.
 
-**Messages.** `InboundMessage` is gone: `MessageReceived`, the new `MessageSent`, `syncMessages()`, `media()` and `awaitMedia()` use `Messages\Message`, in Zapmizer's message contract. The field-by-field map (including the short `id`) is in the CHANGELOG, "Upgrade da 0.3 e da 0.4". The webhook the connect creates is born in `2026-10-20` ([The webhook version](#the-webhook-version)); one in `2024-02-27` keeps working.
+**Messages.** `InboundMessage` is gone: `MessageReceived`, the new `MessageSent`, `syncMessages()` and `ZapmizerConnection::media()`/`awaitMedia()` use `Messages\Message` (`InstanceClient::media($botInstanceId, $messageId, $timestamp)` keeps its scalars), in Zapmizer's message contract. The field-by-field map (including the short `id`) is in the CHANGELOG, "Upgrade da 0.3 e da 0.4". The webhook the connect creates is born in `2026-10-20` ([The webhook version](#the-webhook-version)); one in `2024-02-27` keeps working.
 
 **Connect flow.**
 
@@ -913,6 +918,8 @@ The callback and `destroy` no longer call `/webhooks` (rotation, remote deletion
 
 ## Upgrading from 0.1.x
 
+Upgrading straight to 2.0? Read first "Upgrade das versões 0.0, 0.1 e 0.2" in the [CHANGELOG](../CHANGELOG.md) (Portuguese): the send now returns `SentMessage`, `CouldNotSendNotification` is gone (a `catch` of it stops matching silently), `setHttpClient()` is gone and the package routes are opt-in. The notes below are the 0.x steps.
+
 **Breaking** (0.x: a minor bump is the breaking bump). The pairing moved to Zapmizer's hosted page, and the wizard on your side went with it.
 
 - **Requires a Zapmizer with the hosted pairing** (for this version, 1.148.10 or later: section 1). Against an older Zapmizer the callback still lands with the token, but with no number: the connection is stored inactive and there is no longer a wizard to pair it. With this release, a token exchange that does not answer `user_id`/`team_id` (Zapmizer before 1.148.8) makes the callback report `exchange_failed` and store nothing.
@@ -926,6 +933,8 @@ The callback and `destroy` no longer call `/webhooks` (rotation, remote deletion
 - Not changed: the table, the model, the trait, the signed webhook, `registerWebhook()` / `rotateWebhookSecret()` / `deleteRemoteWebhook()`, `destroy`, the resolver contract, `team_already_connected`.
 
 ## Upgrading from 0.0.x
+
+Upgrading straight to 2.0? Read first "Upgrade das versões 0.0, 0.1 e 0.2" in the [CHANGELOG](../CHANGELOG.md) (Portuguese): the send now returns `SentMessage`, `CouldNotSendNotification` is gone (a `catch` of it stops matching silently), `setHttpClient()` is gone and the package routes are opt-in. The notes below are the 0.x steps.
 
 The webhook route changed behaviour. Read this even if you never touch the connect flow.
 

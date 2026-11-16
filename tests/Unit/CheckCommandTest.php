@@ -29,6 +29,9 @@ class CheckCommandTest extends TestCase
         $app['config']->set('zapmizer.base_uri', 'http://zap.test/api/');
         $app['config']->set('zapmizer.partner.id', '12');
         $app['config']->set('zapmizer.partner.secret', 'partner-secret');
+        // Connect and webhook on (what `zapmizer:install --model --webhook`
+        // writes); the inbox off, as by default.
+        $app['config']->set('zapmizer.routes.inbox', false);
     }
 
     protected function setUp(): void
@@ -165,7 +168,7 @@ class CheckCommandTest extends TestCase
     public function testAnOldVueIsAWarningWithTheInbox()
     {
         $this->partnerAnswers(404);
-        config()->set('zapmizer.inbox.enabled', true);
+        config()->set('zapmizer.routes.inbox', true);
         $this->reloadPackageRoutes();
         $this->appFile('package.json', json_encode(['dependencies' => ['@zapmizer/embed' => 'github:zapmizer/embed#v0.1.3', 'vue' => '^3.2.47']]));
 
@@ -190,7 +193,7 @@ class CheckCommandTest extends TestCase
         $this->assertSame(0, $result['exit']);
         $this->assertTrue($result['ok']);
         $this->assertSame(
-            ['app_key', 'config', 'base_uri', 'partner_credentials', 'partner_api', 'migration', 'connectable', 'connect_routes', 'inbox_routes', 'embed_package', 'embed_brand', 'app_url'],
+            ['app_key', 'config', 'base_uri', 'partner_credentials', 'partner_api', 'migration', 'connectable', 'connect_routes', 'webhook_routes', 'inbox_routes', 'embed_package', 'embed_brand', 'app_url'],
             array_keys($result['checks']),
         );
         $this->assertSame('ok', $result['checks']['partner_api']['status']);
@@ -322,7 +325,7 @@ class CheckCommandTest extends TestCase
     public function testTheInboxNeedsItsRoutesAndThePinnedEmbedPackage()
     {
         $this->partnerAnswers(404);
-        config()->set('zapmizer.inbox.enabled', true);
+        config()->set('zapmizer.routes.inbox', true);
         $this->reloadPackageRoutes();
 
         $missing = $this->checkJson();
@@ -345,7 +348,7 @@ class CheckCommandTest extends TestCase
     public function testAnOlderEmbedTagIsAWarningToUpdate()
     {
         $this->partnerAnswers(404);
-        config()->set('zapmizer.inbox.enabled', true);
+        config()->set('zapmizer.routes.inbox', true);
         $this->reloadPackageRoutes();
 
         foreach (['v0.1.2', 'v0.1.0'] as $tag) {
@@ -366,7 +369,7 @@ class CheckCommandTest extends TestCase
     public function testTheFrontBrandMustMatchTheDeployOfTheBaseUri()
     {
         $this->partnerAnswers(404);
-        config()->set('zapmizer.inbox.enabled', true);
+        config()->set('zapmizer.routes.inbox', true);
         $this->reloadPackageRoutes();
         $this->appFile('package.json', json_encode(['dependencies' => ['@zapmizer/embed' => 'github:zapmizer/embed#v0.1.3']]));
 
@@ -399,7 +402,7 @@ class CheckCommandTest extends TestCase
             'localhost:8001/brand/manifest.json' => Http::response(['name' => 'Parli', 'short_name' => 'Parli']),
         ]);
         config()->set('zapmizer.base_uri', 'http://localhost:8001/api/');
-        config()->set('zapmizer.inbox.enabled', true);
+        config()->set('zapmizer.routes.inbox', true);
         $this->reloadPackageRoutes();
         $this->appFile('package.json', json_encode(['dependencies' => ['@zapmizer/embed' => 'github:zapmizer/embed#v0.1.3']]));
 
@@ -429,7 +432,7 @@ class CheckCommandTest extends TestCase
             'localhost:8001/brand/*' => Http::response('', 404),
         ]);
         config()->set('zapmizer.base_uri', 'http://localhost:8001/api/');
-        config()->set('zapmizer.inbox.enabled', true);
+        config()->set('zapmizer.routes.inbox', true);
         $this->reloadPackageRoutes();
         $this->appFile('package.json', json_encode(['dependencies' => ['@zapmizer/embed' => 'github:zapmizer/embed#v0.1.3']]));
 
@@ -446,7 +449,7 @@ class CheckCommandTest extends TestCase
     public function testInboxRoutesThatAreNotRegisteredFail()
     {
         $this->partnerAnswers(404);
-        config()->set('zapmizer.inbox.enabled', true);
+        config()->set('zapmizer.routes.inbox', true);
         $this->appFile('package.json', json_encode(['dependencies' => ['@zapmizer/embed' => 'github:zapmizer/embed#v0.1.3']]));
 
         $result = $this->checkJson();
@@ -489,7 +492,7 @@ class CheckCommandTest extends TestCase
     public function testAParentOriginWithAPathFails()
     {
         $this->partnerAnswers(404);
-        config()->set('zapmizer.inbox.enabled', true);
+        config()->set('zapmizer.routes.inbox', true);
         config()->set('zapmizer.inbox.parent_origin', 'https://app.example.com/inbox');
         $this->reloadPackageRoutes();
         $this->appFile('package.json', json_encode(['dependencies' => ['@zapmizer/embed' => 'github:zapmizer/embed#v0.1.3']]));
@@ -521,5 +524,59 @@ class CheckCommandTest extends TestCase
 
         $this->assertStringContainsString('ZAPMIZER_PARTNER_ID e ZAPMIZER_PARTNER_SECRET vazio no .env', $output);
         $this->assertStringContainsString('2 problemas críticos.', $output);
+    }
+
+    public function testTheConnectGroupSwitchedOffFails()
+    {
+        $this->partnerAnswers(404);
+        config()->set('zapmizer.routes.connect', false);
+        $this->reloadPackageRoutes();
+
+        $result = $this->checkJson();
+
+        $this->assertSame(1, $result['exit']);
+        $this->assertSame('fail', $result['checks']['connect_routes']['status']);
+        $this->assertStringContainsString('ZAPMIZER_ROUTES_CONNECT', $result['checks']['connect_routes']['message']);
+        $this->assertStringContainsString('ZAPMIZER_ROUTES_CONNECT=true', $result['checks']['connect_routes']['hint']);
+    }
+
+    public function testTheConnectWithoutTheWebhookIsAWarning()
+    {
+        $this->partnerAnswers(404);
+        config()->set('zapmizer.routes.webhook', false);
+        $this->reloadPackageRoutes();
+
+        $result = $this->checkJson();
+
+        $this->assertSame(0, $result['exit']);
+        $this->assertSame('warn', $result['checks']['webhook_routes']['status']);
+        $this->assertStringContainsString('não recebem mensagens', $result['checks']['webhook_routes']['message']);
+        $this->assertStringContainsString('ZAPMIZER_ROUTES_WEBHOOK=true', $result['checks']['webhook_routes']['hint']);
+    }
+
+    public function testTheInboxWithoutTheConnectFails()
+    {
+        $this->partnerAnswers(404);
+        config()->set('zapmizer.routes.inbox', true);
+        config()->set('zapmizer.routes.connect', false);
+        $this->reloadPackageRoutes();
+        $this->appFile('package.json', json_encode(['dependencies' => ['@zapmizer/embed' => 'github:zapmizer/embed#v0.1.3']]));
+
+        $result = $this->checkJson();
+
+        $this->assertSame('fail', $result['checks']['inbox_routes']['status']);
+        $this->assertStringContainsString('o connect não (ZAPMIZER_ROUTES_CONNECT)', $result['checks']['inbox_routes']['message']);
+    }
+
+    public function testTheOldInboxSwitchIsAWarningToRename()
+    {
+        $this->partnerAnswers(404);
+        $this->appFile('.env', "VITE_ZAPMIZER_BRAND=zapmizer\nZAPMIZER_INBOX_ENABLED=true\n");
+
+        $result = $this->checkJson();
+
+        $this->assertSame(0, $result['exit']);
+        $this->assertSame('warn', $result['checks']['inbox_routes']['status']);
+        $this->assertStringContainsString('ZAPMIZER_ROUTES_INBOX=true', $result['checks']['inbox_routes']['hint']);
     }
 }

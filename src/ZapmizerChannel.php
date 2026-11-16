@@ -14,6 +14,13 @@ class ZapmizerChannel
     /**
      * Send the given notification.
      *
+     * `toZapmizer()` may send by itself and return the `SentMessage` (or
+     * anything else, null included), which goes along untouched. Or it may
+     * return the `ZapmizerMessage` it built: the channel sends it, to the
+     * notifiable's `routeNotificationFor('zapmizer')` when the message has
+     * no `to` (nothing is sent without either). A builder that was already
+     * sent is not sent again. Either way, `NotificationSent` gets the
+     * `SentMessage` in `response['message']`.
      *
      * @throws \NotificationChannels\Zapmizer\Exceptions\ZapmizerException
      */
@@ -22,13 +29,34 @@ class ZapmizerChannel
         // @phpstan-ignore-next-line
         $message = $notification->toZapmizer($notifiable);
 
-        $notifiable->routeNotificationFor('zapmizer', $notification);
+        $route = $notifiable->routeNotificationFor('zapmizer', $notification);
 
-        // Send notification to the $notifiable instance...
+        if ($message instanceof ZapmizerMessage) {
+            $message = $message->sentMessage() ?? $this->sendBuilder($message, $route);
+        }
 
         return [
             'message' => $message,
             'recipient' => $notifiable,
         ];
+    }
+
+    /**
+     * @return Messages\SentMessage|null null when the message has no `to`
+     *                                   and the notifiable no route
+     *
+     * @throws \NotificationChannels\Zapmizer\Exceptions\ZapmizerException
+     */
+    protected function sendBuilder(ZapmizerMessage $message, mixed $route): ?Messages\SentMessage
+    {
+        if (blank($message->params['to'] ?? null)) {
+            if (!is_scalar($route) || blank($route)) {
+                return null;
+            }
+
+            $message->params['to'] = (string) $route;
+        }
+
+        return $message->send();
     }
 }

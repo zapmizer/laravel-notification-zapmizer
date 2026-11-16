@@ -18,6 +18,8 @@ use NotificationChannels\Zapmizer\Contracts\ResolvesConnectable;
 use NotificationChannels\Zapmizer\Contracts\Transport;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Support\ConnectionWebhook;
+use NotificationChannels\Zapmizer\Support\RouteGroups;
+use Illuminate\Contracts\Foundation\CachesConfiguration;
 
 class ZapmizerServiceProvider extends ServiceProvider
 {
@@ -26,9 +28,12 @@ class ZapmizerServiceProvider extends ServiceProvider
      */
     public function register()
     {
+        // `app(Zapmizer::class, [...])` takes `api_token`, `base_uri` and
+        // `api_version`, and for the HTTP side `timeout` / `connect_timeout`
+        // (seconds, over `zapmizer.http.*`) or a ready `transport`.
         $this->app->bind(Zapmizer::class, fn (Application $app, $config) => new Zapmizer(
             Arr::get($config, 'api_token', config('zapmizer.api_token')),
-            $app->make(Transport::class),
+            $this->transportFor($app, is_array($config) ? $config : []),
             Arr::get($config, 'base_uri', config('zapmizer.base_uri')),
             Arr::get($config, 'api_version', config('zapmizer.api_version'))
         ));
@@ -73,7 +78,25 @@ class ZapmizerServiceProvider extends ServiceProvider
 
         if ($this->isLumen() === false) {
             $this->mergeConfigFrom(__DIR__ . '/../config/zapmizer.php', 'zapmizer');
+            $this->mergeRouteGroups();
         }
+    }
+
+    /**
+     * The config merge is shallow: a `config/zapmizer.php` published before
+     * the route groups has `routes` without their keys. Fill in the missing
+     * ones from the package's (with their env), keeping the app's.
+     */
+    protected function mergeRouteGroups(): void
+    {
+        if ($this->app instanceof CachesConfiguration && $this->app->configurationIsCached()) {
+            return;
+        }
+
+        $routes = config('zapmizer.routes');
+        $defaults = (require __DIR__ . '/../config/zapmizer.php')['routes'];
+
+        config(['zapmizer.routes' => array_replace($defaults, is_array($routes) ? $routes : [])]);
     }
 
     /**
@@ -87,29 +110,33 @@ class ZapmizerServiceProvider extends ServiceProvider
     }
 
     /**
-     * Register the package routes.
-     *
-     * Disable via `zapmizer.routes.enabled` to mount your own instead.
+     * Register the package routes, group by group: each only when switched
+     * on in `zapmizer.routes.{group}` (all off by default), and none with
+     * `zapmizer.routes.enabled` false (mount your own). See
+     * Support\RouteGroups.
      *
      * @return void
      */
     public function registerRoutes()
     {
-        if (config('zapmizer.routes.enabled', true) === false) {
-            return;
+        $prefix = config('zapmizer.routes.prefix', 'zapmizer');
+        $middleware = config('zapmizer.routes.middleware', ['web', 'auth']);
+
+        if (RouteGroups::enabled(RouteGroups::VERIFY_NUMBER)) {
+            Route::group(['prefix' => $prefix, 'middleware' => $middleware, 'as' => 'zapmizer.'], function () {
+                $this->loadRoutesFrom(__DIR__ . '/../routes/verify-number.php');
+            });
         }
 
-        Route::group([
-            'prefix' => config('zapmizer.routes.prefix', 'zapmizer'),
-            'middleware' => config('zapmizer.routes.middleware', ['web', 'auth']),
-            'as' => 'zapmizer.',
-        ], function () {
-            $this->loadRoutesFrom(__DIR__ . '/../routes/web.php');
-        });
+        if (RouteGroups::enabled(RouteGroups::CONNECT)) {
+            Route::group(['prefix' => $prefix, 'middleware' => $middleware, 'as' => 'zapmizer.'], function () {
+                $this->loadRoutesFrom(__DIR__ . '/../routes/web.php');
+            });
+        }
 
-        if (filter_var(config('zapmizer.inbox.enabled', false), FILTER_VALIDATE_BOOLEAN)) {
+        if (RouteGroups::enabled(RouteGroups::INBOX)) {
             Route::group([
-                'prefix' => config('zapmizer.routes.prefix', 'zapmizer'),
+                'prefix' => $prefix,
                 'middleware' => config('zapmizer.inbox.middleware', ['web', 'auth']),
                 'as' => 'zapmizer.',
             ], function () {
@@ -122,17 +149,19 @@ class ZapmizerServiceProvider extends ServiceProvider
         // route itself (routes/webhook.php), not left to the config. The
         // per-connection route (`zapmizer.webhook.per_connection`) joins it,
         // same group.
-        Route::group([
-            'prefix' => config('zapmizer.routes.prefix', 'zapmizer'),
-            'middleware' => config('zapmizer.routes.webhook_middleware', []),
-            'as' => 'zapmizer.',
-        ], function () {
-            $this->loadRoutesFrom(__DIR__ . '/../routes/webhook.php');
+        if (RouteGroups::enabled(RouteGroups::WEBHOOK)) {
+            Route::group([
+                'prefix' => $prefix,
+                'middleware' => config('zapmizer.routes.webhook_middleware', []),
+                'as' => 'zapmizer.',
+            ], function () {
+                $this->loadRoutesFrom(__DIR__ . '/../routes/webhook.php');
 
-            if (ConnectionWebhook::enabled()) {
-                $this->loadRoutesFrom(__DIR__ . '/../routes/connection-webhook.php');
-            }
-        });
+                if (ConnectionWebhook::enabled()) {
+                    $this->loadRoutesFrom(__DIR__ . '/../routes/connection-webhook.php');
+                }
+            });
+        }
     }
 
     /**
@@ -198,7 +227,40 @@ class ZapmizerServiceProvider extends ServiceProvider
         ]);
     }
 
-    protected function makeTransport(Application $app): Transport
+    /**
+     * The transport of a client made with parameters: the `transport` given,
+     * or the configured one with the `timeout` / `connect_timeout` given in
+     * place of `zapmizer.http.*`. Without either, the container's.
+     */
+    protected function transportFor(Application $app, array $config): Transport
+    {
+        $transport = $config['transport'] ?? null;
+
+        if ($transport instanceof Transport) {
+            return $transport;
+        }
+
+        if ($transport !== null) {
+            throw new InvalidArgumentException(sprintf(
+                'The transport parameter must be an instance of %s, got %s.',
+                Transport::class,
+                get_debug_type($transport),
+            ));
+        }
+
+        $timeouts = array_filter([
+            'connectTimeout' => $this->seconds($config['connect_timeout'] ?? null),
+            'timeout' => $this->seconds($config['timeout'] ?? null),
+        ], fn ($value) => $value !== null);
+
+        return $timeouts === [] ? $app->make(Transport::class) : $this->makeTransport($app, $timeouts);
+    }
+
+    /**
+     * @param array<string, float> $timeouts over the config's, by the
+     *                                       constructor's parameter names
+     */
+    protected function makeTransport(Application $app, array $timeouts = []): Transport
     {
         $class = config('zapmizer.http.transport');
 
@@ -214,14 +276,14 @@ class ZapmizerServiceProvider extends ServiceProvider
             ));
         }
 
-        if ($app->bound($class)) {
+        if ($timeouts === [] && $app->bound($class)) {
             return $app->make($class);
         }
 
-        return $app->make($class, array_filter([
+        return $app->make($class, array_replace(array_filter([
             'connectTimeout' => $this->seconds(config('zapmizer.http.connect_timeout')),
             'timeout' => $this->seconds(config('zapmizer.http.timeout')),
-        ], fn ($value) => $value !== null));
+        ], fn ($value) => $value !== null), $timeouts));
     }
 
     protected function seconds(mixed $value): ?float

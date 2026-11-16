@@ -8,6 +8,7 @@ use NotificationChannels\Zapmizer\Install\ConnectableModel;
 use NotificationChannels\Zapmizer\Install\EnvFile;
 use NotificationChannels\Zapmizer\Support\BaseUri;
 use NotificationChannels\Zapmizer\Support\EmbedBrand;
+use NotificationChannels\Zapmizer\Support\RouteGroups;
 use ReflectionClass;
 use Throwable;
 
@@ -15,7 +16,9 @@ use Throwable;
  * Class InstallCommand.
  *
  * `php artisan zapmizer:install`: the connect (a WhatsApp number per model)
- * and, with `--inbox`, the embedded inbox, in the mould of `reverb:install`
+ * and, with `--inbox`, the embedded inbox, switching on the route groups
+ * the app asked for (`--model`: connect; `--webhook`: webhook; `--inbox`:
+ * inbox and connect), in the mould of `reverb:install`
  * and `horizon:install`. Idempotent — run it again and it only does what is
  * missing — and safe under `--no-interaction`: without a flag nothing beyond
  * the config, the migration and the `.env` keys is touched. It never writes
@@ -35,7 +38,8 @@ class InstallCommand extends Command
     protected $signature = 'zapmizer:install
         {--model= : O model dono do número de WhatsApp (ex.: App\\Models\\User ou Team)}
         {--base-uri= : A URL da API da conta de parceiro (ZAPMIZER_BASE_URI), ex.: https://app.parlichat.com/api/}
-        {--inbox : Liga a caixa de entrada embutida e publica os componentes Vue}
+        {--inbox : Liga a caixa de entrada embutida (e o connect) e publica os componentes Vue}
+        {--webhook : Liga o webhook da lib, a rota pública assinada que recebe as mensagens}
         {--migrate : Roda as migrations no fim}
         {--force : Sobrescreve a config, a migration e os componentes já publicados}';
 
@@ -77,8 +81,16 @@ class InstallCommand extends Command
         $this->publishConfig();
         $this->publishMigration();
         $inbox = $this->wantsInbox();
-        $this->writeEnvironment($inbox);
+        $webhook = $this->wantsWebhook();
+        $baseUri = $this->resolveBaseUri();
         $model = $this->connectModel();
+
+        // The inbox opens for the connection the connect made: it needs it.
+        $connect = $model !== null || $inbox;
+
+        if ($baseUri) {
+            $this->writeEnvironment($this->routeGroups($connect, $webhook, $inbox));
+        }
 
         if ($inbox) {
             $this->publishComponents();
@@ -86,7 +98,7 @@ class InstallCommand extends Command
 
         $migrated = $this->migrate();
 
-        $this->printNextSteps($inbox, $model, $migrated);
+        $this->printNextSteps($inbox, $model, $migrated, $connect, $webhook);
 
         return $this->failed ? self::FAILURE : self::SUCCESS;
     }
@@ -141,17 +153,51 @@ class InstallCommand extends Command
         return $this->confirm('Ligar a caixa de entrada embutida (rotas da lib + componente Vue)?', false);
     }
 
+    protected function wantsWebhook(): bool
+    {
+        if ($this->option('webhook')) {
+            return true;
+        }
+
+        if (!$this->input->isInteractive()) {
+            return false;
+        }
+
+        return $this->confirm('Ligar o webhook da lib (rota pública assinada, para receber mensagens e eventos)?', false);
+    }
+
+    /**
+     * The route switches the app asked for, each `true`.
+     *
+     * @return array<string, string>
+     */
+    protected function routeGroups(bool $connect, bool $webhook, bool $inbox): array
+    {
+        $groups = array_filter([
+            RouteGroups::CONNECT => $connect,
+            RouteGroups::WEBHOOK => $webhook,
+            RouteGroups::INBOX => $inbox,
+        ]);
+
+        $variables = [];
+
+        foreach (array_keys($groups) as $group) {
+            $variables[RouteGroups::env($group)] = 'true';
+        }
+
+        return $variables;
+    }
+
     /**
      * The keys the connect reads, added only where missing, in `.env` and
      * `.env.example`. The partner keys go in empty: they are issued by
-     * Zapmizer, never made up here.
+     * Zapmizer, never made up here. The route switches asked for are
+     * switched on even when the file has them with another value.
+     *
+     * @param array<string, string> $routes
      */
-    protected function writeEnvironment(bool $inbox): void
+    protected function writeEnvironment(array $routes): void
     {
-        if (!$this->resolveBaseUri()) {
-            return;
-        }
-
         $variables = [
             'ZAPMIZER_BASE_URI' => $this->baseUri,
             'ZAPMIZER_API_VERSION' => '2025-06-27',
@@ -187,15 +233,17 @@ class InstallCommand extends Command
                 $file->set('ZAPMIZER_BASE_URI', $this->baseUri);
             }
 
-            // --inbox is an explicit ask: a ZAPMIZER_INBOX_ENABLED already
-            // there with another value is switched on.
-            $switched = $inbox && $file->has('ZAPMIZER_INBOX_ENABLED') && $file->value('ZAPMIZER_INBOX_ENABLED') !== 'true'
-                && $file->set('ZAPMIZER_INBOX_ENABLED', 'true');
-            $added = $file->addMissing($inbox ? $variables + ['ZAPMIZER_INBOX_ENABLED' => 'true'] : $variables);
+            // A flag is an explicit ask: a route switch already there with
+            // another value is switched on.
+            $switched = [];
 
-            if ($switched) {
-                $added[] = 'ZAPMIZER_INBOX_ENABLED=true';
+            foreach ($routes as $key => $value) {
+                if ($file->has($key) && $file->value($key) !== $value && $file->set($key, $value)) {
+                    $switched[] = "{$key}={$value}";
+                }
             }
+
+            $added = array_merge($file->addMissing($variables + $routes), $switched);
 
             $added === []
                 ? $this->skipped("{$label} já tem as chaves da Zapmizer")
@@ -418,7 +466,7 @@ class InstallCommand extends Command
         return true;
     }
 
-    protected function printNextSteps(bool $inbox, ?string $model, bool $migrated): void
+    protected function printNextSteps(bool $inbox, ?string $model, bool $migrated, bool $connect, bool $webhook): void
     {
         $steps = [];
 
@@ -431,12 +479,17 @@ class InstallCommand extends Command
         }
 
         $host = parse_url((string) config('app.url'), PHP_URL_HOST) ?: 'o host do APP_URL';
-        $steps[] = "Peça à Zapmizer para liberar o host {$host} na conta de parceiro: é ele que vai no redirect_uri, no webhook_url" . ($inbox ? ' e no parent_origin da caixa' : '') . ' (https em produção). Confira se o APP_URL é a URL pública do app.';
+        $webhookOn = $webhook || RouteGroups::switchedOn(RouteGroups::WEBHOOK);
+        $steps[] = "Peça à Zapmizer para liberar o host {$host} na conta de parceiro: é ele que vai no redirect_uri" . ($webhookOn ? ', no webhook_url' : '') . ($inbox ? ' e no parent_origin da caixa' : '') . ' (https em produção). Confira se o APP_URL é a URL pública do app.';
+
+        if ($connect && !$webhookOn) {
+            $steps[] = 'O webhook da lib ficou desligado: as conexões enviam, mas não recebem mensagens nem eventos. Se o app precisa receber, rode de novo com --webhook (ZAPMIZER_ROUTES_WEBHOOK=true) antes de conectar os números.';
+        }
 
         if ($model !== null && $model !== $this->userModel() && $this->usesDefaultResolver()) {
             $steps[] = "O connect resolve o usuário logado. Para conectar {$model}, crie um resolver e aponte zapmizer.connect.resolver para ele (docs/connect.md, seção 4).";
         } elseif ($model === null && !$this->userIsConnectable()) {
-            $steps[] = 'Torne Connectable o model dono do número: php artisan zapmizer:install --model=App\\Models\\User (ou o seu model).';
+            $steps[] = 'Torne Connectable o model dono do número e ligue as rotas do connect: php artisan zapmizer:install --model=App\\Models\\User (ou o seu model).';
         }
 
         $steps = array_merge($steps, $this->nextSteps);

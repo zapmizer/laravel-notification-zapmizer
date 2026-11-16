@@ -34,6 +34,7 @@ use NotificationChannels\Zapmizer\Http\Controllers\Concerns\HandlesPopupState;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
 use NotificationChannels\Zapmizer\Support\ColumnExists;
 use NotificationChannels\Zapmizer\Support\ConnectionWebhook;
+use NotificationChannels\Zapmizer\Support\RouteGroups;
 use Throwable;
 
 /**
@@ -159,13 +160,14 @@ class ConnectController extends Controller
     {
         try {
             $connectable = $this->connectable($request);
-            $key = $this->webhookKeyFor($connectable);
+            $webhook = $this->asksForWebhook();
+            $key = $webhook ? $this->webhookKeyFor($connectable) : null;
             $pending = $this->issueState($request, self::SESSION_KEY, $connectable, $key === null ? [] : ['webhook_key' => $key]);
 
             $session = $this->partnerClient->createSession(
                 redirectUri: route('zapmizer.connect.callback'),
                 state: $pending['state'],
-                webhookUrl: $this->webhookUrl($key),
+                webhookUrl: $webhook ? $this->webhookUrl($key) : null,
                 expiresIn: $this->stateTtlMinutes() * 60,
                 externalId: $connectable->zapmizerExternalId(),
             );
@@ -700,6 +702,17 @@ class ConnectController extends Controller
         }
 
         return Str::random(40);
+    }
+
+    /**
+     * Whether the session asks Zapmizer for a webhook. Not when the package
+     * routes are on and the webhook group off (`zapmizer.routes.webhook`):
+     * a connect-only app, whose connections send and receive nothing. With
+     * the package routes off, the app mounts the webhook route itself.
+     */
+    protected function asksForWebhook(): bool
+    {
+        return !RouteGroups::routesEnabled() || RouteGroups::switchedOn(RouteGroups::WEBHOOK);
     }
 
     /**

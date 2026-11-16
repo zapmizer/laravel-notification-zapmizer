@@ -133,7 +133,7 @@ All under the package prefix (`zapmizer`), behind `web` + `auth`:
 
 | Route name | Method | Returns |
 |---|---|---|
-| `zapmizer.connect.show` | GET | `{ connection }` — the model's connection, or `null`. With `?live=1` the paired instance is queried on Zapmizer and `connection` also carries `state` and `is_online` (below). |
+| `zapmizer.connect.show` | GET | `{ connection, person }` — the model's connection, or `null`, and `person`: who attends, `{user}:{morph class}:{key}` from the logged-in user's `getAuthIdentifier()` and the resolved model (`null` without a user), the `person` the inbox screen hands to `@zapmizer/embed` (its resume key). With `?live=1` the paired instance is queried on Zapmizer and `connection` also carries `state` and `is_online` (below). |
 | `zapmizer.connect.start` | POST | `{ url, expires_at }` — open `url` in a popup (520×720 works). `expires_at` is ISO 8601 with the offset (`2026-09-07T01:00:00+00:00`), or `null`. Stores the `state` in the session and sends, with the session, `route('zapmizer.webhook')` as `webhook_url` (with `webhook_version` from `zapmizer.connect.webhook_version`, `2026-10-20` by default, [below](#the-webhook-version); with `zapmizer.webhook.per_connection` on, the connection's own `route('zapmizer.webhook.connection', ['zapmizerWebhookKey' => $key])`, [below](#per-connection-webhook-url-opt-in)), the model's `zapmizerExternalId()` as `external_id` and the state's TTL as `expires_in` (`zapmizer.connect.state_ttl_minutes` × 60, at least Zapmizer's 900 seconds), so the hosted link lives as long as the state. 10 a minute. |
 | `zapmizer.connect.callback` | GET | HTML page that `postMessage`s `{ source: 'zapmizer-connect', status, message }` to the opener and closes — it never answers a 500 (that would leave the opener waiting). Stores token, team, number, instance and webhook; the connection is born **active**. It never calls `/webhooks`. |
 | `zapmizer.connect.destroy` | DELETE | Revokes the connection's token on Zapmizer (`DELETE /api/connect/token`, best-effort: a failure is a warning and the local row goes anyway) and deletes the local connection with its credentials. Zapmizer drops the webhook the connect created only when no other live grant uses the same URL: grants of earlier connects that were never revoked (`revoke_previous_token` off, section 9) keep it. The remedy then is a [per-connection webhook URL](#per-connection-webhook-url-opt-in). |
@@ -300,19 +300,19 @@ A connect button, a connection panel and the composable that loads the state shi
 php artisan vendor:publish --provider="NotificationChannels\Zapmizer\ZapmizerServiceProvider" --tag=zapmizer-wizard
 ```
 
-This copies into `resources/js/` the connect set below. The inbox screen has its own tag, `zapmizer-inbox`, because it imports `@zapmizer/embed`, which an app with only the connect does not have (`zapmizer:install --inbox` copies both sets):
+This copies into `resources/js/zapmizer/` the connect set below: one folder of their own, whose files import each other by relative paths, so they build with any alias of the app (or none) and never clash with its `components/` folder. Import them the way the app imports from `resources/js` (`@/zapmizer/...`, `~/zapmizer/...` or a relative path). Up to 2.0.0-beta.2 the tags copied into `resources/js/components/zapmizer`, `resources/js/composables` and `resources/js/types`: republishing now writes the new folder, and the old files stay where they were until you delete them. The inbox screen has its own tag, `zapmizer-inbox`, because it imports `@zapmizer/embed`, which an app with only the connect does not have (`zapmizer:install --inbox` copies both sets):
 
-- `components/zapmizer/ConnectButton.vue` — opens the popup, listens to its `postMessage` (checking `event.origin` and `source === 'zapmizer-connect'`), shows a message per `status`, and has a "Já conectei" button for a popup that was closed by hand (emits `recheck`). It emits `connected` on `ok` and on `webhook_failed`, which also shows the warning that the number cannot receive.
-- `components/zapmizer/ConnectionPanel.vue` — the connected number, its live state (from `show?live=1`), a "Religar número" button (when the connection is active and `state` is `disconnected`, `off` or `qr_pending`; it calls `relinkZapmizer()` and listens to the `zapmizer-reconnect` popup), the warning "this number sends but does not receive" when `webhook_id` is set and `has_webhook_secret === false`, "Trocar número" (a new connect, emits `reconnect`) and disconnect.
-- `composables/useZapmizerIntegration.ts` — `reload({ live })`, `start()`, `relink()`, `disconnect()`, `startPolling()`, `stopPolling()` and `beginTurnOn()`; `openZapmizerConnect()` for the button and `relinkZapmizer()` for the panel.
+- `ConnectButton.vue` — opens the popup, listens to its `postMessage` (checking `event.origin` and `source === 'zapmizer-connect'`), shows a message per `status`, and has a "Já conectei" button for a popup that was closed by hand (emits `recheck`). It emits `connected` on `ok` and on `webhook_failed`, which also shows the warning that the number cannot receive.
+- `ConnectionPanel.vue` — the connected number, its live state (from `show?live=1`), a "Religar número" button (when the connection is active and `state` is `disconnected`, `off` or `qr_pending`; it calls `relinkZapmizer()` and listens to the `zapmizer-reconnect` popup), the warning "this number sends but does not receive" when `webhook_id` is set and `has_webhook_secret === false`, "Trocar número" (a new connect, emits `reconnect`) and disconnect.
+- `useZapmizerIntegration.ts` — `reload({ live })`, `start()`, `relink()`, `disconnect()`, `startPolling()`, `stopPolling()` and `beginTurnOn()`; `openZapmizerConnect()` for the button and `relinkZapmizer()` for the panel.
 
 The polling asks `show?live=1` right away and then every 15 seconds. `beginTurnOn()` is for the moment after a reconnect. It shows the number as `connecting` and polls every 5 seconds for two minutes, until the state is `connected`. For the first 30 seconds it also ignores an `off`, which Zapmizer still answers while the number boots. A late answer never overwrites a newer one. The polling stops when the component unmounts, when the connection is gone, on `reauth_required` and `instance_gone`, and on a 401, 403 or 419 from `show`. A `reload()` in the middle of a poll does not stop it. Network errors, 429 and 503 keep it going. The panel emits `relinked` when its "Religar número" works (`online`, `starting`, or the popup's `reconnected`):
 
 ```vue
 <script setup lang="ts">
 import { onMounted } from 'vue';
-import ConnectionPanel from '@/components/zapmizer/ConnectionPanel.vue';
-import { useZapmizerIntegration } from '@/composables/useZapmizerIntegration';
+import ConnectionPanel from '@/zapmizer/ConnectionPanel.vue';
+import { useZapmizerIntegration } from '@/zapmizer/useZapmizerIntegration';
 
 const { integration, reload, startPolling, beginTurnOn, disconnect } = useZapmizerIntegration();
 
@@ -329,10 +329,11 @@ onMounted(startPolling);
   />
 </template>
 ```
-- `types/zapmizer.ts` — `ZapmizerConnection`, `ZapmizerConnectStatus`, `ZapmizerConnectMessage`, `ZapmizerReconnectStatus`, `ZapmizerReconnectMessage`, `ZapmizerRelinkResult`.
-- `components/zapmizer/InboxScreen.vue` (tag `zapmizer-inbox`) — the embedded inbox over the package's inbox routes (`zapmizer.inbox.enabled`), with `@zapmizer/embed/vue`. Without a connection, or when the session asks for a new connect, it shows `ConnectButton`. See [instalar.md](instalar.md).
-- `composables/zapmizerEmbed.ts` (tag `zapmizer-inbox`) — the `openSession` and `keepAlive` of `@zapmizer/embed` against those routes (with Laravel's CSRF), `listenToZapmizerLogout()` and `endZapmizerEmbeds()`. The embed brand comes from `VITE_ZAPMIZER_BRAND` and must be the one of the deploy `base_uri` points at (see "A marca do embed" in [instalar.md](instalar.md#a-marca-do-embed)).
-- `composables/zapmizerRoute.ts` — the package's URLs: Ziggy's `route()` when the app has it, else the paths under the default `/zapmizer` prefix.
+- `types.ts` — `ZapmizerConnection`, `ZapmizerConnectStatus`, `ZapmizerConnectMessage`, `ZapmizerReconnectStatus`, `ZapmizerReconnectMessage`, `ZapmizerRelinkResult`.
+- `InboxScreen.vue` (tag `zapmizer-inbox`) — the embedded inbox over the package's inbox routes (`zapmizer.inbox.enabled`), with `@zapmizer/embed/vue`. Without a connection, or when the session asks for a new connect, it shows `ConnectButton`. See [instalar.md](instalar.md).
+- `zapmizerEmbed.ts` (tag `zapmizer-inbox`) — the `openSession` and `keepAlive` of `@zapmizer/embed` against those routes (with Laravel's CSRF), `listenToZapmizerLogout()` and `endZapmizerEmbeds()`. The embed brand comes from `VITE_ZAPMIZER_BRAND` and must be the one of the deploy `base_uri` points at (see "A marca do embed" in [instalar.md](instalar.md#a-marca-do-embed)).
+- `zapmizerBrand.ts` — the brand of the deploy (`VITE_ZAPMIZER_BRAND`) and its name with the article for the texts ("com a Parli", "do Zapmizer"), so the button and the panel never say "Zapmizer" on a Parli deploy.
+- `zapmizerRoute.ts` — the package's URLs: Ziggy's `route()` when the app has it, else the paths under the default `/zapmizer` prefix.
 
 The lasting warning of a `webhook_failed` is the panel's: the button emits `connected`, the screen switches to the panel, and the button's warning goes with it.
 

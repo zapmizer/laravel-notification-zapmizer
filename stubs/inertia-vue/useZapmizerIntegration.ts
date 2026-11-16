@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { computed, getCurrentScope, onScopeDispose, ref } from 'vue';
-import type { ZapmizerConnection, ZapmizerRelinkResult } from '@/types/zapmizer';
-import { zapmizerRoute } from '@/composables/zapmizerRoute';
+import type { ZapmizerConnection, ZapmizerRelinkResult, ZapmizerShowResponse } from './types';
+import { zapmizerRoute } from './zapmizerRoute';
 
 const JSON_HEADERS = { headers: { Accept: 'application/json' } };
 
@@ -64,6 +64,11 @@ export async function relinkZapmizer(): Promise<ZapmizerRelinkResult> {
  */
 export function useZapmizerIntegration() {
   const integration = ref<ZapmizerConnection | null>(null);
+  /**
+   * Quem atende, como o servidor diz (`person` do `show`): a chave da
+   * retomada da caixa embutida. `null` até a primeira resposta.
+   */
+  const person = ref<string | null>(null);
   const loading = ref(true);
   const errorMessage = ref('');
 
@@ -95,10 +100,12 @@ export function useZapmizerIntegration() {
   }
 
   async function fetchConnection(live: boolean) {
-    const { data } = await axios.get<{ connection: ZapmizerConnection | null }>(
+    const { data } = await axios.get<ZapmizerShowResponse>(
       zapmizerRoute('zapmizer.connect.show', live ? { live: 1 } : {}),
       JSON_HEADERS,
     );
+
+    if (typeof data.person === 'string' && data.person !== '') person.value = data.person;
 
     return data.connection ?? null;
   }
@@ -245,6 +252,7 @@ export function useZapmizerIntegration() {
 
   return {
     integration,
+    person,
     loading,
     errorMessage,
     isConnected,

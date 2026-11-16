@@ -71,3 +71,13 @@ export type ZapmizerRelinkResult =
   | { status: 'starting' }
   | { status: 'needs_client'; url: string; expires_at: string | null }
   | { status: 'refused'; code: string; message: string };
+
+/**
+ * `GET zapmizer.connect.show`: a conexão e `person`, quem atende
+ * (`{usuário}:{model}:{id}`, do `getAuthIdentifier()` do usuário logado e
+ * do model que o resolver devolve). `person` é a chave da retomada da caixa.
+ */
+export interface ZapmizerShowResponse {
+  connection: ZapmizerConnection | null;
+  person?: string | null;
+}

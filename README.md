@@ -11,14 +11,14 @@ Instale a lib zapmizer/laravel-notification-zapmizer (2.0 beta) neste app, com o
 The commands, in order (Inertia + Vue 3 app; the guide covers Blade):
 
 ```bash
-composer require "zapmizer/laravel-notification-zapmizer:^2.0.0-beta.2@beta"
+composer require "zapmizer/laravel-notification-zapmizer:^2.0.0-beta.3@beta"
 php artisan zapmizer:install --base-uri=https://app.zapmizer.com/api/ --model=App\\Models\\User --inbox --no-interaction   # or https://app.parlichat.com/api/
 php artisan migrate
-npm install github:zapmizer/embed#v0.1.2 axios lucide-vue-next   # or bun/pnpm/yarn add, as the install output says
+npm install github:zapmizer/embed#v0.1.3 axios lucide-vue-next   # or bun/pnpm/yarn add, as the install output says
 php artisan zapmizer:check --json
 ```
 
-Then mount `resources/js/components/zapmizer/InboxScreen.vue` on an authenticated page and rebuild the front: the embed brand (`VITE_ZAPMIZER_BRAND`, written by the installer) must be the one of the deploy `ZAPMIZER_BASE_URI` points at (`parli` for app.parlichat.com), or the inbox never loads. Only a human knows the partner account's API (`--base-uri`: app.zapmizer.com or app.parlichat.com), has the partner credentials (`ZAPMIZER_PARTNER_ID`, `ZAPMIZER_PARTNER_SECRET`) and can get the app's host allowed on the partner account: ask, never make them up. Step by step, with what to ask and when to stop: [docs/instalar.md](docs/instalar.md) (Portuguese).
+Then mount `resources/js/zapmizer/InboxScreen.vue` (all the components sit in that one folder and import each other by relative paths, whatever the app's alias) on an authenticated page and rebuild the front: the embed brand (`VITE_ZAPMIZER_BRAND`, written by the installer) must be the one of the deploy `ZAPMIZER_BASE_URI` points at (`parli` for app.parlichat.com; another host is asked at `/brand/manifest.json`, and if it does not tell, ask the human), or the inbox never loads. Only a human knows the partner account's API (`--base-uri`: app.zapmizer.com or app.parlichat.com), has the partner credentials (`ZAPMIZER_PARTNER_ID`, `ZAPMIZER_PARTNER_SECRET`) and can get the app's host allowed on the partner account: ask, never make them up. Step by step, with what to ask and when to stop: [docs/instalar.md](docs/instalar.md) (Portuguese).
 
 > Full guides live in [`docs/`](docs/README.md). The [wiki](https://github.com/zapmizer/laravel-notification-zapmizer/wiki) is a mirror of `docs/` on `main`; edit `docs/`, not the wiki.
 

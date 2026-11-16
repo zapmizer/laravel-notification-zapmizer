@@ -58,6 +58,17 @@ class AgentDocsTest extends TestCase
         }
     }
 
+    public function testTheDocsDoNotSendTheAppToItsTsconfigForTheEmbedTypes()
+    {
+        // v0.1.3 ships types that resolve under `moduleResolution: node`:
+        // no `paths` entry for @zapmizer/embed in the app's tsconfig.
+        foreach (['README.md', 'llms.txt', 'docs/instalar.md', 'resources/boost/skills/zapmizer-whatsapp/SKILL.md'] as $file) {
+            $this->assertDoesNotMatchRegularExpression('#"@zapmizer/embed/\*"\s*:#', file_get_contents(self::ROOT . '/' . $file), $file);
+        }
+
+        $this->assertStringContainsString('moduleResolution', file_get_contents(self::ROOT . '/docs/instalar.md'), 'the guide says what v0.1.3 fixes');
+    }
+
     public function testTheDocsRequireTheBetaThatHasTheInstaller()
     {
         foreach (['README.md', 'llms.txt', 'docs/instalar.md', 'resources/boost/skills/zapmizer-whatsapp/SKILL.md'] as $file) {
@@ -66,7 +77,7 @@ class AgentDocsTest extends TestCase
             $this->assertNotEmpty($constraints[1], $file);
 
             foreach ($constraints[1] as $constraint) {
-                $this->assertSame('^2.0.0-beta.2@beta', $constraint, $file);
+                $this->assertSame('^2.0.0-beta.3@beta', $constraint, $file);
             }
         }
     }

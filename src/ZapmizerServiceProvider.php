@@ -168,16 +168,18 @@ class ZapmizerServiceProvider extends ServiceProvider
 
             // The Inertia + Vue connect components (button + panel),
             // Jetstream-style: copied into the app to be owned and restyled
-            // there. The tag keeps its name from the wizard days.
+            // there. The tag keeps its name from the wizard days. All in one
+            // folder of their own, importing each other by relative paths: no
+            // alias of the app and no clash with its components/ folder.
             $this->publishes([
-                __DIR__ . '/../stubs/inertia-vue' => resource_path('js'),
+                __DIR__ . '/../stubs/inertia-vue' => resource_path('js/zapmizer'),
             ], 'zapmizer-wizard');
 
             // The inbox screen (InboxScreen.vue + zapmizerEmbed.ts) on its
             // own tag: it imports @zapmizer/embed, which an app with only
             // the connect does not have. It builds on the wizard's files.
             $this->publishes([
-                __DIR__ . '/../stubs/inertia-vue-inbox' => resource_path('js'),
+                __DIR__ . '/../stubs/inertia-vue-inbox' => resource_path('js/zapmizer'),
             ], 'zapmizer-inbox');
         }
     }

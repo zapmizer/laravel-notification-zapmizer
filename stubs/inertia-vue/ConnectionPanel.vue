@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { AlertCircleIcon, Loader2Icon, RefreshCwIcon, RotateCcwIcon, SmartphoneIcon, Trash2Icon } from 'lucide-vue-next';
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { relinkZapmizer } from '@/composables/useZapmizerIntegration';
-import type { ZapmizerConnection, ZapmizerReconnectMessage } from '@/types/zapmizer';
+import { relinkZapmizer } from './useZapmizerIntegration';
+import { brand } from './zapmizerBrand';
+import type { ZapmizerConnection, ZapmizerReconnectMessage } from './types';
 
 /**
  * O número conectado e o estado dele. `integration` é o que `show?live=1`
@@ -45,8 +46,8 @@ const health = computed(() => {
 
   if (!props.integration.is_active) return { tone: 'gp-tag-coral', label: 'Inativa' };
   if (state === 'reauth_required') return { tone: 'gp-tag-coral', label: 'Sem autorização' };
-  if (state === 'instance_gone') return { tone: 'gp-tag-coral', label: 'Número removido no Zapmizer' };
-  if (state === 'zapmizer_unavailable') return { tone: 'gp-tag-amber', label: 'Zapmizer instável' };
+  if (state === 'instance_gone') return { tone: 'gp-tag-coral', label: `Número removido ${brand.no}` };
+  if (state === 'zapmizer_unavailable') return { tone: 'gp-tag-amber', label: `${brand.name} instável` };
   if (props.integration.is_online) return { tone: 'gp-tag-mint', label: 'Online' };
   if (state === 'connected') return { tone: 'gp-tag-mint', label: 'Conectado' };
   if (state === 'connecting') return { tone: 'gp-tag-muted', label: 'Conectando...' };
@@ -61,13 +62,13 @@ const confirmingRemoval = ref(false);
 const relinking = ref(false);
 const relinkMessage = ref('');
 
-const UNAVAILABLE = 'O Zapmizer está indisponível no momento. Tente novamente em instantes.';
+const UNAVAILABLE = `${brand.O} está indisponível no momento. Tente novamente em instantes.`;
 const RELINK_FAILED = 'Não foi possível religar o número. Tente de novo.';
 
 const RELINK_MESSAGES: Record<string, string> = {
   denied: 'Religação cancelada.',
-  plan_limit: 'O plano do Zapmizer não tem vaga para mais um número. Libere um número lá (ou mude de plano) e tente de novo.',
-  subscription_required: 'A conta do Zapmizer não tem assinatura ativa. Assine no Zapmizer e tente de novo.',
+  plan_limit: `O plano ${brand.do} não tem vaga para mais um número. Libere um número lá (ou mude de plano) e tente de novo.`,
+  subscription_required: `A conta ${brand.do} não tem assinatura ativa. Assine ${brand.no} e tente de novo.`,
 };
 
 async function relink() {
@@ -129,7 +130,7 @@ onBeforeUnmount(() => window.removeEventListener('message', onMessage));
         <div class="min-w-0 flex-1">
           <p class="gp-mono text-[13px] text-gp-text">{{ number || 'Número não identificado' }}</p>
           <p class="mt-0.5 text-[11px] text-gp-muted">
-            Conta no Zapmizer: <span class="text-gp-text">{{ teamName || 'não identificada' }}</span>
+            Conta {{ brand.no }}: <span class="text-gp-text">{{ teamName || 'não identificada' }}</span>
             <template v-if="integration.api_token_masked"> · credencial {{ integration.api_token_masked }}</template>
           </p>
         </div>
@@ -140,7 +141,7 @@ onBeforeUnmount(() => window.removeEventListener('message', onMessage));
         class="flex items-start gap-2 rounded border border-gp-coral/40 bg-gp-coral/10 px-3 py-2 text-[12px] text-gp-coral"
       >
         <AlertCircleIcon class="mt-px size-3.5 shrink-0" />
-        A autorização com o Zapmizer expirou. Conecte de novo para renovar o acesso.
+        A autorização {{ brand.com }} expirou. Conecte de novo para renovar o acesso.
       </p>
 
       <p

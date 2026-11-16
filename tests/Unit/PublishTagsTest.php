@@ -34,12 +34,14 @@ class PublishTagsTest extends TestCase
         $files = $this->filesOf('zapmizer-wizard');
 
         $this->assertSame([
-            'components/zapmizer/ConnectButton.vue',
-            'components/zapmizer/ConnectionPanel.vue',
-            'composables/useZapmizerIntegration.ts',
-            'composables/zapmizerRoute.ts',
-            'types/zapmizer.ts',
+            'ConnectButton.vue',
+            'ConnectionPanel.vue',
+            'types.ts',
+            'useZapmizerIntegration.ts',
+            'zapmizerBrand.ts',
+            'zapmizerRoute.ts',
         ], $files);
+        $this->assertSame([resource_path('js/zapmizer')], array_values(ServiceProvider::pathsToPublish(ZapmizerServiceProvider::class, 'zapmizer-wizard')));
 
         foreach (array_keys(ServiceProvider::pathsToPublish(ZapmizerServiceProvider::class, 'zapmizer-wizard')) as $source) {
             foreach ($files as $file) {
@@ -50,7 +52,53 @@ class PublishTagsTest extends TestCase
 
     public function testTheInboxTagHasTheScreenAndTheEmbedGlue()
     {
-        $this->assertSame(['components/zapmizer/InboxScreen.vue', 'composables/zapmizerEmbed.ts'], $this->filesOf('zapmizer-inbox'));
-        $this->assertSame([resource_path('js')], array_values(ServiceProvider::pathsToPublish(ZapmizerServiceProvider::class, 'zapmizer-inbox')));
+        $this->assertSame(['InboxScreen.vue', 'zapmizerEmbed.ts'], $this->filesOf('zapmizer-inbox'));
+        $this->assertSame([resource_path('js/zapmizer')], array_values(ServiceProvider::pathsToPublish(ZapmizerServiceProvider::class, 'zapmizer-inbox')));
+    }
+
+    public function testTheStubsImportEachOtherByRelativePaths()
+    {
+        $files = [];
+
+        foreach (['zapmizer-wizard', 'zapmizer-inbox'] as $tag) {
+            foreach (array_keys(ServiceProvider::pathsToPublish(ZapmizerServiceProvider::class, $tag)) as $source) {
+                foreach (glob($source . '/*') as $file) {
+                    $files[basename($file)] = (string) file_get_contents($file);
+                }
+            }
+        }
+
+        foreach ($files as $name => $code) {
+            preg_match_all("/^import .*? from '([^']+)';$/m", $code, $imports);
+
+            foreach ($imports[1] as $module) {
+                $this->assertDoesNotMatchRegularExpression('#^[@~]/#', $module, "{$name}: no app alias");
+
+                if (str_starts_with($module, '.')) {
+                    $this->assertStringStartsWith('./', $module, $name);
+                    $target = substr($module, 2);
+                    $this->assertTrue(isset($files[$target]) || isset($files[$target . '.ts']), "{$name} imports {$module}, which is published next to it");
+                }
+            }
+        }
+    }
+
+    public function testTheConnectTextsFollowTheBrandInsteadOfNamingOne()
+    {
+        $source = array_keys(ServiceProvider::pathsToPublish(ZapmizerServiceProvider::class, 'zapmizer-wizard'))[0];
+
+        foreach (['ConnectButton.vue', 'ConnectionPanel.vue'] as $file) {
+            $code = (string) file_get_contents($source . '/' . $file);
+            // What people read: the code without comments.
+            $visible = preg_replace(['#/\*.*?\*/#s', '#<!--.*?-->#s', '#^\s*//.*$#m'], '', $code);
+
+            $this->assertDoesNotMatchRegularExpression('/(?<![A-Za-z_])(Zapmizer|Parli)(?![A-Za-z_])/', $visible, "{$file} names a brand: use brand from zapmizerBrand.ts");
+            $this->assertStringContainsString("import { brand } from './zapmizerBrand';", $code, $file);
+        }
+
+        $brand = (string) file_get_contents($source . '/zapmizerBrand.ts');
+        $this->assertStringContainsString('import.meta.env.VITE_ZAPMIZER_BRAND', $brand);
+        $this->assertStringContainsString("parli: { name: 'Parli', feminine: true }", $brand);
+        $this->assertStringContainsString("zapmizer: { name: 'Zapmizer', feminine: false }", $brand);
     }
 }

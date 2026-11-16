@@ -27,7 +27,7 @@ class InstallCommand extends Command
 {
     public const EMBED_PACKAGE = '@zapmizer/embed';
 
-    public const EMBED_VERSION = 'github:zapmizer/embed#v0.1.2';
+    public const EMBED_VERSION = 'github:zapmizer/embed#v0.1.3';
 
     /**
      * @var string
@@ -56,12 +56,19 @@ class InstallCommand extends Command
 
     protected string $baseUri = BaseUri::DEFAULT;
 
+    /** The embed's brand written to `VITE_ZAPMIZER_BRAND`. */
+    protected string $brand = EmbedBrand::ZAPMIZER;
+
+    /** Where the brand came from: `config`, `host`, `manifest` or `unknown`. */
+    protected string $brandSource = 'host';
+
     public function handle(): int
     {
         // Artisan::call() reuses the instance: start clean every run.
         $this->nextSteps = [];
         $this->failed = false;
         $this->componentsPublished = false;
+        $this->brandSource = 'host';
 
         $this->line('');
         $this->line('  <options=bold>Zapmizer</> · instalação');
@@ -152,8 +159,15 @@ class InstallCommand extends Command
             'ZAPMIZER_PARTNER_SECRET' => '',
             // The embed's brand for the front (read at build time): the one
             // of the deploy the base_uri points at.
-            'VITE_ZAPMIZER_BRAND' => EmbedBrand::resolveFor($this->baseUri),
+            'VITE_ZAPMIZER_BRAND' => $this->resolveBrand(),
         ];
+
+        // A brand read from a deploy outside the known hosts also goes to
+        // the backend (the Blade path reads EmbedBrand::resolve()), which
+        // would otherwise derive `zapmizer` from the host.
+        if ($this->brandSource === 'manifest' && $this->brand !== EmbedBrand::fromBaseUri($this->baseUri)) {
+            $variables['ZAPMIZER_EMBED_BRAND'] = $this->brand;
+        }
 
         $environment = $this->laravel->environmentFilePath();
 
@@ -187,6 +201,34 @@ class InstallCommand extends Command
                 ? $this->skipped("{$label} já tem as chaves da Zapmizer")
                 : $this->done("{$label}: " . implode(', ', $added));
         }
+    }
+
+    /**
+     * The brand of the deploy: `zapmizer.inbox.brand` when set, else the one
+     * of a known host (app.zapmizer.com, parlichat.com), else the one the
+     * deploy publishes in `/brand/manifest.json`. A deploy that does not
+     * tell keeps the host default and goes to the human in the next steps.
+     */
+    protected function resolveBrand(): string
+    {
+        $configured = EmbedBrand::configured();
+        $known = EmbedBrand::knownDeploy($this->baseUri);
+        $discovered = $configured === null && $known === null ? EmbedBrand::discover($this->baseUri) : null;
+
+        [$this->brand, $this->brandSource] = match (true) {
+            $configured !== null => [$configured, 'config'],
+            $known !== null => [$known, 'host'],
+            $discovered !== null => [$discovered, 'manifest'],
+            default => [EmbedBrand::fromBaseUri($this->baseUri), 'unknown'],
+        };
+
+        if ($this->brandSource === 'manifest') {
+            $this->done("marca do deploy: {$this->brand} (lida de " . EmbedBrand::manifestUrl($this->baseUri) . ')');
+        } elseif ($this->brandSource === 'unknown') {
+            $this->warning("não consegui ler a marca do deploy de {$this->baseUri} (" . EmbedBrand::manifestUrl($this->baseUri) . "): usei {$this->brand}. Confirme com o humano.");
+        }
+
+        return $this->brand;
     }
 
     /**
@@ -332,7 +374,7 @@ class InstallCommand extends Command
             $source = $this->packagePath($directory);
 
             foreach ($this->files($source) as $file) {
-                $target = resource_path('js/' . substr($file, strlen($source) + 1));
+                $target = resource_path('js/zapmizer/' . substr($file, strlen($source) + 1));
 
                 if (is_file($target) && !$this->option('force')) {
                     $kept++;
@@ -349,7 +391,7 @@ class InstallCommand extends Command
         $this->componentsPublished = true;
 
         $copied > 0
-            ? $this->done("componentes Vue em resources/js ({$copied} copiados" . ($kept > 0 ? ", {$kept} mantidos" : '') . ')')
+            ? $this->done("componentes Vue em resources/js/zapmizer ({$copied} copiados" . ($kept > 0 ? ", {$kept} mantidos" : '') . ')')
             : $this->skipped('componentes Vue já publicados (--force sobrescreve)');
     }
 
@@ -403,11 +445,15 @@ class InstallCommand extends Command
             $steps[] = 'Rode as migrations: php artisan migrate';
         }
 
-        $brand = EmbedBrand::resolveFor($this->baseUri);
+        $brand = $this->brand;
+
+        if ($this->brandSource === 'unknown') {
+            $steps[] = 'Confirme com o humano a marca do deploy de ' . $this->baseUri . ": o host não é um dos deploys conhecidos (app.zapmizer.com, *.parlichat.com) e o deploy não disse a sua em /brand/manifest.json. Gravei VITE_ZAPMIZER_BRAND={$brand}; se for a Parli, troque por parli, defina ZAPMIZER_EMBED_BRAND=parli e rebuilde o front (com a marca errada a caixa termina em ready_timeout).";
+        }
 
         if ($inbox && $this->componentsPublished) {
             $steps[] = 'Instale o front: ' . $this->frontendInstall(true);
-            $steps[] = 'Monte <InboxScreen :person="String($page.props.auth.user.id)" /> (resources/js/components/zapmizer/InboxScreen.vue) numa página autenticada, chame listenToZapmizerLogout() no boot do app e endZapmizerEmbeds() antes do logout (resources/js/composables/zapmizerEmbed.ts).';
+            $steps[] = 'Monte <InboxScreen /> (resources/js/zapmizer/InboxScreen.vue; o person vem do servidor, não passe) numa página autenticada, chame listenToZapmizerLogout() no boot do app e endZapmizerEmbeds() antes do logout (resources/js/zapmizer/zapmizerEmbed.ts). Importe de resources/js/zapmizer pelo alias que o app já usa para resources/js (ou por caminho relativo); os arquivos de lá se importam entre si por caminho relativo, sem depender de alias.';
             $steps[] = "Rebuilde o front (npm run build, ou o build do gerenciador do app) depois de instalar: o VITE_ZAPMIZER_BRAND={$brand} do .env entra no bundle, e precisa ser a marca do deploy da ZAPMIZER_BASE_URI.";
         } elseif ($inbox) {
             $steps[] = 'Sem Vue, os componentes não foram publicados: monte o connect e a caixa pelo caminho Blade de docs/instalar.md ("Sem Inertia/Vue"). Instale só o embed: ' . $this->frontendInstall(false);

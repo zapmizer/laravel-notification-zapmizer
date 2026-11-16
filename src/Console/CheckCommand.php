@@ -309,9 +309,19 @@ class CheckCommand extends Command
             $this->record('vue_version', self::WARN, "o package.json declara vue {$vue}: o @zapmizer/embed/vue pede vue >= 3.3", 'Suba o vue para ^3.3 (o InboxScreen usa @zapmizer/embed/vue).');
         }
 
-        preg_match('/#(v\d+\.\d+\.\d+)$/', $version, $tag) === 1
-            ? $this->record('embed_package', self::OK, InstallCommand::EMBED_PACKAGE . " {$tag[1]} no package.json")
-            : $this->record('embed_package', self::WARN, InstallCommand::EMBED_PACKAGE . " sem tag fixa ({$version})", 'Fixe a tag: ' . InstallCommand::EMBED_VERSION);
+        if (preg_match('/#(v\d+\.\d+\.\d+)$/', $version, $tag) !== 1) {
+            $this->record('embed_package', self::WARN, InstallCommand::EMBED_PACKAGE . " sem tag fixa ({$version})", 'Fixe a tag: ' . InstallCommand::EMBED_VERSION);
+
+            return;
+        }
+
+        $wanted = substr(InstallCommand::EMBED_VERSION, (int) strrpos(InstallCommand::EMBED_VERSION, '#') + 1);
+
+        // Before v0.1.3 the package's types only resolved through `exports`:
+        // an app on `moduleResolution: node` got none for @zapmizer/embed/*.
+        version_compare(ltrim($tag[1], 'v'), ltrim($wanted, 'v'), '<')
+            ? $this->record('embed_package', self::WARN, InstallCommand::EMBED_PACKAGE . " {$tag[1]} no package.json: atualize para {$wanted}: tipos com moduleResolution node", 'Troque a dependência por ' . InstallCommand::EMBED_VERSION . ' (sem mexer no tsconfig por causa dos tipos do embed).')
+            : $this->record('embed_package', self::OK, InstallCommand::EMBED_PACKAGE . " {$tag[1]} no package.json");
     }
 
     /**
@@ -334,10 +344,41 @@ class CheckCommand extends Command
 
         if ($front === null || $front === '') {
             $this->record('embed_brand', self::FAIL, 'VITE_ZAPMIZER_BRAND ausente: o front não sabe a marca do embed', $hint);
-        } elseif ($front !== $expected) {
-            $this->record('embed_brand', self::FAIL, "VITE_ZAPMIZER_BRAND={$front}, mas a marca do embed é {$expected}: a caixa não receberia o ready", $hint);
+
+            return;
+        }
+
+        $baseUri = (string) config('zapmizer.base_uri');
+
+        // A known host (app.zapmizer.com, parlichat.com) says the brand; any
+        // other deploy is asked for it (`/brand/manifest.json`).
+        if (EmbedBrand::knownDeploy($baseUri) !== null) {
+            $front !== $expected
+                ? $this->record('embed_brand', self::FAIL, "VITE_ZAPMIZER_BRAND={$front}, mas a marca do embed é {$expected}: a caixa não receberia o ready", $hint)
+                : $this->record('embed_brand', self::OK, "marca do embed {$expected} no front e na config");
+
+            return;
+        }
+
+        $host = (string) parse_url($baseUri, PHP_URL_HOST);
+        $deploy = $this->option('offline') ? null : EmbedBrand::discover($baseUri);
+
+        if ($deploy === null) {
+            $front !== $expected
+                ? $this->record('embed_brand', self::FAIL, "VITE_ZAPMIZER_BRAND={$front}, mas a marca do embed é {$expected}: a caixa não receberia o ready", $hint)
+                : $this->record('embed_brand', self::WARN, "marca do embed {$front}, sem confirmação: {$host} não é um deploy conhecido (app.zapmizer.com, *.parlichat.com) e " . ($this->option('offline') ? 'o --offline não pergunta a ele' : 'ele não disse a marca em ' . EmbedBrand::manifestUrl($baseUri)), 'Confirme com o humano a marca do deploy (zapmizer ou parli) e acerte VITE_ZAPMIZER_BRAND e ZAPMIZER_EMBED_BRAND; com a marca errada a caixa termina em ready_timeout.');
+
+            return;
+        }
+
+        $deployHint = "VITE_ZAPMIZER_BRAND={$deploy} e ZAPMIZER_EMBED_BRAND={$deploy} no .env e rebuilde o front.";
+
+        if ($front !== $deploy) {
+            $this->record('embed_brand', self::FAIL, "VITE_ZAPMIZER_BRAND={$front}, mas o deploy de {$host} é {$deploy} (" . EmbedBrand::manifestUrl($baseUri) . '): a caixa não receberia o ready', $deployHint);
+        } elseif ($expected !== $deploy) {
+            $this->record('embed_brand', self::WARN, "o front usa {$deploy}, a marca do deploy, mas a config dá {$expected} (o caminho Blade lê a config)", $deployHint);
         } else {
-            $this->record('embed_brand', self::OK, "marca do embed {$expected} no front e na config");
+            $this->record('embed_brand', self::OK, "marca do embed {$deploy} no front e na config, confirmada pelo deploy de {$host}");
         }
     }
 

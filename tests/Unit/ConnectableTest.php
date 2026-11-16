@@ -174,7 +174,7 @@ class ConnectableTest extends TestCase
         $request = $this->history[0]['request'];
         $this->assertEquals('http://localhost/api/webhooks', (string) $request->getUri());
         $this->assertEquals(
-            ['url' => 'http://localhost/zapmizer/webhook', 'enabled' => true],
+            ['url' => 'http://localhost/zapmizer/webhook', 'enabled' => true, 'version' => '2024-02-27'],
             json_decode((string) $request->getBody(), true)
         );
 

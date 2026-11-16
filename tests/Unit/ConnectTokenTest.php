@@ -38,6 +38,27 @@ class ConnectTokenTest extends TestCase
         $this->assertTrue($token->hasNumber());
     }
 
+    /** @dataProvider webhookVersions */
+    #[DataProvider('webhookVersions')]
+    public function testTheWebhookVersionIsReadAndNullWhenAbsent(array $overrides, ?string $version, bool $unreadable)
+    {
+        $token = ConnectToken::fromArray($this->payload($overrides));
+
+        $this->assertSame($version, $token->webhookVersion);
+        $this->assertSame($unreadable, $token->hasUnreadableWebhookVersion());
+    }
+
+    public static function webhookVersions(): array
+    {
+        return [
+            'absent (Zapmizer before 1.148.17)' => [[], null, false],
+            'null (no webhook)' => [['webhook_version' => null], null, false],
+            '2024-02-27' => [['webhook_version' => '2024-02-27'], '2024-02-27', false],
+            '2026-10-20 (a reused webhook keeps its version)' => [['webhook_version' => '2026-10-20'], '2026-10-20', true],
+            'not a string' => [['webhook_version' => 20261020], null, false],
+        ];
+    }
+
     public function testTheConstructorTakesTheUserSecond()
     {
         $token = new ConnectToken('1|sanctum', 3, 7, 'Acme');
@@ -126,6 +147,31 @@ class ConnectTokenTest extends TestCase
             'instance without phone' => [['phone_number' => null]],
             'empty phone' => [['phone_number' => '']],
         ];
+    }
+
+    /** @dataProvider invalidInstanceOrWebhookIds */
+    #[DataProvider('invalidInstanceOrWebhookIds')]
+    public function testX6AnInvalidInstanceOrWebhookId(string $field, mixed $value)
+    {
+        $this->expectException(ZapmizerConnectException::class);
+        $this->expectExceptionMessage(ZapmizerConnectException::unexpectedResponse("invalid {$field}")->getMessage());
+
+        ConnectToken::fromArray($this->payload([$field => $value]));
+    }
+
+    public static function invalidInstanceOrWebhookIds(): array
+    {
+        return [
+            'bot_instance_id "abc"' => ['bot_instance_id', 'abc'],
+            'bot_instance_id 0' => ['bot_instance_id', 0],
+            'bot_instance_id -1' => ['bot_instance_id', -1],
+            'webhook_id "x"' => ['webhook_id', 'x'],
+        ];
+    }
+
+    public function testX6AnIdInDigitsIsRead()
+    {
+        $this->assertSame(12, ConnectToken::fromArray($this->payload(['bot_instance_id' => '12']))->botInstanceId);
     }
 
     public function testAMissingTokenIsStillAnUnexpectedResponse()

@@ -2,6 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 use NotificationChannels\Zapmizer\Http\Controllers\ConnectController;
+use NotificationChannels\Zapmizer\Http\Controllers\ReconnectController;
 use NotificationChannels\Zapmizer\Http\Controllers\VerifyNumberController;
 
 Route::get('verify-number', VerifyNumberController::class)->name('verify_number');
@@ -13,3 +14,9 @@ Route::get('connect', [ConnectController::class, 'show'])->middleware('throttle:
 Route::delete('connect', [ConnectController::class, 'destroy'])->name('connect.destroy');
 Route::post('connect/start', [ConnectController::class, 'start'])->middleware('throttle:10,1')->name('connect.start');
 Route::get('connect/callback', [ConnectController::class, 'callback'])->name('connect.callback');
+
+// Reconnect the paired number with the token it already holds; the popup
+// comes back to its own callback. Routes in array form: the class is not
+// loaded when the routes register.
+Route::post('connect/reconnect', [ReconnectController::class, 'start'])->middleware('throttle:10,1')->name('connect.reconnect');
+Route::get('connect/reconnect/callback', [ReconnectController::class, 'callback'])->name('connect.reconnect.callback');

@@ -59,6 +59,10 @@ class PartnerClient
      * registers on the team once the number pairs — its id and secret come
      * back with the token. `externalId` is the app's id for the customer,
      * the key of subscription() and checkout() once the connect is approved.
+     * With a `webhookUrl`, the session asks for the webhook in `2024-02-27`
+     * (`InstanceClient::LEGACY_WEBHOOK_VERSION`, sent as `webhook_version`),
+     * the version whose `message` event this version reads; Zapmizer before
+     * 1.148.17 ignores the field.
      *
      * @throws InvalidArgumentException
      * @throws ZapmizerConnectException
@@ -83,6 +87,7 @@ class PartnerClient
                 'webhook_url' => $webhookUrl,
                 'expires_in' => $this->clampExpiresIn($expiresIn),
                 'external_id' => $externalId,
+                'webhook_version' => $webhookUrl === null ? null : InstanceClient::LEGACY_WEBHOOK_VERSION,
             ]),
         ]);
 
@@ -178,6 +183,8 @@ class PartnerClient
      * any other 4xx comes out of ZapmizerApi::failure(). The body is read
      * once and goes to the log too, except on 404 and 409: those are
      * business answers (no connect yet, already subscribed, payment pending).
+     * A 429 is expected and handled by the caller: it is a warning with the
+     * Retry-After, without the body.
      *
      * @throws ZapmizerConnectException
      */
@@ -189,7 +196,12 @@ class PartnerClient
 
         $error = ApiError::from($response);
 
-        if (!in_array($error->status, [404, 409], true)) {
+        if ($error->status === 429) {
+            Log::warning('zapmizer: partner call rate-limited.', [
+                'endpoint' => $endpoint,
+                'retry_after' => $error->retryAfter,
+            ]);
+        } elseif (!in_array($error->status, [404, 409], true)) {
             Log::error('zapmizer: partner call failed.', [
                 'endpoint' => $endpoint,
                 'status' => $error->status,

@@ -51,6 +51,7 @@ class ZapmizerConnection extends Model
 
     protected $appends = [
         'api_token_masked',
+        'has_webhook_secret',
     ];
 
     protected $casts = [
@@ -101,6 +102,17 @@ class ZapmizerConnection extends Model
                 return '••••';
             }
         });
+    }
+
+    /**
+     * Whether a webhook secret is stored, so a screen can tell a connection
+     * that sends but cannot verify what it receives. Read on the raw
+     * (encrypted) attribute: it never decrypts. A subclass that redefines
+     * `$appends` has to list it.
+     */
+    protected function hasWebhookSecret(): Attribute
+    {
+        return Attribute::get(fn (): bool => filled($this->getAttributes()['webhook_secret'] ?? null));
     }
 
     /**

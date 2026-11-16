@@ -52,6 +52,10 @@ try {
 - `payload()`: o corpo JSON decodificado, com os campos extras (`window_expires_at`, ...).
 - `getMessage()`: `Zapmizer refused the request (HTTP 409, window_closed): <reason>.`
 
+A `ZapmizerApiException` tem `context()`, que o `report()` do Laravel põe no log junto com a exceção: `zapmizer_status` (o status HTTP), `zapmizer_error` (o código da Zapmizer, quando veio) e, na `ZapmizerRateLimitedException`, `zapmizer_retry_after` (quando veio `Retry-After`). As chaves sem valor ficam de fora, e o prefixo evita colisão com o contexto do app.
+
+Um 429 numa chamada de parceiro (`createSession()`, `exchangeCode()`, ...) é esperado: o callback do connect espera e repete. Por isso ele vai para o log como warning, `zapmizer: partner call rate-limited.`, com `endpoint` e `retry_after` e sem o corpo, e não como o `zapmizer: partner call failed.` (error, com o corpo) dos outros 4xx.
+
 ## O que não é embrulhado
 
 Falha que não é resposta da Zapmizer mantém a própria classe e **não é uma `ZapmizerException`**, então o `catch (ZapmizerException)` não a pega:

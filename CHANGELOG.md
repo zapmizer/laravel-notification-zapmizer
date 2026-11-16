@@ -8,6 +8,8 @@
 
 **Breaking no cliente de parceiro:** `ConnectToken`, `ConnectSession::$expiresAt` e a assinatura do `createSession()` mudaram. Veja "Cliente de parceiro" abaixo.
 
+**Breaking no fluxo de connect:** veja "Fluxo de connect" abaixo.
+
 - **Transporte HTTP.** `PartnerClient`, `InstanceClient` e `Zapmizer` (o envio) mandam as requisições pelo `Http` do Laravel (`Connect\Transports\LaravelHttpTransport`), padrão e único transporte da lib. Para trocar, `zapmizer.http.transport` nomeia uma classe que implementa `Contracts\Transport`. Veja `docs/transporte.md`.
 - O `getPrevious()` da `ZapmizerUnavailableException` pode mudar de classe conforme a versão do Laravel: uma exceção do `Http` do Laravel (`ConnectionException` etc.) ou, do Laravel 8 ao 11 em alguns casos (corpo cortado), a do Guzzle.
 - `zapmizer.http.connect_timeout` e `zapmizer.http.timeout` (`ZAPMIZER_HTTP_CONNECT_TIMEOUT`, `ZAPMIZER_HTTP_TIMEOUT`), `null` por padrão. Sem valor, vale o padrão do `Http` da versão: nenhum no Laravel 8; 30 s de total e 10 s de conexão no 9.52 e do 10 em diante.
@@ -76,6 +78,8 @@ Outras mudanças que podem quebrar:
 - `PartnerClient::checkout(string $externalId, string $redirectUri, ?string $state = null): PartnerCheckout` cria o checkout (`POST /partner/users/{externalId}/checkout`). `Connect\PartnerCheckout` tem `url` e `expiresAt` (`?CarbonImmutable`). 404 → `ZapmizerApiException` com `status()` 404; 409 → `ZapmizerApiException` com `error()` `already_subscribed` ou `payment_incomplete`; 422 do redirect → `errors()['redirect_uri']`.
 - `createSession()` ganha `externalId` (o id do cliente no app, chave das duas chamadas acima) e limita `expires_in` a 900..86400 (`PartnerClient::MAX_EXPIRES_IN`).
 - `ConnectToken` ganha `userId` e `hasNumber()` (`false` quando `phone_number` ou `bot_instance_id` vieram `null`).
+- `createSession()` com `webhookUrl` manda `webhook_version: 2024-02-27` (`InstanceClient::LEGACY_WEBHOOK_VERSION`): o webhook que o connect cria nasce na versão do evento `message`, que a lib lê. Zapmizer anterior à 1.148.17 ignora o campo. Sem `webhookUrl`, nada muda no corpo.
+- `ConnectToken` ganha `webhookVersion` (`?string`, o `webhook_version` do `connect/token`; `null` sem webhook ou em Zapmizer anterior à 1.148.17) e `hasUnreadableWebhookVersion()`.
 - Datas ilegíveis (`expires_at`, `trial_ends_at`) viram `null` e logam `zapmizer: unreadable date.` (warning) com `field`, `value` e `external_id`.
 
 Quebras:
@@ -125,6 +129,52 @@ Quebras: nenhuma de comportamento. Só métodos e classes novos, e o `PartnerCli
   - na mesma rota, com um usuário autenticado sem `Connectable` no resolvedor padrão (`notConnectable()`): de 500 a 503 `zapmizer_unavailable` com `report()`;
   - o `VerificationClient` não muda.
 - **Subclasses:** uma subclasse de `InstanceClient` que sobrescreve `conversationSession()` ou `inboxSession()` precisa aceitar o parâmetro novo, senão dá erro fatal de assinatura.
+
+**Fluxo de connect:**
+
+| Antes | Agora |
+| --- | --- |
+| `Contracts\Connectable` sem `zapmizerExternalId()` | método obrigatório; quem usa o trait não muda |
+| `start` sem `external_id` nem `expires_in` | manda os dois; o link vale o TTL |
+| `state_ttl_minutes` padrão 10; `null` dava 0 | padrão 30; `null`/inválido = 30. Uma config publicada guarda o 10 |
+| `?error=subscription_required` → `exchange_failed` | `subscription_required` |
+| status `qr_unavailable` | sai (a Zapmizer não envia desde 1.148.8) |
+| `?error=` respondido antes do `state` | `state` conferido antes; com `state` inválido, `invalid_state` |
+| webhook reaproveitado em outra versão: silêncio | conecta (`ok`) e loga um warning: o webhook entrega em `2026-10-20` e o `MessageReceived` não dispara para essa conexão (troque o webhook para `2024-02-27` na tela de Webhooks) |
+| um callback com `state` errado consumia o pending | o pending só sai quando o `state` bate |
+| token sem número gravado inativo (ou ativo sem instância) | `exchange_failed`, nada gravado, token revogado |
+| `team_already_connected` deixava o token novo valendo | o token novo é revogado |
+| `bot_instance_id`/`webhook_id` inválido virava 0 | `exchange_failed` |
+| 429 na troca → `exchange_failed` | o popup espera e repete; `rate_limited` se não der |
+| 429 de chamada de parceiro: `Log::error` com o corpo | `Log::warning` sem corpo |
+| `webhook_failed` = inativa | `webhook_failed` = ativa, envia, sem secret para receber; mensagem nova ("Connected and sending, but incoming messages can't be verified…"); o stub `ConnectButton` emite `connected` e mostra o aviso |
+| `destroy` não revogava | `destroy` revoga o token. Um app que usa o mesmo token fora da lib perde o acesso ao desconectar |
+| `APP_KEY` trocado: callback `exchange_failed`, `destroy` e `show?live=1` 500 | o valor ilegível vale como ausente, com warning; é sobrescrito no connect seguinte (inclusive na troca de time); `show?live=1` responde `state: reauth_required` |
+| view `connect-result` usada também por quem montava reconnect | view nova `reconnect-result` |
+
+Correções (já não funcionavam com token de connect, 403 `missing_ability`):
+
+- o callback tentava rotacionar o secret: a conexão ficava inativa e o connect seguinte repetia a falha;
+- `destroy` e troca de time tentavam apagar o webhook remoto, só logavam e deixavam o token valendo;
+- a doc ensinava a rotação (§7).
+
+Novo:
+
+- rotas de reconnect;
+- `revoke_previous_token` (desligada por padrão; recomendado ligar). Uma config publicada não tem a chave dentro de `connect` (o merge é raso): acrescente `'revoke_previous_token' => env('ZAPMIZER_CONNECT_REVOKE_PREVIOUS_TOKEN', false),` ou republique a config, senão a variável de ambiente não faz efeito;
+- eventos `NumberConnected` e `ReconnectRefused`;
+- `has_webhook_secret` na serialização da conexão (aditivo);
+- `ZapmizerApiException::context()`;
+- callback que não responde 500 com parâmetro em array.
+
+Stubs: republicar com `php artisan vendor:publish --tag=zapmizer-wizard --force`. Atenção: o `--force` sobrescreve as edições locais dos arquivos publicados; guarde-as antes e reaplique.
+
+Subclasses:
+
+- do `ConnectController`: saem `obtainWebhookSecret()` e `forgetRemoteWebhook()`, e os métodos de estado vão para o trait com as mesmas assinaturas. O `popupStatus()` lê `static::POPUP_ERRORS`. Um `result()` próprio com mapa de mensagens passa a receber `subscription_required` e `rate_limited` (e não recebe mais `qr_unavailable`): acrescente as duas chaves;
+- de `ZapmizerApiException`: ganham `context()`.
+
+Veja "Connect flow" em "Upgrading from 0.3.x" (`docs/connect.md`).
 
 **Upgrade da 0.3:**
 

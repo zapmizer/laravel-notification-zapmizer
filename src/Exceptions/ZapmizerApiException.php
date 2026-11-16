@@ -59,4 +59,17 @@ class ZapmizerApiException extends ZapmizerConnectException
     {
         return $this->apiError;
     }
+
+    /**
+     * The structured context Laravel's report() adds to the log entry.
+     *
+     * @return array<string, int|string>
+     */
+    public function context(): array
+    {
+        return array_filter([
+            'zapmizer_status' => $this->status(),
+            'zapmizer_error' => $this->error(),
+        ], fn ($value) => $value !== null);
+    }
 }

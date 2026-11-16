@@ -84,7 +84,7 @@ class PartnerClientTest extends TestCase
         $this->assertFalse($request->hasHeader('Authorization'));
         $this->assertEquals('application/json', $request->getHeaderLine('Accept'));
         $this->assertEquals(
-            ['redirect_uri' => 'http://app.test/zapmizer/connect/callback', 'state' => 'state-123', 'webhook_url' => 'http://app.test/zapmizer/webhook'],
+            ['redirect_uri' => 'http://app.test/zapmizer/connect/callback', 'state' => 'state-123', 'webhook_url' => 'http://app.test/zapmizer/webhook', 'webhook_version' => '2024-02-27'],
             json_decode((string) $request->getBody(), true)
         );
     }
@@ -237,7 +237,7 @@ class PartnerClientTest extends TestCase
 
         $client->createSession('', 'state', '');
 
-        $this->assertSame(['redirect_uri' => '', 'state' => 'state', 'webhook_url' => ''], json_decode((string) $this->history[0]['request']->getBody(), true));
+        $this->assertSame(['redirect_uri' => '', 'state' => 'state', 'webhook_url' => '', 'webhook_version' => '2024-02-27'], json_decode((string) $this->history[0]['request']->getBody(), true));
     }
 
     public function testAnUnreadableExpiryOfTheSessionIsLoggedWithTheExternalId()
@@ -354,6 +354,31 @@ class PartnerClientTest extends TestCase
             && $context === ['endpoint' => 'connect/sessions', 'status' => 422, 'body' => $body]);
     }
 
+    /** @dataProvider rateLimitedEndpoints */
+    #[DataProvider('rateLimitedEndpoints')]
+    public function testR8ARateLimitedPartnerCallIsAWarningWithoutTheBody(string $endpoint)
+    {
+        Log::spy();
+        $client = $this->makeClient(new MockHandler([
+            new Response(429, ['Content-Type' => 'application/json', 'Retry-After' => '30'], '{"message":"Too Many Attempts.","detail":"body-marker"}'),
+        ]));
+
+        try {
+            $this->callEndpoint($client, $endpoint);
+            $this->fail('Expected ZapmizerRateLimitedException.');
+        } catch (ZapmizerRateLimitedException $exception) {
+            $this->assertSame(30, $exception->retryAfter());
+        }
+
+        Log::shouldHaveReceived('warning')->with('zapmizer: partner call rate-limited.', ['endpoint' => ltrim($endpoint, '/'), 'retry_after' => 30])->once();
+        Log::shouldNotHaveReceived('error');
+    }
+
+    public static function rateLimitedEndpoints(): array
+    {
+        return [['/connect/sessions'], ['/connect/token']];
+    }
+
     /** @dataProvider refusalsFromTheContract */
     #[DataProvider('refusalsFromTheContract')]
     public function testRefusalFromTheContract(string $endpoint, int $status, string $body, array $headers, string $class, ?int $retryAfter)
@@ -466,7 +491,7 @@ class PartnerClientTest extends TestCase
 
     public static function otherRefusals(): array
     {
-        return ['400' => [400], '403' => [403], '410' => [410], '422' => [422], '429' => [429]];
+        return ['400' => [400], '403' => [403], '410' => [410], '422' => [422]];
     }
 
     public function testM48ANonSeekableBodyIsReadOnceForTheExceptionAndTheLog()

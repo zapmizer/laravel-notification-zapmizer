@@ -18,4 +18,12 @@ class ZapmizerRateLimitedException extends ZapmizerApiException
     {
         return $this->apiError->retryAfter;
     }
+
+    /**
+     * @return array<string, int|string>
+     */
+    public function context(): array
+    {
+        return parent::context() + array_filter(['zapmizer_retry_after' => $this->retryAfter()], fn ($value) => $value !== null);
+    }
 }

@@ -93,7 +93,7 @@ Para quem está na 0.0.x, na 0.1.x ou na 0.2.x, em geral apps que só enviam. Qu
 
 A 0.4 só acrescentou o `syncMessages()` à 0.3, que segue igual aqui: a lista vale para as duas.
 
-**Antes de tudo, ligue as rotas que o app usa** (desde a 2.0.0-beta.4 nenhuma vem ligada; veja "Rotas por grupo"): `ZAPMIZER_ROUTES_CONNECT=true` (connect e reconnect), `ZAPMIZER_ROUTES_WEBHOOK=true` (o webhook assinado, inclusive o por conexão) e, se o app manda o usuário para `zapmizer.verify_number`, `ZAPMIZER_ROUTES_VERIFY_NUMBER=true`. Sem isso o connect responde 404, e as entregas do webhook também (a Zapmizer tenta de novo e desiste: as mensagens se perdem). Uma `config/zapmizer.php` publicada não precisa de edição para isso.
+**Antes de tudo, ligue as rotas que o app usa** (desde a 2.0.0-beta.4 nenhuma vem ligada; veja "Rotas por grupo"): `ZAPMIZER_ROUTES_CONNECT=true` (connect e reconnect), `ZAPMIZER_ROUTES_WEBHOOK=true` (o webhook assinado, inclusive o por conexão) e, se o app manda o usuário para `zapmizer.verify_number`, `ZAPMIZER_ROUTES_VERIFY_NUMBER=true`. Sem isso o connect responde 404, e as entregas do webhook também (a Zapmizer tenta de novo e desiste: as mensagens se perdem). Código do app que monta a URL da lib (`route('zapmizer.webhook')`, `route('zapmizer.connect.callback')`, num `start()` ou `createSession()` próprio, num comando que cadastra o webhook) passa a lançar `Symfony\Component\Routing\Exception\RouteNotFoundException` com o grupo desligado. Uma `config/zapmizer.php` publicada não precisa de edição para isso.
 
 1. **Zapmizer 1.148.10 ou superior.** O contrato que esta versão usa está todo nela (`user_id`/`team_id` no `connect/token`, reconnect, revogação e `partner/users` desde a 1.148.8; `appearance` da caixa e `user.email` do embed desde a 1.148.10). A 1.149.0 e a 1.150.0 citadas nas versões anteriores nunca foram lançadas.
 2. **Procure `CouldNotSendNotification` no app.** A classe saiu, e um `catch` dela não dá erro: só deixa de casar, e a exceção escapa. Troque por `catch (ZapmizerException $e)` ou pelas classes de "Envio" abaixo.
@@ -103,9 +103,48 @@ A 0.4 só acrescentou o `syncMessages()` à 0.3, que segue igual aqui: a lista v
 6. **Ao ligar `revoke_previous_token`, tire o observer `updating`** que a doc anterior ensinava para revogar o token anterior.
 7. **`Contracts\Connectable` sem o trait:** implemente `zapmizerExternalId()`.
 8. **Stubs e views publicados:** republique os stubs com `php artisan vendor:publish --tag=zapmizer-wizard --force` (guarde antes as suas edições: o `--force` sobrescreve); quem montava o reconnect com a view `connect-result` passa a ter a `reconnect-result`.
-9. **Handler de exceções:** `ZapmizerUnavailableException`, `PartnerCredentialsException` e `NoConnectableException` não renderizam mais 503/403 fora das rotas da lib; use `renderable()`.
+9. **Handler de exceções:** `ZapmizerUnavailableException`, `PartnerCredentialsException` e `NoConnectableException` não têm mais `render()`: as rotas da lib as tratam nos próprios métodos, e em todo o resto (código do app e método sobrescrito numa subclasse dos controllers da lib, veja o item 11) elas viram 500. Use `renderable()`.
 10. **`base_uri` sem esquema** (`localhost:8001/api/`): ponha o esquema (`http://localhost:8001/api/`), senão nada sai.
-11. **Código que usa `PartnerClient`, `ConnectToken`, `ConnectSession` ou `InstanceClient` direto, ou estende classes da lib:** confira as seções "Parceiro", "Instância", "Connect" e "Embed", e as notas de subclasses em cada uma.
+11. **Código que usa `PartnerClient`, `ConnectToken`, `ConnectSession` ou `InstanceClient` direto, ou estende classes da lib:** confira as seções "Parceiro", "Instância", "Connect" e "Embed", e as notas de subclasses em cada uma. Quem **estende** as classes cai nestes casos, que não aparecem só lendo o de/para:
+    - **Subclasse de `PartnerClient` ou `InstanceClient` com construtor que recebe `?GuzzleHttp\Client`** e repassa ao pai, registrada no container com `$app->make(HttpClient::class)` (o padrão da 0.x). Ao resolver (o `start` do connect, o `$connection->instanceClient()`, o `route:list`): `TypeError: PartnerClient::__construct(): Argument #3 ($transport) must be of type ?NotificationChannels\Zapmizer\Contracts\Transport, GuzzleHttp\Client given` (no `InstanceClient`, o argumento #2). Troque o tipo por `?Contracts\Transport` e passe `null` (a lib resolve o `Transport` do container), ou apague o construtor e o binding, se só existiam para isso.
+    - **`createSession()` sobrescrito com a assinatura antiga** (`string $redirectUri, string $state, ?string $webhookUrl = null, ?int $expiresIn = null`) é **erro fatal ao carregar a classe**, não uma exceção: `Declaration of App\...::createSession(...) must be compatible with PartnerClient::createSession(...)`. Nenhum `catch` pega, e cai tudo que carrega a subclasse, não só o connect: o `route:list` (que instancia os controllers para ler o middleware, e com eles o `PartnerClient` do container) e o processo do PHPUnit no primeiro teste que a resolve, levando a suíte inteira. A assinatura nova, completa:
+
+      ```php
+      public function createSession(
+          string $redirectUri,
+          ?string $state = null,
+          ?string $webhookUrl = null,
+          ?int $expiresIn = null,
+          ?string $externalId = null,
+          ?string $webhookVersion = null,
+      ): ConnectSession
+      ```
+
+      Repasse todos ao `parent::createSession()`: o `start` da lib manda `externalId` e o `webhookVersion` vem da config.
+    - **Subclasse do `ConnectController` (ou teste) que monta `new ConnectToken(token: …, teamId: …)`**: `ArgumentCountError: ConnectToken::__construct(): Argument #2 ($userId) not passed`. Num `storeToken()` sobrescrito, ou num `exchangeCode()` falso, o `callback` da lib pega o erro: o popup mostra só `exchange_failed`, nada é gravado, e o erro só aparece no `report()`. Passe `userId` (o `user_id` do `connect/token`).
+    - **`start()` sobrescrito numa subclasse do `ConnectController`** perde o 503: as exceções não têm mais `render()` (item 9), e isto vale **dentro** das rotas da lib, porque quem responde é o seu `start()`. Zapmizer fora do ar (`ZapmizerUnavailableException`), chave de parceiro recusada (`PartnerCredentialsException`, antes 503 `partner_unauthorized`), um 4xx (`ZapmizerApiException`, antes `ZapmizerUnavailableException`) e o resolver sem model (`NoConnectableException`, antes 403 `no_connectable`) viram 500. Prefira não sobrescrever: o `start()` da lib já manda `external_id` (do `zapmizerExternalId()`), o TTL e o webhook, e os ganchos `webhookUrl()` e `webhookKeyFor()` mudam a URL. Se precisar, repita os `catch` do `start()` da lib (`src/Http/Controllers/ConnectController.php`), nesta ordem, porque as primeiras estendem as de depois: `PartnerCredentialsException` → 503 `partner_unauthorized`; `ZapmizerUnavailableException` e `ZapmizerApiException` → 503 `zapmizer_unavailable`; `NoConnectableException` → 403 `no_connectable`; `ZapmizerConnectException` → 503 `zapmizer_unavailable`. Um `route('zapmizer.webhook')` nele lança `RouteNotFoundException` sem `ZAPMIZER_ROUTES_WEBHOOK=true`.
+    - **`result()` próprio com mapa de mensagens fechado** (`$messages[$status]`): o callback da lib passa a mandar `subscription_required` e `rate_limited`, que a 0.3 e a 0.4 não tinham, e o mapa estoura com `Undefined array key` (500 no popup, e o opener fica esperando). Todos os `status` que o `result()` recebe da lib: `ok`, `denied`, `plan_limit`, `subscription_required`, `invalid_state`, `exchange_failed`, `rate_limited`, `webhook_failed`, `team_already_connected` e `no_connectable` (`qr_unavailable` saiu). Deixe a lib responder o que o seu mapa não tem:
+
+      ```php
+      protected function result(string $status): View
+      {
+          $messages = [
+              'ok' => 'Número conectado.',
+              'denied' => 'Autorização cancelada.',
+              // ...
+          ];
+
+          if (!isset($messages[$status])) {
+              return parent::result($status);
+          }
+
+          return view('zapmizer::connect-result', ['status' => $status, 'message' => $messages[$status]]);
+      }
+      ```
+
+      O `result()` da lib responde qualquer `status`: um que ela não conhece vai com o próprio nome e a mensagem de `exchange_failed` (veja "Connect").
+    - **Id externo próprio.** Quem mandava um `external_id` por conta própria (uma subclasse do `PartnerClient` ou do `ConnectController` que o punha no corpo) e passa a usar o connect da lib: o `start` manda `$connectable->zapmizerExternalId()`, que no trait `Connectable` é `(string) $this->getKey()` (`src/Connectable.php`). Se o id que a Zapmizer já conhece é outro, sobrescreva o método no model para devolver o mesmo de antes; senão o vínculo com o `external_id` antigo se perde em silêncio: o `subscription()` responde `null` (404) e o checkout nasce para um cliente novo. O id precisa ter de 1 a 191 caracteres entre `A-Z`, `a-z`, `0-9`, `_`, `.` e `-` (e não ser `.` nem `..`); fora disso, `InvalidArgumentException` antes de chamar a Zapmizer.
+    - **`api-version` no parceiro.** Uma subclasse do `PartnerClient` que só existe para mandar `api-version` pode sair: as rotas de parceiro não leem o header (veja "Parceiro").
 12. **Quem usa o retorno do envio** (`sendMessage()`, `sendMessageWithFile()`, `ZapmizerMessage::send()` ou um listener de `NotificationSent`): ele passa a ser um `Messages\SentMessage`. Troque `getBody()` por `$sent->raw()` ou pelos campos. Num listener, `$event->response['message'] instanceof ZapmizerMessage` falha em silêncio: troque por `instanceof SentMessage`. Uma subclasse de `ZapmizerMessage` que sobrescreve `send()` precisa declarar `: SentMessage`. Configure `ZAPMIZER_API_VERSION=2025-06-27` para acompanhar o envio. Veja "Envio tipado, acompanhamento e template" em "Envio".
 13. **A mensagem é o contrato `2026-10-20`.** `InboundMessage` saiu. `MessageReceived`, o novo `MessageSent`, `syncMessages()` e o `media()`/`awaitMedia()` da `ZapmizerConnection` usam `Messages\Message` (o `InstanceClient::media(int $botInstanceId, string $messageId, int $timestamp)` segue com os escalares), com a forma do contrato de mensagem da Zapmizer, nos dois formatos de webhook. Troque o tipo nos listeners, jobs e testes e use o de/para abaixo. Veja "Mensagens".
 14. **O `id` da mensagem muda para as mesmas mensagens.** Era o `id._serialized` do WhatsApp Web (`true_5521…@c.us_3AAA…`); agora é o id curto do WhatsApp (`3AAA…`), o mesmo que o contrato entrega e que o `GET /whatsapp-messages/media` aceita. Ele pode se repetir entre conversas: deduplique por `chat` + `id`. Um id guardado antes não casa com o novo: na transição, compare com o terceiro segmento do `_serialized` antigo separado por `_` (`<fromMe>_<conversa>_<id>`, e em grupo `_<participante>` no fim), a mesma regra com que a Zapmizer lê o `_serialized` no `GET /whatsapp-messages/media`.

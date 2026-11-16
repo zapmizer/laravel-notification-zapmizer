@@ -52,6 +52,19 @@ class CheckCommandTest extends TestCase
     }
 
     /**
+     * The human output (expectsOutputToContain() only exists from Laravel 9 on).
+     */
+    protected function checkHuman(int $exit): string
+    {
+        $code = Artisan::call('zapmizer:check');
+        $output = Artisan::output();
+
+        $this->assertSame($exit, $code, $output);
+
+        return $output;
+    }
+
+    /**
      * @return array{exit: int, ok: bool, checks: array<string, array{status: string, message: string, hint: string|null}>}
      */
     protected function checkJson(array $options = []): array
@@ -75,12 +88,12 @@ class CheckCommandTest extends TestCase
     {
         $this->partnerAnswers(404);
 
-        $this->artisan('zapmizer:check')
-            ->expectsOutputToContain('a Zapmizer aceitou as credenciais de parceiro')
-            ->expectsOutputToContain('tabela zapmizer_connections criada')
-            ->expectsOutputToContain('NotificationChannels\Zapmizer\Test\Fixtures\User é Connectable')
-            ->expectsOutputToContain('Tudo certo para o connect.')
-            ->assertExitCode(0);
+        $output = $this->checkHuman(0);
+
+        $this->assertStringContainsString('a Zapmizer aceitou as credenciais de parceiro', $output);
+        $this->assertStringContainsString('tabela zapmizer_connections criada', $output);
+        $this->assertStringContainsString('NotificationChannels\Zapmizer\Test\Fixtures\User é Connectable', $output);
+        $this->assertStringContainsString('Tudo certo para o connect.', $output);
 
         Http::assertSentCount(1);
         Http::assertSent(fn (Request $request) => $request->method() === 'GET'
@@ -310,9 +323,9 @@ class CheckCommandTest extends TestCase
         config()->set('zapmizer.partner.secret', null);
         Schema::drop('zapmizer_connections');
 
-        $this->artisan('zapmizer:check')
-            ->expectsOutputToContain('ZAPMIZER_PARTNER_ID e ZAPMIZER_PARTNER_SECRET vazio no .env')
-            ->expectsOutputToContain('2 problemas críticos.')
-            ->assertExitCode(1);
+        $output = $this->checkHuman(1);
+
+        $this->assertStringContainsString('ZAPMIZER_PARTNER_ID e ZAPMIZER_PARTNER_SECRET vazio no .env', $output);
+        $this->assertStringContainsString('2 problemas críticos.', $output);
     }
 }

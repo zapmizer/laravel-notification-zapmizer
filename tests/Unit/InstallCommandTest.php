@@ -2,6 +2,7 @@
 
 namespace NotificationChannels\Zapmizer\Test\Unit;
 
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schema;
 use NotificationChannels\Zapmizer\Test\Concerns\UsesTemporaryApp;
 use NotificationChannels\Zapmizer\Test\TestCase;
@@ -49,20 +50,35 @@ PHP;
         parent::tearDown();
     }
 
-    protected function install(array $options = []): \Illuminate\Testing\PendingCommand
+    /**
+     * Artisan::call() and the output, not expectsOutputToContain(): that one
+     * only exists from Laravel 9 on.
+     *
+     * @param array<int, string> $contains
+     */
+    protected function assertInstall(array $options = [], int $exit = 0, array $contains = []): string
     {
-        return $this->artisan('zapmizer:install', $options + ['--no-interaction' => true]);
+        $code = Artisan::call('zapmizer:install', $options + ['--no-interaction' => true]);
+        $output = Artisan::output();
+
+        $this->assertSame($exit, $code, $output);
+
+        foreach ($contains as $text) {
+            $this->assertStringContainsString($text, $output);
+        }
+
+        return $output;
     }
 
     public function testNoInteractionDoesOnlyTheSafePart()
     {
-        $this->install()
-            ->expectsOutputToContain('config/zapmizer.php publicada')
-            ->expectsOutputToContain('Próximos passos')
-            ->expectsOutputToContain('ZAPMIZER_PARTNER_ID e ZAPMIZER_PARTNER_SECRET')
-            ->expectsOutputToContain('liberar o host app.example.com')
-            ->expectsOutputToContain('php artisan zapmizer:check')
-            ->assertExitCode(0);
+        $this->assertInstall([], 0, [
+            'config/zapmizer.php publicada',
+            'Próximos passos',
+            'ZAPMIZER_PARTNER_ID e ZAPMIZER_PARTNER_SECRET',
+            'liberar o host app.example.com',
+            'php artisan zapmizer:check',
+        ]);
 
         $this->assertFileEquals(__DIR__ . '/../../config/zapmizer.php', $this->appFile('config/zapmizer.php'));
         $this->assertCount(1, $this->publishedMigrations());
@@ -79,17 +95,17 @@ PHP;
 
     public function testRunningTwiceChangesNothingTheSecondTime()
     {
-        $this->install(['--model' => 'App\\Models\\User', '--inbox' => true])->assertExitCode(0);
+        $this->assertInstall(['--model' => 'App\\Models\\User', '--inbox' => true], 0);
 
         $snapshot = $this->snapshot();
 
-        $this->install(['--model' => 'App\\Models\\User', '--inbox' => true])
-            ->expectsOutputToContain('config/zapmizer.php já existe')
-            ->expectsOutputToContain('migration da zapmizer_connections já publicada')
-            ->expectsOutputToContain('.env já tem as chaves da Zapmizer')
-            ->expectsOutputToContain('App\\Models\\User já é Connectable')
-            ->expectsOutputToContain('componentes Vue já publicados')
-            ->assertExitCode(0);
+        $this->assertInstall(['--model' => 'App\\Models\\User', '--inbox' => true], 0, [
+            'config/zapmizer.php já existe',
+            'migration da zapmizer_connections já publicada',
+            '.env já tem as chaves da Zapmizer',
+            'App\\Models\\User já é Connectable',
+            'componentes Vue já publicados',
+        ]);
 
         $this->assertSame($snapshot, $this->snapshot());
         $this->assertCount(1, $this->publishedMigrations());
@@ -99,7 +115,7 @@ PHP;
     {
         $this->appFile('.env', self::ENV . "export ZAPMIZER_PARTNER_ID=42\nZAPMIZER_BASE_URI = http://localhost:8001/api/\n");
 
-        $this->install()->assertExitCode(0);
+        $this->assertInstall([], 0);
 
         $env = $this->readAppFile('.env');
 
@@ -112,9 +128,9 @@ PHP;
     {
         unlink($this->appFile('.env'));
 
-        $this->install()
-            ->expectsOutputToContain('.env não existe')
-            ->assertExitCode(0);
+        $this->assertInstall([], 0, [
+            '.env não existe',
+        ]);
 
         $this->assertFileDoesNotExist($this->appFile('.env'));
         $this->assertStringContainsString('ZAPMIZER_PARTNER_SECRET=', $this->readAppFile('.env.example'));
@@ -122,15 +138,15 @@ PHP;
 
     public function testForceOverwritesTheConfigAndTheMigrationInPlace()
     {
-        $this->install()->assertExitCode(0);
+        $this->assertInstall([], 0);
         $migration = $this->publishedMigrations()[0];
         file_put_contents($this->appFile('config/zapmizer.php'), '<?php return [];');
         file_put_contents($migration, '<?php // edited');
 
-        $this->install(['--force' => true])
-            ->expectsOutputToContain('config/zapmizer.php publicada')
-            ->expectsOutputToContain('sobrescrita')
-            ->assertExitCode(0);
+        $this->assertInstall(['--force' => true], 0, [
+            'config/zapmizer.php publicada',
+            'sobrescrita',
+        ]);
 
         $this->assertSame([$migration], $this->publishedMigrations());
         $this->assertFileEquals(__DIR__ . '/../../config/zapmizer.php', $this->appFile('config/zapmizer.php'));
@@ -139,9 +155,9 @@ PHP;
 
     public function testTheModelBecomesConnectable()
     {
-        $this->install(['--model' => 'App\\Models\\User'])
-            ->expectsOutputToContain('app/Models/User.php: implements Connectable + use ConnectsZapmizer')
-            ->assertExitCode(0);
+        $this->assertInstall(['--model' => 'App\\Models\\User'], 0, [
+            'app/Models/User.php: implements Connectable + use ConnectsZapmizer',
+        ]);
 
         $model = $this->readAppFile('app/Models/User.php');
 
@@ -154,10 +170,10 @@ PHP;
     {
         $this->appFile('app/Models/Team.php', "<?php\n\nnamespace App\\Models;\n\nuse Illuminate\\Database\\Eloquent\\Model;\n\nclass Team extends Model\n{\n}\n");
 
-        $this->install(['--model' => 'Team'])
-            ->expectsOutputToContain('app/Models/Team.php: implements Connectable')
-            ->expectsOutputToContain('crie um resolver e aponte zapmizer.connect.resolver')
-            ->assertExitCode(0);
+        $this->assertInstall(['--model' => 'Team'], 0, [
+            'app/Models/Team.php: implements Connectable',
+            'crie um resolver e aponte zapmizer.connect.resolver',
+        ]);
 
         $this->assertStringContainsString('class Team extends Model implements Connectable', $this->readAppFile('app/Models/Team.php'));
     }
@@ -167,31 +183,31 @@ PHP;
         $odd = "<?php\n\nnamespace App\\Models {\n    class User extends \\Illuminate\\Foundation\\Auth\\User {}\n}\n";
         $this->appFile('app/Models/User.php', $odd);
 
-        $this->install(['--model' => 'App\\Models\\User'])
-            ->expectsOutputToContain('não reconheci o formato de app/Models/User.php')
-            ->expectsOutputToContain('use NotificationChannels\\Zapmizer\\Connectable as ConnectsZapmizer;')
-            ->expectsOutputToContain('class User extends ... implements Connectable')
-            ->assertExitCode(0);
+        $this->assertInstall(['--model' => 'App\\Models\\User'], 0, [
+            'não reconheci o formato de app/Models/User.php',
+            'use NotificationChannels\\Zapmizer\\Connectable as ConnectsZapmizer;',
+            'class User extends ... implements Connectable',
+        ]);
 
         $this->assertSame($odd, $this->readAppFile('app/Models/User.php'));
     }
 
     public function testAnUnknownModelFails()
     {
-        $this->install(['--model' => 'App\\Models\\Nope'])
-            ->expectsOutputToContain('não encontrado')
-            ->assertExitCode(1);
+        $this->assertInstall(['--model' => 'App\\Models\\Nope'], 1, [
+            'não encontrado',
+        ]);
     }
 
     public function testInboxTurnsTheRoutesOnAndPublishesTheComponents()
     {
         $this->appFile('.env', self::ENV . "ZAPMIZER_INBOX_ENABLED=false\n");
 
-        $this->install(['--inbox' => true])
-            ->expectsOutputToContain('componentes Vue em resources/js')
-            ->expectsOutputToContain('Instale o front: npm install github:zapmizer/embed#v0.1.2 lucide-vue-next')
-            ->expectsOutputToContain('endZapmizerEmbeds() antes do logout')
-            ->assertExitCode(0);
+        $this->assertInstall(['--inbox' => true], 0, [
+            'componentes Vue em resources/js',
+            'Instale o front: npm install github:zapmizer/embed#v0.1.2 lucide-vue-next',
+            'endZapmizerEmbeds() antes do logout',
+        ]);
 
         $this->assertStringContainsString("ZAPMIZER_INBOX_ENABLED=true\n", $this->readAppFile('.env'));
         $this->assertStringNotContainsString('ZAPMIZER_INBOX_ENABLED=false', $this->readAppFile('.env'));
@@ -207,9 +223,9 @@ PHP;
         foreach (['bun.lock' => 'bun add', 'pnpm-lock.yaml' => 'pnpm add', 'yarn.lock' => 'yarn add'] as $lockfile => $command) {
             $this->appFile($lockfile, '');
 
-            $this->install(['--inbox' => true])
-                ->expectsOutputToContain("Instale o front: {$command} github:zapmizer/embed#v0.1.2")
-                ->assertExitCode(0);
+            $this->assertInstall(['--inbox' => true], 0, [
+            "Instale o front: {$command} github:zapmizer/embed#v0.1.2",
+        ]);
 
             unlink($this->appFile($lockfile));
         }
@@ -217,13 +233,13 @@ PHP;
 
     public function testComponentsAreKeptUnlessForced()
     {
-        $this->install(['--inbox' => true])->assertExitCode(0);
+        $this->assertInstall(['--inbox' => true], 0);
         file_put_contents($this->appFile('resources/js/components/zapmizer/InboxScreen.vue'), '<!-- mine -->');
 
-        $this->install(['--inbox' => true])->assertExitCode(0);
+        $this->assertInstall(['--inbox' => true], 0);
         $this->assertSame('<!-- mine -->', $this->readAppFile('resources/js/components/zapmizer/InboxScreen.vue'));
 
-        $this->install(['--inbox' => true, '--force' => true])->assertExitCode(0);
+        $this->assertInstall(['--inbox' => true, '--force' => true], 0);
         $this->assertFileEquals(__DIR__ . '/../../stubs/inertia-vue/components/zapmizer/InboxScreen.vue', $this->appFile('resources/js/components/zapmizer/InboxScreen.vue'));
     }
 
@@ -231,9 +247,9 @@ PHP;
     {
         $this->appFile('package.json', json_encode(['private' => true, 'devDependencies' => ['vite' => '^6.0']]));
 
-        $this->install(['--inbox' => true])
-            ->expectsOutputToContain('o package.json não tem vue')
-            ->assertExitCode(0);
+        $this->assertInstall(['--inbox' => true], 0, [
+            'o package.json não tem vue',
+        ]);
 
         $this->assertFileDoesNotExist($this->appFile('resources/js/components/zapmizer/InboxScreen.vue'));
         $this->assertStringContainsString('ZAPMIZER_INBOX_ENABLED=true', $this->readAppFile('.env'));
@@ -241,7 +257,7 @@ PHP;
 
     public function testMigrateCreatesTheTable()
     {
-        $this->install(['--migrate' => true])->assertExitCode(0);
+        $this->assertInstall(['--migrate' => true], 0);
 
         $this->assertTrue(Schema::hasTable('zapmizer_connections'));
     }

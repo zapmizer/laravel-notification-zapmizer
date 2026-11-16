@@ -55,7 +55,11 @@ class CheckCommandTest extends TestCase
 
     protected function partnerAnswers(int $status, array $body = self::UNKNOWN_CUSTOMER): void
     {
-        Http::fake(['zap.test/api/partner/users/*' => Http::response($body, $status)]);
+        Http::fake([
+            'zap.test/api/partner/users/*' => Http::response($body, $status),
+            // zap.test is not a known host: the check asks it for its brand.
+            'zap.test/brand/manifest.json' => Http::response(['name' => 'Zapmizer']),
+        ]);
     }
 
     /**
@@ -386,6 +390,57 @@ class CheckCommandTest extends TestCase
         $this->assertSame(1, $missing['exit']);
         $this->assertSame('fail', $missing['checks']['embed_brand']['status']);
         $this->assertStringContainsString('ausente', $missing['checks']['embed_brand']['message']);
+    }
+
+    public function testADeployOutsideTheKnownHostsIsAskedForItsBrand()
+    {
+        Http::fake([
+            'localhost:8001/api/partner/users/*' => Http::response(self::UNKNOWN_CUSTOMER, 404),
+            'localhost:8001/brand/manifest.json' => Http::response(['name' => 'Parli', 'short_name' => 'Parli']),
+        ]);
+        config()->set('zapmizer.base_uri', 'http://localhost:8001/api/');
+        config()->set('zapmizer.inbox.enabled', true);
+        $this->reloadPackageRoutes();
+        $this->appFile('package.json', json_encode(['dependencies' => ['@zapmizer/embed' => 'github:zapmizer/embed#v0.1.3']]));
+
+        // What the blind test installed: the host default, on a parli deploy.
+        $wrong = $this->checkJson();
+        $this->assertSame(1, $wrong['exit']);
+        $this->assertSame('fail', $wrong['checks']['embed_brand']['status']);
+        $this->assertStringContainsString('VITE_ZAPMIZER_BRAND=zapmizer, mas o deploy de localhost é parli', $wrong['checks']['embed_brand']['message']);
+        $this->assertStringContainsString('VITE_ZAPMIZER_BRAND=parli e ZAPMIZER_EMBED_BRAND=parli', $wrong['checks']['embed_brand']['hint']);
+        Http::assertSent(fn (Request $request) => $request->url() === 'http://localhost:8001/brand/manifest.json');
+
+        $this->appFile('.env', "VITE_ZAPMIZER_BRAND=parli\n");
+        $backend = $this->checkJson();
+        $this->assertSame(0, $backend['exit']);
+        $this->assertSame('warn', $backend['checks']['embed_brand']['status'], 'the backend (Blade) still derives zapmizer');
+
+        config()->set('zapmizer.inbox.brand', 'parli');
+        $right = $this->checkJson();
+        $this->assertSame('ok', $right['checks']['embed_brand']['status']);
+        $this->assertStringContainsString('confirmada pelo deploy de localhost', $right['checks']['embed_brand']['message']);
+    }
+
+    public function testADeployThatDoesNotTellItsBrandIsAWarningToAskTheHuman()
+    {
+        Http::fake([
+            'localhost:8001/api/partner/users/*' => Http::response(self::UNKNOWN_CUSTOMER, 404),
+            'localhost:8001/brand/*' => Http::response('', 404),
+        ]);
+        config()->set('zapmizer.base_uri', 'http://localhost:8001/api/');
+        config()->set('zapmizer.inbox.enabled', true);
+        $this->reloadPackageRoutes();
+        $this->appFile('package.json', json_encode(['dependencies' => ['@zapmizer/embed' => 'github:zapmizer/embed#v0.1.3']]));
+
+        foreach ([[], ['--offline' => true]] as $options) {
+            $result = $this->checkJson($options);
+
+            $this->assertSame(0, $result['exit']);
+            $this->assertSame('warn', $result['checks']['embed_brand']['status']);
+            $this->assertStringContainsString('localhost não é um deploy conhecido', $result['checks']['embed_brand']['message']);
+            $this->assertStringContainsString('Confirme com o humano a marca do deploy', $result['checks']['embed_brand']['hint']);
+        }
     }
 
     public function testInboxRoutesThatAreNotRegisteredFail()

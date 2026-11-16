@@ -344,10 +344,41 @@ class CheckCommand extends Command
 
         if ($front === null || $front === '') {
             $this->record('embed_brand', self::FAIL, 'VITE_ZAPMIZER_BRAND ausente: o front não sabe a marca do embed', $hint);
-        } elseif ($front !== $expected) {
-            $this->record('embed_brand', self::FAIL, "VITE_ZAPMIZER_BRAND={$front}, mas a marca do embed é {$expected}: a caixa não receberia o ready", $hint);
+
+            return;
+        }
+
+        $baseUri = (string) config('zapmizer.base_uri');
+
+        // A known host (app.zapmizer.com, parlichat.com) says the brand; any
+        // other deploy is asked for it (`/brand/manifest.json`).
+        if (EmbedBrand::knownDeploy($baseUri) !== null) {
+            $front !== $expected
+                ? $this->record('embed_brand', self::FAIL, "VITE_ZAPMIZER_BRAND={$front}, mas a marca do embed é {$expected}: a caixa não receberia o ready", $hint)
+                : $this->record('embed_brand', self::OK, "marca do embed {$expected} no front e na config");
+
+            return;
+        }
+
+        $host = (string) parse_url($baseUri, PHP_URL_HOST);
+        $deploy = $this->option('offline') ? null : EmbedBrand::discover($baseUri);
+
+        if ($deploy === null) {
+            $front !== $expected
+                ? $this->record('embed_brand', self::FAIL, "VITE_ZAPMIZER_BRAND={$front}, mas a marca do embed é {$expected}: a caixa não receberia o ready", $hint)
+                : $this->record('embed_brand', self::WARN, "marca do embed {$front}, sem confirmação: {$host} não é um deploy conhecido (app.zapmizer.com, *.parlichat.com) e " . ($this->option('offline') ? 'o --offline não pergunta a ele' : 'ele não disse a marca em ' . EmbedBrand::manifestUrl($baseUri)), 'Confirme com o humano a marca do deploy (zapmizer ou parli) e acerte VITE_ZAPMIZER_BRAND e ZAPMIZER_EMBED_BRAND; com a marca errada a caixa termina em ready_timeout.');
+
+            return;
+        }
+
+        $deployHint = "VITE_ZAPMIZER_BRAND={$deploy} e ZAPMIZER_EMBED_BRAND={$deploy} no .env e rebuilde o front.";
+
+        if ($front !== $deploy) {
+            $this->record('embed_brand', self::FAIL, "VITE_ZAPMIZER_BRAND={$front}, mas o deploy de {$host} é {$deploy} (" . EmbedBrand::manifestUrl($baseUri) . '): a caixa não receberia o ready', $deployHint);
+        } elseif ($expected !== $deploy) {
+            $this->record('embed_brand', self::WARN, "o front usa {$deploy}, a marca do deploy, mas a config dá {$expected} (o caminho Blade lê a config)", $deployHint);
         } else {
-            $this->record('embed_brand', self::OK, "marca do embed {$expected} no front e na config");
+            $this->record('embed_brand', self::OK, "marca do embed {$deploy} no front e na config, confirmada pelo deploy de {$host}");
         }
     }
 

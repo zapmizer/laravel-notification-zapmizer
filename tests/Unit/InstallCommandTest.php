@@ -3,6 +3,7 @@
 namespace NotificationChannels\Zapmizer\Test\Unit;
 
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use NotificationChannels\Zapmizer\Test\Concerns\UsesTemporaryApp;
 use NotificationChannels\Zapmizer\Test\TestCase;
@@ -113,6 +114,7 @@ PHP;
 
     public function testExistingKeysAreKeptAndOnlyTheMissingOnesAdded()
     {
+        Http::fake(['localhost:8001/*' => Http::response('', 404)]);
         $this->appFile('.env', self::ENV . "export ZAPMIZER_PARTNER_ID=42\nZAPMIZER_BASE_URI = http://localhost:8001/api/\n");
 
         $this->assertInstall([], 0);
@@ -142,6 +144,45 @@ PHP;
 
         $this->assertStringContainsString("VITE_ZAPMIZER_BRAND=parli\n", $this->readAppFile('.env'));
         $this->assertStringNotContainsString('Confirme com o humano em qual deploy', $output);
+    }
+
+    public function testADeployOutsideTheKnownHostsTellsItsBrand()
+    {
+        Http::fake(['localhost:8001/brand/manifest.json' => Http::response(['name' => 'Parli', 'short_name' => 'Parli'])]);
+
+        $output = $this->assertInstall(['--inbox' => true, '--base-uri' => 'http://localhost:8001/api/'], 0, [
+            'marca do deploy: parli (lida de http://localhost:8001/brand/manifest.json)',
+            'VITE_ZAPMIZER_BRAND=parli do .env entra no bundle',
+        ]);
+
+        foreach (['.env', '.env.example'] as $file) {
+            $this->assertStringContainsString("VITE_ZAPMIZER_BRAND=parli\n", $this->readAppFile($file));
+            $this->assertStringContainsString("ZAPMIZER_EMBED_BRAND=parli\n", $this->readAppFile($file), 'the backend would derive zapmizer from the host');
+        }
+
+        $this->assertStringNotContainsString('Confirme com o humano a marca do deploy', $output);
+    }
+
+    public function testADeployThatDoesNotTellItsBrandGoesToTheHuman()
+    {
+        Http::fake(['localhost:8001/*' => Http::response('<html></html>', 200, ['Content-Type' => 'text/html'])]);
+
+        $this->assertInstall(['--inbox' => true, '--base-uri' => 'http://localhost:8001/api/'], 0, [
+            'não consegui ler a marca do deploy',
+            'Confirme com o humano a marca do deploy de http://localhost:8001/api/',
+        ]);
+
+        $this->assertStringContainsString("VITE_ZAPMIZER_BRAND=zapmizer\n", $this->readAppFile('.env'));
+        $this->assertStringNotContainsString('ZAPMIZER_EMBED_BRAND', $this->readAppFile('.env'));
+    }
+
+    public function testAKnownHostIsNotAsked()
+    {
+        Http::fake();
+
+        $this->assertInstall(['--base-uri' => 'https://app.parlichat.com/api/']);
+
+        Http::assertNothingSent();
     }
 
     public function testADifferentBaseUriFlagNeverOverwritesTheOneInDotEnv()

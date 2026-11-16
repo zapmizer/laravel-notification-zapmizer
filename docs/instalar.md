@@ -19,7 +19,7 @@ Instale a lib zapmizer/laravel-notification-zapmizer (2.0 beta) neste app, com o
 
 Pergunte uma coisa por vez, e só o que você não conseguir descobrir lendo o app.
 
-1. **URL da API da conta de parceiro** (`ZAPMIZER_BASE_URI`): `https://app.zapmizer.com/api/` ou `https://app.parlichat.com/api/`, ou outra (um ambiente local, por exemplo). A conta de parceiro, as credenciais e a [marca do embed](#a-marca-do-embed) são de um deploy só. Pergunte junto das credenciais.
+1. **URL da API da conta de parceiro** (`ZAPMIZER_BASE_URI`): `https://app.zapmizer.com/api/` ou `https://app.parlichat.com/api/`, ou outra (um ambiente local, por exemplo). A conta de parceiro, as credenciais e a [marca do embed](#a-marca-do-embed) são de um deploy só. Pergunte junto das credenciais. **Quando a URL não é uma das duas, pergunte também a marca do deploy** (`zapmizer` ou `parli`): o instalador tenta lê-la do próprio deploy, mas, se ele não responder, só o humano sabe.
 2. **Credenciais de parceiro**: `ZAPMIZER_PARTNER_ID` (só dígitos) e `ZAPMIZER_PARTNER_SECRET`. A Zapmizer emite as duas para a aplicação parceira. Nunca invente valores, não as coloque em código nem em commit: elas vão só no `.env`. Sem elas o connect não abre.
 3. **Host liberado na conta de parceiro**: o host do `APP_URL` precisa estar na lista de hosts da conta de parceiro na Zapmizer, porque é ele que vai no `redirect_uri` e no `webhook_url` do connect e no `parent_origin` da caixa. Quem libera é a equipe da Zapmizer. Em produção a Zapmizer só aceita `https`, e o `redirect_uri` e o `webhook_url` precisam de um endereço público (`localhost` não serve).
 4. **Quem é dono do número**: o usuário logado (`App\Models\User`, o padrão) ou outro model, como o time. Se o app tem times (Jetstream, `currentTeam`), pergunte. Sem times, use o usuário.
@@ -200,10 +200,15 @@ A regra: **a marca é a do deploy da `ZAPMIZER_BASE_URI`**.
 | --- | --- |
 | `https://app.zapmizer.com/api/` (o padrão) | `zapmizer` |
 | `https://app.parlichat.com/api/` (qualquer host em `parlichat.com`) | `parli` |
+| outro host (um servidor local, um staging) | a que o deploy publica em `/brand/manifest.json`; sem resposta, pergunte ao humano |
+
+Num host fora da tabela, a lib pergunta a marca ao próprio deploy: `GET {raiz web}/brand/manifest.json` (a `ZAPMIZER_BASE_URI` sem o `/api`, ex.: `http://localhost:8001/brand/manifest.json`), um arquivo estático, sem login e sem efeito colateral, cujo `name` é o nome da marca (`Parli`, `Zapmizer`). É o mesmo `VITE_BRAND` que o iframe usa: no servidor, o build do Vite liga `public/brand` a `resources/brands/${VITE_BRAND}/public/assets` (`resources/bundler/plugins/brand-public-assets-plugin.ts`), e a página do embed monta o `source` com o mesmo `VITE_BRAND` (`resources/js/app-name.ts`, `brandKey`). O `manifest.json` é o do PWA, linkado no `<head>` de `resources/views/app.blade.php`; não é um contrato de API, por isso um deploy que não o serve (ou que nomeia uma marca que a lib não conhece) cai na pergunta ao humano.
+
+- O `zapmizer:install` lê o manifest quando o host não está na tabela e grava a marca em `VITE_ZAPMIZER_BRAND` e em `ZAPMIZER_EMBED_BRAND` (para o backend, que derivaria `zapmizer` do host). Sem resposta, grava `zapmizer` e manda, nos próximos passos, confirmar a marca com o humano.
 
 - No backend, `zapmizer.inbox.brand` (`ZAPMIZER_EMBED_BRAND`) vale quando definida; vazia, a lib deriva do host da `base_uri` (`NotificationChannels\Zapmizer\Support\EmbedBrand::resolve()`). Defina-a só para um deploy fora da tabela.
 - O front precisa da marca já no boot (o `listenToLogout` roda antes de qualquer sessão), então ela vem do `VITE_ZAPMIZER_BRAND` do `.env`, lido no build. O `zapmizer:install` grava o valor derivado, só se a chave não existir. Trocou a `base_uri`, troque o `VITE_ZAPMIZER_BRAND` e rebuilde.
-- O `zapmizer:check` falha (`embed_brand`) quando a caixa está ligada e o `VITE_ZAPMIZER_BRAND` do `.env` falta ou é outro que a marca da config.
+- O `zapmizer:check` falha (`embed_brand`) quando a caixa está ligada e o `VITE_ZAPMIZER_BRAND` do `.env` falta ou é outro que a marca da config. Num host fora da tabela ele lê o manifest do deploy: falha se o front tem outra marca, avisa se só a config (o caminho Blade) diverge, e avisa para confirmar com o humano quando o deploy não diz a marca (ou com `--offline`).
 - A retomada da caixa fica na chave `<marca>-inbox:<person>` do `sessionStorage`, e o logout entre abas usa o canal da marca: use a mesma marca no `endEmbeds` e no `listenToLogout`.
 
 ### 5. Conferir
@@ -214,7 +219,7 @@ php artisan zapmizer:check --json   # para agentes
 php artisan zapmizer:check --offline
 ```
 
-Sai com código diferente de zero quando algo crítico falha. A única chamada externa é `GET {ZAPMIZER_BASE_URI}/partner/users/zapmizer-check` com a chave de parceiro, que só lê. A Zapmizer responde `401` para uma chave que não aceita; aceitando, responde `200` com o cliente ou o `404` de cliente desconhecido, `{"message": "Record not found.", "details": "Record not found."}`. Só esses dois provam a chave: um 404 de rota (uma `base_uri` sem `/api`, ou outro servidor) falha com a dica de conferir a `ZAPMIZER_BASE_URI`. Sem rede, ou com `--offline`, essa checagem é pulada com aviso. A evidência está no servidor: `ResolvesPartnerUser` faz `abort_if(..., 404, 'Record not found.')`, e o handler de 404 de `api/*` (`bootstrap/app.php`) responde `message: "Record not found."` com a mensagem original em `details`.
+Sai com código diferente de zero quando algo crítico falha. As chamadas externas só leem: `GET {ZAPMIZER_BASE_URI}/partner/users/zapmizer-check` com a chave de parceiro e, com a caixa ligada num host fora dos deploys conhecidos, o `GET /brand/manifest.json` do deploy (veja [A marca do embed](#a-marca-do-embed)). A Zapmizer responde `401` para uma chave que não aceita; aceitando, responde `200` com o cliente ou o `404` de cliente desconhecido, `{"message": "Record not found.", "details": "Record not found."}`. Só esses dois provam a chave: um 404 de rota (uma `base_uri` sem `/api`, ou outro servidor) falha com a dica de conferir a `ZAPMIZER_BASE_URI`. Sem rede, ou com `--offline`, essa checagem é pulada com aviso. A evidência está no servidor: `ResolvesPartnerUser` faz `abort_if(..., 404, 'Record not found.')`, e o handler de 404 de `api/*` (`bootstrap/app.php`) responde `message: "Record not found."` com a mensagem original em `details`.
 
 | `id` | Confere | Crítico |
 | --- | --- | --- |
@@ -229,7 +234,7 @@ Sai com código diferente de zero quando algo crítico falha. A única chamada e
 | `inbox_routes` | rotas da caixa registradas, com `ZAPMIZER_INBOX_ENABLED=true` | sim |
 | `embed_package` | `@zapmizer/embed` no `package.json`, com tag fixa a partir da v0.1.3 | sim sem o pacote; aviso sem tag ou com tag anterior à v0.1.3 |
 | `vue_version` | aparece só com a caixa ligada e um `vue` < 3.3 no `package.json` | não (aviso) |
-| `embed_brand` | `VITE_ZAPMIZER_BRAND` do `.env` igual à marca da config (a do deploy da `ZAPMIZER_BASE_URI`) | sim, com a caixa ligada |
+| `embed_brand` | `VITE_ZAPMIZER_BRAND` do `.env` igual à marca do deploy da `ZAPMIZER_BASE_URI` (pelo host conhecido, ou lida de `/brand/manifest.json` do deploy) | sim, com a caixa ligada; aviso num host fora da tabela que não diz a marca |
 | `app_url` | `APP_URL` absoluto; aviso com `http` ou host local | sim só se não for URL |
 | `parent_origin` | `ZAPMIZER_INBOX_PARENT_ORIGIN`, quando definido, é uma origem | sim |
 

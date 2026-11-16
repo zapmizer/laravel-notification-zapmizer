@@ -22,7 +22,7 @@ The full guide (Portuguese) is `docs/instalar.md` in the package: `vendor/zapmiz
 
 Ask one thing at a time, and only what the app does not tell you:
 
-1. The API of the partner account (`ZAPMIZER_BASE_URI`): `https://app.zapmizer.com/api/` or `https://app.parlichat.com/api/` (or another one, e.g. local). The account, its credentials and the embed brand belong to one deploy.
+1. The API of the partner account (`ZAPMIZER_BASE_URI`): `https://app.zapmizer.com/api/` or `https://app.parlichat.com/api/` (or another one, e.g. local). The account, its credentials and the embed brand belong to one deploy. When the URL is neither of those two, also ask the deploy's brand (`zapmizer` or `parli`): the installer tries to read it from the deploy itself, but only the human knows it when the deploy does not tell.
 2. The partner credentials, `ZAPMIZER_PARTNER_ID` (digits only) and `ZAPMIZER_PARTNER_SECRET`. Zapmizer issues them per partner application. Never invent them, never commit them: they go in `.env` only.
 3. The app's host allowed on the partner account (it goes in the connect's `redirect_uri` and `webhook_url`, and in the inbox's `parent_origin`). Zapmizer's team allows it. Production needs `https` and a public host.
 4. Which model owns the number: the logged-in user (default) or another model such as the current team.
@@ -100,7 +100,7 @@ router.on('before', (event) => {
 
 ### The embed brand
 
-The iframe tags its events with `source: "<brand>-embed"` and `@zapmizer/embed` drops any other, so the front's brand must be the one of the Zapmizer deploy `ZAPMIZER_BASE_URI` points at: `zapmizer` for `app.zapmizer.com` (default), `parli` for `app.parlichat.com`. `zapmizer:install` writes `VITE_ZAPMIZER_BRAND` with the derived brand (only if missing); `ZAPMIZER_EMBED_BRAND` overrides the backend's derivation. A wrong brand shows as an inbox that never gets `ready` (`ready_timeout`); `zapmizer:check` reports it as `embed_brand`. After changing either value, rebuild the front.
+The iframe tags its events with `source: "<brand>-embed"` and `@zapmizer/embed` drops any other, so the front's brand must be the one of the Zapmizer deploy `ZAPMIZER_BASE_URI` points at: `zapmizer` for `app.zapmizer.com` (default), `parli` for `app.parlichat.com`. Any other host (a local server, a staging) is asked for its brand at `{web root}/brand/manifest.json` (the base URI without `/api`; its `name` is `Parli` or `Zapmizer`): the installer writes what it reads to `VITE_ZAPMIZER_BRAND` and `ZAPMIZER_EMBED_BRAND`, and when the deploy does not answer it writes `zapmizer` and tells you to confirm the brand with the human. `zapmizer:install` writes `VITE_ZAPMIZER_BRAND` with the derived brand (only if missing); `ZAPMIZER_EMBED_BRAND` overrides the backend's derivation. A wrong brand shows as an inbox that never gets `ready` (`ready_timeout`); `zapmizer:check` reports it as `embed_brand`. After changing either value, rebuild the front.
 
 ## Verify
 
@@ -117,6 +117,7 @@ Each check has `id`, `status` (`ok`, `fail`, `warn`, `skip`), `message` and `hin
 - `partner_api` fails (401) or the connect answers `partner_unauthorized`: the credentials are wrong or from another environment.
 - The inbox says the address is not allowed (`origin_not_allowed`), or the connect fails on the host: the host is not on the partner allowlist.
 - `embed_brand` fails: set `VITE_ZAPMIZER_BRAND` to the brand the hint gives and rebuild; ask the human only if the `ZAPMIZER_BASE_URI` itself is in doubt.
+- `embed_brand` warns that the host is not a known deploy: ask the human the deploy's brand, then set `VITE_ZAPMIZER_BRAND` and `ZAPMIZER_EMBED_BRAND` to it and rebuild.
 - The inbox falls back to the connect button ("A conexão com o WhatsApp precisa ser refeita"): the token was revoked, no longer decrypts, or predates the inbox (`missing_ability`, `not_a_partner_connection`, answered as `422 reauth_required`). The user connects again.
 - Connecting the number itself (popup + QR code on the phone) is the human's step. Testing it in development needs a public https URL (a tunnel) allowed on the partner account.
 

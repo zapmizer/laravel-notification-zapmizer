@@ -19,6 +19,8 @@ A 0.4 só acrescentou o `syncMessages()` à 0.3, que segue igual aqui: a lista v
 9. **Handler de exceções:** `ZapmizerUnavailableException`, `PartnerCredentialsException` e `NoConnectableException` não renderizam mais 503/403 fora das rotas da lib; use `renderable()`.
 10. **`base_uri` sem esquema** (`localhost:8001/api/`): ponha o esquema (`http://localhost:8001/api/`), senão nada sai.
 11. **Código que usa `PartnerClient`, `ConnectToken`, `ConnectSession` ou `InstanceClient` direto, ou estende classes da lib:** confira as seções "Parceiro", "Instância", "Connect" e "Embed", e as notas de subclasses em cada uma.
+12. **Não use `ZAPMIZER_API_VERSION=2026-10-20` com esta versão.** A lib fixa a versão legada só onde o formato das mensagens muda (`syncMessages()` e `createWebhook()` mandam `api-version: 2025-06-27`; o webhook nasce em `2024-02-27`, veja a 0.4.2), mas o envio e as demais chamadas seguem `zapmizer.api_version`. Deixe a chave vazia ou em `2025-06-27`. Uma versão que o Zapmizer não conhece responde 400 `unknown_api_version` em `POST /webhooks` e `GET /whatsapp-messages`.
+13. **Single-tenant com webhook cadastrado à mão:** crie o webhook na tela de Webhooks do Zapmizer na versão `2024-02-27` (a tela sugere `2026-10-20`). Em `2026-10-20` as mensagens chegam como `message_received`/`message_sent`, o `MessageReceived` não dispara e a lib só loga um warning.
 
 ## Transporte
 
@@ -104,6 +106,7 @@ Subclasses de `ZapmizerApiException` ganham `context()`.
 | `?error=subscription_required` → `exchange_failed` | `subscription_required` |
 | status `qr_unavailable` | sai (a Zapmizer não envia desde 1.148.8) |
 | `?error=` respondido antes do `state` | `state` conferido antes; com `state` inválido, `invalid_state` |
+| webhook reaproveitado em outra versão: silêncio | conecta (`ok`) e loga um warning: o webhook entrega em `2026-10-20` e o `MessageReceived` não dispara para essa conexão (troque o webhook para `2024-02-27` na tela de Webhooks) |
 | um callback com `state` errado consumia o pending | o pending só sai quando o `state` bate |
 | token sem número gravado inativo (ou ativo sem instância) | `exchange_failed`, nada gravado, token revogado |
 | `connect/token` sem `user_id`/`team_id` válidos gravava a conexão com `zapmizer_team_id` null | `exchange_failed`, nada gravado |
@@ -153,6 +156,8 @@ Subclasses do `ConnectController`: saem `obtainWebhookSecret()` e `forgetRemoteW
 - `PartnerClient::checkout(string $externalId, string $redirectUri, ?string $state = null): PartnerCheckout` cria o checkout (`POST /partner/users/{externalId}/checkout`). `Connect\PartnerCheckout` tem `url` e `expiresAt` (`?CarbonImmutable`). 404 → `ZapmizerApiException` com `status()` 404; 409 → `ZapmizerApiException` com `error()` `already_subscribed` ou `payment_incomplete`; 422 do redirect → `errors()['redirect_uri']`.
 - `createSession()` ganha `externalId` (o id do cliente no app, chave das duas chamadas acima) e limita `expires_in` a 900..86400 (`PartnerClient::MAX_EXPIRES_IN`).
 - `ConnectToken` ganha `userId` e `hasNumber()` (`false` quando `phone_number` ou `bot_instance_id` vieram `null`).
+- `createSession()` com `webhookUrl` manda `webhook_version: 2024-02-27` (`InstanceClient::LEGACY_WEBHOOK_VERSION`): o webhook que o connect cria nasce na versão do evento `message`, que a lib lê. Zapmizer anterior à 1.148.17 ignora o campo. Sem `webhookUrl`, nada muda no corpo.
+- `ConnectToken` ganha `webhookVersion` (`?string`, o `webhook_version` do `connect/token`; `null` sem webhook ou em Zapmizer anterior à 1.148.17) e `hasUnreadableWebhookVersion()`.
 - Datas ilegíveis (`expires_at`, `trial_ends_at`) viram `null` e logam `zapmizer: unreadable date.` (warning) com `field`, `value` e `external_id`.
 
 Quebras:
@@ -224,6 +229,10 @@ Webhook com endereço por conexão, opt-in. Desligado, nada muda: as conexões e
 
 Veja "Per-connection webhook URL (opt-in)" em `docs/connect.md`.
 
+**Versão do webhook (2026-10-20):**
+
+- Uma entrega `message_received` ou `message_sent` (eventos do contrato de mensagens, webhook na versão `2026-10-20`) continua respondida com 200 `Webhook Received`, mas loga um warning (uma vez por entrega, com `name`, `version`, `connection_id` e `wid`): esta versão não lê esses eventos, o `MessageReceived` não dispara e o webhook precisa ser recriado na versão `2024-02-27`. Constante `WebhookController::MESSAGE_CONTRACT_EVENTS`; método protegido `warnAboutTheMessageContract()`, que pode colidir com o de uma subclasse.
+
 ## Base da API
 
 - `ZapmizerApi::send()`, e com ele `PartnerClient`, `InstanceClient` e `Zapmizer`, recusa antes de enviar uma URL que não seja http(s) absoluta com host e sem `user:pass` (inclusive host não ASCII ou com espaço). A exceção é `ZapmizerConnectException::invalidBaseUri()`.
@@ -236,6 +245,15 @@ Veja "Per-connection webhook URL (opt-in)" em `docs/connect.md`.
   - na mesma rota, com um usuário autenticado sem `Connectable` no resolvedor padrão (`notConnectable()`): de 500 a 503 `zapmizer_unavailable` com `report()`;
   - o `VerificationClient` não muda.
 - Host com rótulo punycode (`xn--`) que não decodifica, como `xn--ao-bia.com`, deixa de passar: o `new URL()` do navegador o recusa. Um `base_uri` assim é `invalidBaseUri()`, e nada sai. Nas URLs que a Zapmizer devolve, a `url` do embed e a do reconnect (`needs_reconnect`) viram `unexpectedResponse`, e o `resume_url` vira `null` com o warning `zapmizer: unexpected resume url.`, como as outras inseguras. A decodificação usa `idn_to_utf8` (UTS #46): da `ext-intl` ou, sem ela, do `symfony/polyfill-intl-idn`, agora declarado como dependência (já vem em todo app Laravel). Não é preciso instalar a `ext-intl`.
+
+# 0.4.2
+
+Sem breaking. A partir do Zapmizer 1.148.17, `api-version: 2026-10-20` muda o formato do `GET /whatsapp-messages` e dos webhooks novos para o contrato de mensagens, que esta versão não lê.
+
+- `syncMessages()` manda sempre `api-version: 2025-06-27`, qualquer que seja `zapmizer.api_version`. Antes, com `2026-10-20` na config, toda mensagem vinha no formato novo, era descartada e o cursor avançava: as mensagens se perdiam sem erro.
+- Se a resposta vier no contrato de mensagens mesmo assim, `syncMessages()` lança `ZapmizerConnectException` (`unexpectedResponse`) em vez de devolver uma página vazia.
+- `createWebhook()` (e com ele `registerWebhook()`) cria o webhook na versão `2024-02-27`, a do evento `message` que a lib lê, e manda `api-version: 2025-06-27`. Antes o webhook herdava a versão da config e, com `2026-10-20`, o `MessageReceived` nunca disparava. Zapmizer anterior à 1.148.17 ignora o campo.
+- Webhook cadastrado à mão na tela de Webhooks do Zapmizer: escolha a versão `2024-02-27`. A tela sugere `2026-10-20`, e com ela o evento `message` não chega.
 
 # 0.4.1
 

@@ -7,11 +7,11 @@ The single-tenant setup (`ZAPMIZER_API_TOKEN` + `ZAPMIZER_FROM_NUMBER`) keeps wo
 ## How it works
 
 ```
-your app ──(X-Partner-Key)──> POST /api/connect/sessions { redirect_uri, state, webhook_url, expires_in, external_id } ──> { url }   [popup]
+your app ──(X-Partner-Key)──> POST /api/connect/sessions { redirect_uri, state, webhook_url, webhook_version, expires_in, external_id } ──> { url }   [popup]
 user authorizes a team AND pairs a number (QR code) on the hosted page
         ──> redirect to your callback with ?code&state   (or ?error=access_denied|plan_limit|subscription_required)
 your app ──(X-Partner-Key)──> POST /api/connect/token { code }
-        ──> { token, user_id, team_id, team_name, phone_number, bot_instance_id, webhook_id, webhook_secret }
+        ──> { token, user_id, team_id, team_name, phone_number, bot_instance_id, webhook_id, webhook_secret, webhook_version }
 everything stored (token and secret encrypted), connection ACTIVE
 Zapmizer ──(signed)──> POST /zapmizer/webhook ──> MessageReceived event
 ```
@@ -42,7 +42,7 @@ This creates `zapmizer_connections` (one row per connected model, polymorphic). 
 
 ```env
 ZAPMIZER_BASE_URI=https://app.zapmizer.com/api/
-ZAPMIZER_API_VERSION=2025-06-27          # contract version sent as `api-version` (when set)
+ZAPMIZER_API_VERSION=2025-06-27          # contract version sent as `api-version` (when set); never 2026-10-20 with this version
 ZAPMIZER_PARTNER_ID=...
 ZAPMIZER_PARTNER_SECRET=...
 ZAPMIZER_DEFAULT_COUNTRY_CODE=55         # completes numbers typed in national format
@@ -131,7 +131,7 @@ All under the package prefix (`zapmizer`), behind `web` + `auth`:
 | Route name | Method | Returns |
 |---|---|---|
 | `zapmizer.connect.show` | GET | `{ connection }` — the model's connection, or `null`. With `?live=1` the paired instance is queried on Zapmizer and `connection` also carries `state` and `is_online` (below). |
-| `zapmizer.connect.start` | POST | `{ url, expires_at }` — open `url` in a popup (520×720 works). `expires_at` is ISO 8601 with the offset (`2026-09-07T01:00:00+00:00`), or `null`. Stores the `state` in the session and sends, with the session, `route('zapmizer.webhook')` as `webhook_url` (with `zapmizer.webhook.per_connection` on, the connection's own `route('zapmizer.webhook.connection', ['zapmizerWebhookKey' => $key])`, [below](#per-connection-webhook-url-opt-in)), the model's `zapmizerExternalId()` as `external_id` and the state's TTL as `expires_in` (`zapmizer.connect.state_ttl_minutes` × 60, at least Zapmizer's 900 seconds), so the hosted link lives as long as the state. 10 a minute. |
+| `zapmizer.connect.start` | POST | `{ url, expires_at }` — open `url` in a popup (520×720 works). `expires_at` is ISO 8601 with the offset (`2026-09-07T01:00:00+00:00`), or `null`. Stores the `state` in the session and sends, with the session, `route('zapmizer.webhook')` as `webhook_url` (with `webhook_version: 2024-02-27`; with `zapmizer.webhook.per_connection` on, the connection's own `route('zapmizer.webhook.connection', ['zapmizerWebhookKey' => $key])`, [below](#per-connection-webhook-url-opt-in)), the model's `zapmizerExternalId()` as `external_id` and the state's TTL as `expires_in` (`zapmizer.connect.state_ttl_minutes` × 60, at least Zapmizer's 900 seconds), so the hosted link lives as long as the state. 10 a minute. |
 | `zapmizer.connect.callback` | GET | HTML page that `postMessage`s `{ source: 'zapmizer-connect', status, message }` to the opener and closes — it never answers a 500 (that would leave the opener waiting). Stores token, team, number, instance and webhook; the connection is born **active**. It never calls `/webhooks`. |
 | `zapmizer.connect.destroy` | DELETE | Revokes the connection's token on Zapmizer (`DELETE /api/connect/token`, best-effort: a failure is a warning and the local row goes anyway) and deletes the local connection with its credentials. Zapmizer drops the webhook the connect created only when no other live grant uses the same URL: grants of earlier connects that were never revoked (`revoke_previous_token` off, section 9) keep it. The remedy then is a [per-connection webhook URL](#per-connection-webhook-url-opt-in). |
 | `zapmizer.connect.reconnect` | POST | Brings the stored number back with the token the connection already holds — see "Reconnecting a number from the panel". 10 a minute. |
@@ -172,6 +172,12 @@ The callback **never calls `/webhooks`**: Zapmizer refuses those endpoints to a 
 - a `null` secret without a stored, readable one — another `webhook_id`, a first connect, or a stored secret that no longer decrypts because `APP_KEY` changed — stores the connection **active** and without a secret, logs `zapmizer: connected without a webhook secret.` and reports `webhook_failed`. The number sends, but no delivery to it can be verified.
 
 The remedy is to disconnect (`destroy` revokes the token) and connect again: with no other live grant on that URL, Zapmizer creates the webhook again and hands a new secret. If it still comes back `null`, another grant keeps the webhook alive; the way out is a [per-connection webhook URL](#per-connection-webhook-url-opt-in). In that mode, a connection without a secret gets a new key on its next connect: a new URL, so Zapmizer creates a new webhook and the secret comes back.
+
+### The webhook version
+
+Since Zapmizer 1.148.17 every webhook has a version, fixed when it is created. This version of the package reads `2024-02-27`, whose `message` event becomes `MessageReceived`; in `2026-10-20` (the message contract) messages come as `message_received`/`message_sent`, which it does not read. So `start` sends `webhook_version: 2024-02-27` with the session's `webhook_url` (a Zapmizer before 1.148.17 ignores the field), and `ConnectToken::$webhookVersion` carries the version the token exchange answers (`null` without a webhook, or from a Zapmizer before 1.148.17).
+
+The session's version only applies to a webhook the connect **creates**. When the team already had a webhook for that URL, Zapmizer reuses it in the version it had. If that is not `2024-02-27`, the callback still connects (`ok`), but logs a warning — `zapmizer: the connection's webhook delivers in version 2026-10-20, which this version of the package does not read: MessageReceived will not fire for this connection. …` — with `connection_id`, `webhook_id` and `webhook_version`. The number sends; messages to it do not reach the application. Switch that webhook to version `2024-02-27` on Zapmizer's "Webhooks" screen (the connect token cannot do it: `/webhooks` is refused to it).
 
 A stored token or secret that no longer decrypts (`APP_KEY` changed) counts as absent, with a warning, and the next connect overwrites it — on the same team or on a team switch.
 
@@ -334,7 +340,7 @@ X-Zapmizer-Signature: v1=<hex>[,v1=<hex>]     # HMAC-SHA256(secret, "{timestamp}
 
 The package applies `VerifyWebhookSignature` to `POST /zapmizer/webhook` itself. Two kinds of secret can sign a delivery:
 
-- **`zapmizer.webhook.secret`** (`ZAPMIZER_WEBHOOK_SECRET`) — the secret of the webhook you registered by hand on Zapmizer's "Webhooks" screen, the single-tenant setup. It is tested first, without touching the database. A delivery it signs carries **no connection** (`$event->connection === null`).
+- **`zapmizer.webhook.secret`** (`ZAPMIZER_WEBHOOK_SECRET`) — the secret of the webhook you registered by hand on Zapmizer's "Webhooks" screen, the single-tenant setup. Create that webhook with version **`2024-02-27`**: the screen suggests `2026-10-20`, and with it the `message` event never comes. It is tested first, without touching the database. A delivery it signs carries **no connection** (`$event->connection === null`).
 - **each `ZapmizerConnection`'s secret** — registered by the connect flow. The connections whose `phone_number` matches `X-Wid` are queried first; only on a miss is the whole table scanned (a signed delivery is never refused because `X-Wid` lied — the proof is the HMAC). An application that never published the `zapmizer_connections` migration skips this leg: the table's existence is checked (and cached once true), not assumed. A refused delivery always goes through the whole scan; the [per-connection webhook URL](#per-connection-webhook-url-opt-in) finds the owner by its path instead.
 
 It accepts a 5-minute clock drift (`zapmizer.webhook.tolerance`), refuses with **401 and a log line** (reason, wid, timestamp, ip — never the signature), and refuses an inactive connection with 403. A credential that no longer decrypts (`APP_KEY` changed) only takes its own connection out of the matching.
@@ -343,7 +349,7 @@ It accepts a 5-minute clock drift (`zapmizer.webhook.tolerance`), refuses with *
 
 ### The `MessageReceived` event
 
-The `message` event is translated to an `InboundMessage` and dispatched — nothing is persisted:
+The `message` event is translated to an `InboundMessage` and dispatched — nothing is persisted. It is the event of webhook version **`2024-02-27`**: a webhook in `2026-10-20` (Zapmizer's message contract) sends `message_received`/`message_sent` instead, which this version does not read. Such a delivery is still acknowledged with 200 `Webhook Received`, fires no `MessageReceived`, and logs a warning (`zapmizer: the webhook delivers in version 2026-10-20 (the message contract), …`, with `name`, `version`, `connection_id` and `wid`): recreate that webhook in version `2024-02-27`.
 
 ```php
 use NotificationChannels\Zapmizer\Events\MessageReceived;
@@ -483,7 +489,7 @@ foreach ($page->messages as $i => $message) {
 $cursor = $page->cursor; // keep it; call again while $page->hasMore
 ```
 
-Each message is an `InboundMessage` built exactly like the webhook's, so the same listener handles both. Zapmizer neither filters nor deduplicates: the listener must skip `fromMe` and be idempotent on `$message->id`, since a message may come back more than once. Run it on a schedule (every minute is fine: the endpoint allows 30 calls a minute per number). Requires **Zapmizer 1.148.15 or later** (`GET /api/whatsapp-messages`), above the 1.148.10 the rest of this version needs.
+The call always goes with `api-version: 2025-06-27`, whatever `zapmizer.api_version` says: from `2026-10-20` on Zapmizer answers in its message contract, which this version does not read (it throws instead of returning an empty page). Each message is an `InboundMessage` built exactly like the webhook's, so the same listener handles both. Zapmizer neither filters nor deduplicates: the listener must skip `fromMe` and be idempotent on `$message->id`, since a message may come back more than once. Run it on a schedule (every minute is fine: the endpoint allows 30 calls a minute per number). Requires **Zapmizer 1.148.15 or later** (`GET /api/whatsapp-messages`), above the 1.148.10 the rest of this version needs.
 
 ### Per-connection webhook URL (opt-in)
 
@@ -812,14 +818,14 @@ None of them renders a response: the routes above answer their JSON codes themse
 
 The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceClient`) are container-bound with the configured transport, `LaravelHttpTransport` by default — see [transporte.md](transporte.md). Fake them in tests with `Http::fake()`. Every client sends `Accept: application/json` and does **not** follow redirects: a revoked token makes Zapmizer redirect to its login page, and a redirect or a non-JSON answer is an exception (`unexpectedResponse`) instead of a silent "success". `InstanceClient` always acts for one connection: its token is mandatory, there is no fallback to `zapmizer.api_token` — get it through `$connection->instanceClient()`. It knows `connection($id)`, `instance($id)`, `instances()`, `conversationSettings($id, $wid)` and `updateConversationSettings($id, $wid, $on)` (section 9), `createWebhook($url)`, `rotateWebhookSecret($id)`, `deleteWebhook($id)` (these three with a full-access token only, section 7), `media($botInstanceId, $messageId, $timestamp)`, `syncMessages($botInstanceId, $cursor, $since, $limit)`, `reconnect()` and `revokeToken()` (section 9), `conversationSession()` and `inboxSession()` ([embed.md](embed.md)) — instances are created and paired on Zapmizer's page, not from here. `media()` is the one endpoint whose 200 is not JSON (the bytes); its 202/404 answers are, and a redirect is still refused; its 422 (bad request, Meta Cloud instance) is a `MediaRejectedException` and its 429 (rate limit) a `MediaRateLimitedException`. On `InstanceClient`, any other 4xx is a `ZapmizerApiException` (401 `ZapmizerUnauthorizedException`, 429 `ZapmizerRateLimitedException`), except the 404 of `connection()`, `instance()`, `reconnect()` and the conversation settings (`InstanceGoneException`), of `deleteWebhook()` (done) and of `media()` (`unavailable`), the 409 `needs_reconnect` of `reconnect()` (a result) and the 401 of `revokeToken()` (done). On `PartnerClient`, a refused partner credential (401/403) is a `PartnerCredentialsException`, `exchangeCode()` and `subscription()` return `null` on 404 (unknown, expired or already used code; no approved connect with that `external_id`), and any other 4xx is a `ZapmizerApiException` (429 `ZapmizerRateLimitedException`). A 4xx of a partner call is logged as `zapmizer: partner call failed.`, except 404 and 409, which are business answers (no connect yet, already subscribed, payment pending), and 429, logged as the warning `zapmizer: partner call rate-limited.` with `endpoint` and `retry_after`, without the body.
 
-`PartnerClient::createSession($redirectUri, $state = null, $webhookUrl = null, $expiresIn = null, $externalId = null)` keeps `expires_in` between Zapmizer's floor of **900 seconds** (`PartnerClient::MIN_EXPIRES_IN`) and its ceiling of **86400** (`PartnerClient::MAX_EXPIRES_IN`): the same signature covers the page, the authorization and the QR code, and a shorter one died mid-pairing. `ConnectToken` carries `userId` and `teamId` (both `int`) and `hasNumber()`: `false` when `phone_number` or `bot_instance_id` came `null` (the number ceased to exist between the approval and the exchange; Zapmizer says to start a new session).
+`PartnerClient::createSession($redirectUri, $state = null, $webhookUrl = null, $expiresIn = null, $externalId = null)` keeps `expires_in` between Zapmizer's floor of **900 seconds** (`PartnerClient::MIN_EXPIRES_IN`) and its ceiling of **86400** (`PartnerClient::MAX_EXPIRES_IN`): the same signature covers the page, the authorization and the QR code, and a shorter one died mid-pairing. `ConnectToken` carries `userId` and `teamId` (both `int`) and `hasNumber()`: `false` when `phone_number` or `bot_instance_id` came `null` (the number ceased to exist between the approval and the exchange; Zapmizer says to start a new session), and `webhookVersion` (`?string`, see [The webhook version](#the-webhook-version)).
 
 ## Customization summary
 
 | Config key | Purpose |
 |---|---|
 | `zapmizer.partner.id` / `secret` | partner credentials for the connect flow |
-| `zapmizer.api_version` | `api-version` header, sent by every client when set |
+| `zapmizer.api_version` | `api-version` header, sent by every client when set. Not `2026-10-20` with this version: `syncMessages()` and `createWebhook()` pin `2025-06-27`, but sending and every other call follow this key |
 | `zapmizer.default_country_code` | country code completed on national numbers (default `55`) |
 | `zapmizer.connect.resolver` | which model a request connects |
 | `zapmizer.connect.state_ttl_minutes` | how long the popup has to come back, also sent as `expires_in` (default 30) |

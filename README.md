@@ -37,6 +37,10 @@ ZAPMIZER_FROM_NUMBER="558181643260"
 
 That is the single-tenant setup: one token and one number for the whole application. To give each model its own number, see the connect guide below.
 
+**API version.** Leave `ZAPMIZER_API_VERSION` unset or at `2025-06-27`; do **not** set it to `2026-10-20` with this version. The package pins the legacy version where Zapmizer's message shape changes (`syncMessages()` and `createWebhook()` always send `api-version: 2025-06-27`, and the webhooks it creates are born in version `2024-02-27`), but sending and every other call follow the config.
+
+**Receiving messages (single-tenant).** Create the webhook on Zapmizer's "Webhooks" screen with version **`2024-02-27`** (the screen suggests `2026-10-20`, whose `message_received`/`message_sent` events this version does not read: `MessageReceived` never fires, and the package only logs a warning), point it at `https://your-app/zapmizer/webhook` and put its secret in `ZAPMIZER_WEBHOOK_SECRET`. See [Receiving messages](docs/connect.md#6-receiving-messages-the-signed-webhook).
+
 ## Documentation
 
 The guides live in [docs/](docs/README.md), in the order you will need them:

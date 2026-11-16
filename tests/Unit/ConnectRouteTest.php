@@ -548,7 +548,8 @@ class ConnectRouteTest extends TestCase
         $this->assertArrayNotHasKey('webhook_key', $pending);
 
         $body = $this->sentBody(0);
-        $this->assertSame(['redirect_uri', 'state', 'webhook_url', 'expires_in', 'external_id'], array_keys($body));
+        $this->assertSame(['redirect_uri', 'state', 'webhook_url', 'expires_in', 'external_id', 'webhook_version'], array_keys($body));
+        $this->assertSame('2024-02-27', $body['webhook_version']);
         $this->assertSame('http://localhost/zapmizer/connect/callback', $body['redirect_uri']);
         $this->assertSame($pending['state'], $body['state']);
         // Zapmizer registers the receiver during the pairing: the route goes
@@ -1006,6 +1007,44 @@ class ConnectRouteTest extends TestCase
         $this->assertCount(4, $this->history);
         Log::shouldNotHaveReceived('warning');
         $this->assertNoWebhookCalls();
+    }
+
+    public function testAWebhookInAnotherVersionConnectsAndWarnsThatMessagesWillNotFire()
+    {
+        Log::spy();
+        $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer(['webhook_version' => '2026-10-20']));
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+
+        $connection = $this->team()->zapmizerConnection;
+        $this->assertTrue($connection->is_active);
+        Log::shouldHaveReceived('warning')->withArgs(fn (string $message, array $context) => str_contains($message, 'delivers in version 2026-10-20')
+            && str_contains($message, 'MessageReceived will not fire for this connection')
+            && str_contains($message, '2024-02-27')
+            && $context === ['connection_id' => $connection->id, 'webhook_id' => $connection->webhook_id, 'webhook_version' => '2026-10-20'])->once();
+    }
+
+    /** @dataProvider readableWebhookVersions */
+    #[DataProvider('readableWebhookVersions')]
+    public function testAWebhookInTheLegacyVersionOrWithoutOneDoesNotWarn(array $overrides)
+    {
+        Log::spy();
+        $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer($overrides));
+        $this->actingAsUser();
+
+        $this->connect()->assertSee('status: "ok"', false);
+
+        Log::shouldNotHaveReceived('warning');
+    }
+
+    public static function readableWebhookVersions(): array
+    {
+        return [
+            '2024-02-27' => [['webhook_version' => '2024-02-27']],
+            'null' => [['webhook_version' => null]],
+            'absent (Zapmizer before 1.148.17)' => [[]],
+        ];
     }
 
     /** @dataProvider connectsWithoutASecret */

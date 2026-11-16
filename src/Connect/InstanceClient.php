@@ -31,6 +31,18 @@ class InstanceClient
 {
     use BuildsZapmizerRequests;
 
+    /**
+     * The `api-version` the message endpoints are pinned to. From
+     * `2026-10-20` on, Zapmizer answers `/whatsapp-messages` and fires the
+     * webhook in its message contract, a shape this version does not read:
+     * pinning keeps a newer `zapmizer.api_version` from turning every
+     * synced message into nothing and every new webhook silent.
+     */
+    public const LEGACY_MESSAGE_API_VERSION = '2025-06-27';
+
+    /** The webhook version whose `message` event this version reads. */
+    public const LEGACY_WEBHOOK_VERSION = '2024-02-27';
+
     protected Transport $transport;
 
     protected string $apiBaseUri;
@@ -189,7 +201,8 @@ class InstanceClient
     public function createWebhook(string $url): WebhookRegistration
     {
         $response = $this->request('POST', '/webhooks', [
-            'json' => ['url' => $url, 'enabled' => true],
+            'json' => ['url' => $url, 'enabled' => true, 'version' => self::LEGACY_WEBHOOK_VERSION],
+            'api_version' => self::LEGACY_MESSAGE_API_VERSION,
         ]);
 
         $this->guardUnauthorized($response);
@@ -289,6 +302,7 @@ class InstanceClient
                 'since' => $cursor === null ? $since : null,
                 'limit' => $limit,
             ], fn ($value) => $value !== null),
+            'api_version' => self::LEGACY_MESSAGE_API_VERSION,
         ]);
 
         $this->guardUnauthorized($response);
@@ -469,9 +483,13 @@ class InstanceClient
 
     protected function request(string $method, string $path, array $options = [], bool $expectsJson = true): ResponseInterface
     {
+        // An endpoint whose shape depends on the version pins its own.
+        $apiVersion = array_key_exists('api_version', $options) ? $options['api_version'] : $this->apiVersion;
+        unset($options['api_version']);
+
         return (new ZapmizerApi($this->transport))->send($method, $this->apiBaseUri . $path, $options, array_filter([
             'Authorization' => 'Bearer ' . $this->token,
-            'api-version' => $this->apiVersion,
+            'api-version' => $apiVersion,
         ]), $expectsJson);
     }
 

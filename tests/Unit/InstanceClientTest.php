@@ -91,7 +91,7 @@ class InstanceClientTest extends TestCase
         $this->assertEquals('whsec_x', $registration->secret);
         $this->assertNull($registration->previousSecret);
         $this->assertEquals(
-            ['url' => 'http://app.test/zapmizer/webhook', 'enabled' => true],
+            ['url' => 'http://app.test/zapmizer/webhook', 'enabled' => true, 'version' => '2024-02-27'],
             json_decode((string) $this->history[0]['request']->getBody(), true)
         );
     }
@@ -660,6 +660,43 @@ class InstanceClientTest extends TestCase
             'http://localhost/api/whatsapp-messages?bot_instance_id=9&cursor=2026-10-16%2019%3A00%3A00%7C10&limit=50',
             (string) $this->history[0]['request']->getUri(),
         );
+    }
+
+    public function testMessageEndpointsPinTheLegacyVersionWhateverTheConfigSays()
+    {
+        $this->fakeZapmizer(new MockHandler([
+            new Response(200, [], json_encode(['data' => [], 'has_more' => false])),
+            new Response(201, [], json_encode(['data' => ['id' => 42, 'secret' => 's']])),
+            new Response(200, [], json_encode(['data' => ['id' => 9, 'state' => 'connected', 'is_online' => true]])),
+        ]));
+        $client = new InstanceClient('team-token', new LaravelHttpTransport(), 'http://localhost/api', '2026-10-20');
+
+        $client->syncMessages(9);
+        $client->createWebhook('http://app.test/zapmizer/webhook');
+        $client->connection(9);
+
+        $this->assertSame('2025-06-27', $this->history[0]['request']->getHeaderLine('api-version'));
+        $this->assertSame('2025-06-27', $this->history[1]['request']->getHeaderLine('api-version'));
+        $this->assertSame('2024-02-27', json_decode((string) $this->history[1]['request']->getBody(), true)['version']);
+        $this->assertSame('2026-10-20', $this->history[2]['request']->getHeaderLine('api-version'));
+    }
+
+    public function testSyncMessagesRefusesTheMessageContractInsteadOfDroppingIt()
+    {
+        $client = $this->makeClient(new MockHandler([
+            new Response(200, [], json_encode([
+                'wid' => '5581999990000',
+                'version' => '2026-10-20',
+                'data' => [['id' => 14, 'message' => ['id' => 'AAA', 'chat' => '5581988887777', 'from_me' => false, 'type' => 'text', 'text' => 'oi']]],
+                'next_cursor' => '14',
+                'has_more' => false,
+            ])),
+        ]));
+
+        $this->expectException(ZapmizerConnectException::class);
+        $this->expectExceptionMessage('message contract');
+
+        $client->syncMessages(9, cursor: '13');
     }
 
     public function testSyncMessagesKeepsTheCursorWhenNothingNewCame()

@@ -10,6 +10,7 @@ use NotificationChannels\Zapmizer\Events\MessageReceived;
 use NotificationChannels\Zapmizer\Events\WebhookReceived;
 use NotificationChannels\Zapmizer\Test\Fixtures\SignsWebhookDeliveries;
 use NotificationChannels\Zapmizer\Test\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * A single-tenant application: `ZAPMIZER_API_TOKEN` + `ZAPMIZER_WEBHOOK_SECRET`,
@@ -55,6 +56,41 @@ class SingleTenantWebhookTest extends TestCase
                 && $event->message->body === 'hello';
         });
         Event::assertDispatched(WebhookReceived::class, fn (WebhookReceived $event) => $event->connection === null);
+    }
+
+    /** @dataProvider messageContractEvents */
+    #[DataProvider('messageContractEvents')]
+    public function testAMessageContractEventIsAcknowledgedWithOneWarning(string $name)
+    {
+        Log::spy();
+        Event::fake([MessageReceived::class]);
+
+        $this->deliverSigned([
+            'id' => 'evt_1', 'version' => '2026-10-20', 'created_at' => '2026-11-16T12:00:00Z', 'wid' => '5581999990000',
+            'name' => $name, 'data' => ['id' => 'AAA', 'chat' => '5581988887777', 'type' => 'text', 'text' => 'oi'],
+        ], 'app-secret')
+            ->assertOk()
+            ->assertSeeText('Webhook Received');
+
+        Event::assertNotDispatched(MessageReceived::class);
+        Log::shouldHaveReceived('warning')->once()->withArgs(fn (string $message, array $context) => str_contains($message, 'version 2026-10-20')
+            && str_contains($message, 'does not read')
+            && str_contains($message, 'Recreate the webhook in version 2024-02-27')
+            && $context === ['name' => $name, 'version' => '2026-10-20', 'wid' => '5581999990000']);
+    }
+
+    public static function messageContractEvents(): array
+    {
+        return ['message_received' => ['message_received'], 'message_sent' => ['message_sent']];
+    }
+
+    public function testTheMessageEventDoesNotWarnAboutTheContract()
+    {
+        Log::spy();
+
+        $this->deliverSigned($this->messageEnvelope(), 'app-secret')->assertOk();
+
+        Log::shouldNotHaveReceived('warning');
     }
 
     public function testWrongSecretIsRefusedWithoutTheConnectionsTable()

@@ -5,16 +5,14 @@ namespace NotificationChannels\Zapmizer\Console;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
-use NotificationChannels\Zapmizer\Connect\PartnerClient;
-use NotificationChannels\Zapmizer\Exceptions\PartnerCredentialsException;
-use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
+use NotificationChannels\Zapmizer\Connect\ZapmizerApi;
+use NotificationChannels\Zapmizer\Contracts\Transport;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
-use NotificationChannels\Zapmizer\Exceptions\ZapmizerRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
 use NotificationChannels\Zapmizer\Install\ConnectableModel;
 use NotificationChannels\Zapmizer\Install\EnvFile;
+use NotificationChannels\Zapmizer\Support\BaseUri;
 use NotificationChannels\Zapmizer\Support\EmbedBrand;
-use NotificationChannels\Zapmizer\Support\Payload;
 use Symfony\Component\Console\Formatter\OutputFormatter;
 use Throwable;
 
@@ -69,9 +67,9 @@ class CheckCommand extends Command
 
         $this->checkAppKey();
         $this->checkConfig();
-        $this->checkBaseUri();
+        $baseUri = $this->checkBaseUri();
         $credentials = $this->checkPartnerCredentials();
-        $this->checkPartnerApi($credentials);
+        $this->checkPartnerApi($credentials, $baseUri);
         $this->checkMigration();
         $this->checkConnectable();
         $this->checkConnectRoutes();
@@ -102,13 +100,20 @@ class CheckCommand extends Command
             : $this->record('config', self::WARN, 'config/zapmizer.php não publicada: valem os padrões da lib', 'php artisan zapmizer:install');
     }
 
-    protected function checkBaseUri(): void
+    protected function checkBaseUri(): bool
     {
         $uri = config('zapmizer.base_uri');
+        $problem = BaseUri::problem(is_string($uri) ? $uri : null);
 
-        is_string($uri) && Payload::url(rtrim($uri, '/') . '/connect/sessions', underscoreInHost: true) !== null
-            ? $this->record('base_uri', self::OK, "ZAPMIZER_BASE_URI {$uri}")
-            : $this->record('base_uri', self::FAIL, 'ZAPMIZER_BASE_URI não é uma URL http(s) absoluta', 'ZAPMIZER_BASE_URI=https://app.zapmizer.com/api/');
+        if ($problem === null) {
+            $this->record('base_uri', self::OK, "ZAPMIZER_BASE_URI {$uri}");
+
+            return true;
+        }
+
+        $this->record('base_uri', self::FAIL, 'ZAPMIZER_BASE_URI ' . (is_string($uri) ? $uri . ' ' : '') . $problem, 'A URL da API da conta de parceiro: https://app.zapmizer.com/api/ ou https://app.parlichat.com/api/. Pergunte ao humano em qual deploy está a conta.');
+
+        return false;
     }
 
     protected function checkPartnerCredentials(): bool
@@ -136,10 +141,17 @@ class CheckCommand extends Command
         return true;
     }
 
-    protected function checkPartnerApi(bool $credentials): void
+    /**
+     * `GET {base}/partner/users/zapmizer-check` with the partner key. Only two
+     * answers prove the key: a 200 with the customer, or the 404 Zapmizer
+     * gives an unknown customer (`{"message": "Record not found."}`, with
+     * `details` saying the same). A 404 of a route that does not exist — a
+     * base_uri without /api, another server — says nothing about the key.
+     */
+    protected function checkPartnerApi(bool $credentials, bool $baseUri): void
     {
-        if (!$credentials) {
-            $this->record('partner_api', self::SKIP, 'credenciais na API: pulado, sem credenciais');
+        if (!$credentials || !$baseUri) {
+            $this->record('partner_api', self::SKIP, 'credenciais na API: pulado, ' . (!$credentials ? 'sem credenciais' : 'ZAPMIZER_BASE_URI inválida'));
 
             return;
         }
@@ -150,20 +162,40 @@ class CheckCommand extends Command
             return;
         }
 
-        try {
-            app(PartnerClient::class)->subscription(self::PROBE_EXTERNAL_ID);
+        $url = rtrim((string) config('zapmizer.base_uri'), '/') . '/partner/users/' . self::PROBE_EXTERNAL_ID;
 
-            $this->record('partner_api', self::OK, 'a Zapmizer aceitou as credenciais de parceiro');
-        } catch (PartnerCredentialsException) {
-            $this->record('partner_api', self::FAIL, 'a Zapmizer recusou as credenciais de parceiro (401)', 'Confira ZAPMIZER_PARTNER_ID, ZAPMIZER_PARTNER_SECRET e ZAPMIZER_BASE_URI (a chave é de um ambiente só).');
-        } catch (ZapmizerRateLimitedException) {
-            $this->record('partner_api', self::WARN, 'a Zapmizer respondeu 429: não deu para conferir as credenciais agora', 'Rode de novo em um minuto.');
+        try {
+            $response = (new ZapmizerApi(app(Transport::class)))->send('GET', $url, [], [
+                'X-Partner-Key' => config('zapmizer.partner.id') . '|' . config('zapmizer.partner.secret'),
+            ]);
         } catch (ZapmizerUnavailableException) {
             $this->record('partner_api', self::WARN, 'sem resposta da Zapmizer (sem rede ou 5xx): checagem remota pulada', 'Rode de novo com rede para conferir as credenciais.');
-        } catch (ZapmizerApiException $exception) {
-            $this->record('partner_api', self::WARN, "resposta inesperada da Zapmizer ({$exception->status()}) ao conferir as credenciais");
+
+            return;
         } catch (ZapmizerConnectException $exception) {
-            $this->record('partner_api', self::WARN, 'não deu para conferir as credenciais: ' . $exception->getMessage());
+            $this->record('partner_api', self::FAIL, "a ZAPMIZER_BASE_URI não respondeu como a API da Zapmizer ({$exception->getMessage()})", 'Confira a ZAPMIZER_BASE_URI: https://app.zapmizer.com/api/ ou https://app.parlichat.com/api/.');
+
+            return;
+        }
+
+        $status = $response->getStatusCode();
+        $body = json_decode((string) $response->getBody(), true);
+        $body = is_array($body) ? $body : [];
+
+        if ($status === 401 || $status === 403) {
+            $this->record('partner_api', self::FAIL, "a Zapmizer recusou as credenciais de parceiro ({$status})", 'Confira ZAPMIZER_PARTNER_ID, ZAPMIZER_PARTNER_SECRET e ZAPMIZER_BASE_URI (a chave é de um deploy e de um ambiente só).');
+        } elseif ($status === 404 && ($body['message'] ?? null) === 'Record not found.' && in_array($body['details'] ?? 'Record not found.', ['Record not found.', ''], true)) {
+            $this->record('partner_api', self::OK, 'a Zapmizer aceitou as credenciais de parceiro');
+        } elseif ($status === 200 && array_key_exists('external_id', $body)) {
+            $this->record('partner_api', self::OK, 'a Zapmizer aceitou as credenciais de parceiro');
+        } elseif ($status === 404) {
+            $message = is_string($body['details'] ?? null) ? $body['details'] : (is_string($body['message'] ?? null) ? $body['message'] : 'sem corpo');
+
+            $this->record('partner_api', self::FAIL, "a rota de parceiro não existe nessa ZAPMIZER_BASE_URI (404: {$message})", 'A ZAPMIZER_BASE_URI precisa ser a API da conta de parceiro, terminando em /api: https://app.zapmizer.com/api/ ou https://app.parlichat.com/api/.');
+        } elseif ($status === 429) {
+            $this->record('partner_api', self::WARN, 'a Zapmizer respondeu 429: não deu para conferir as credenciais agora', 'Rode de novo em um minuto.');
+        } else {
+            $this->record('partner_api', self::WARN, "resposta inesperada da Zapmizer ({$status}) ao conferir as credenciais", 'Rode de novo; se repetir, mostre a saída ao humano.');
         }
     }
 
@@ -269,6 +301,12 @@ class CheckCommand extends Command
             $this->record('embed_package', self::FAIL, InstallCommand::EMBED_PACKAGE . ' não está no package.json', 'Instale o front: npm install ' . InstallCommand::EMBED_VERSION . ' (ou bun/pnpm/yarn add, conforme o lockfile).');
 
             return;
+        }
+
+        $vue = $package['dependencies']['vue'] ?? $package['devDependencies']['vue'] ?? null;
+
+        if (is_string($vue) && preg_match('/(\d+)(?:\.(\d+))?/', $vue, $match) === 1 && version_compare($match[1] . '.' . ($match[2] ?? '0'), '3.3', '<')) {
+            $this->record('vue_version', self::WARN, "o package.json declara vue {$vue}: o @zapmizer/embed/vue pede vue >= 3.3", 'Suba o vue para ^3.3 (o InboxScreen usa @zapmizer/embed/vue).');
         }
 
         preg_match('/#(v\d+\.\d+\.\d+)$/', $version, $tag) === 1

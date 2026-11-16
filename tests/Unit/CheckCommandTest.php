@@ -47,7 +47,13 @@ class CheckCommandTest extends TestCase
         parent::tearDown();
     }
 
-    protected function partnerAnswers(int $status, array $body = ['message' => 'Record not found.']): void
+    /**
+     * The 404 Zapmizer gives an unknown customer: ResolvesPartnerUser's
+     * abort(404, 'Record not found.') through the api/* NotFound renderer.
+     */
+    private const UNKNOWN_CUSTOMER = ['message' => 'Record not found.', 'details' => 'Record not found.'];
+
+    protected function partnerAnswers(int $status, array $body = self::UNKNOWN_CUSTOMER): void
     {
         Http::fake(['zap.test/api/partner/users/*' => Http::response($body, $status)]);
     }
@@ -99,7 +105,73 @@ class CheckCommandTest extends TestCase
         Http::assertSentCount(1);
         Http::assertSent(fn (Request $request) => $request->method() === 'GET'
             && $request->url() === 'http://zap.test/api/partner/users/zapmizer-check'
-            && $request->hasHeader('X-Partner-Key', '12|partner-secret'));
+            && $request->hasHeader('X-Partner-Key', '12|partner-secret')
+            && $request->hasHeader('Accept', 'application/json'));
+    }
+
+    public function testA404OfAMissingRouteIsNotAnAcceptedKey()
+    {
+        // The base_uri without /api: Laravel's own 404 for the route.
+        $this->partnerAnswers(404, ['message' => 'The route partner/users/zapmizer-check could not be found.']);
+
+        $result = $this->checkJson();
+
+        $this->assertSame(1, $result['exit']);
+        $this->assertSame('fail', $result['checks']['partner_api']['status']);
+        $this->assertStringContainsString('rota de parceiro não existe', $result['checks']['partner_api']['message']);
+        $this->assertStringContainsString('/api', $result['checks']['partner_api']['hint']);
+    }
+
+    public function testA404OfAMissingApiRouteIsNotAnAcceptedKeyEither()
+    {
+        // Under api/* every 404 says "Record not found."; `details` tells them apart.
+        $this->partnerAnswers(404, ['message' => 'Record not found.', 'details' => 'The route api/v2/partner/users/zapmizer-check could not be found.']);
+
+        $result = $this->checkJson();
+
+        $this->assertSame(1, $result['exit']);
+        $this->assertSame('fail', $result['checks']['partner_api']['status']);
+        $this->assertStringContainsString('The route api/v2', $result['checks']['partner_api']['message']);
+    }
+
+    public function testAnHtmlPageIsNotTheApi()
+    {
+        Http::fake(['zap.test/*' => Http::response('<html>welcome</html>', 200, ['Content-Type' => 'text/html'])]);
+
+        $result = $this->checkJson();
+
+        $this->assertSame(1, $result['exit']);
+        $this->assertSame('fail', $result['checks']['partner_api']['status']);
+    }
+
+    public function testABaseUriWithoutApiFailsAndSkipsTheRemoteCheck()
+    {
+        config()->set('zapmizer.base_uri', 'https://app.parlichat.com/');
+        Http::fake();
+
+        $result = $this->checkJson();
+
+        $this->assertSame(1, $result['exit']);
+        $this->assertSame('fail', $result['checks']['base_uri']['status']);
+        $this->assertStringContainsString('precisa terminar em /api', $result['checks']['base_uri']['message']);
+        $this->assertSame('skip', $result['checks']['partner_api']['status']);
+        Http::assertNothingSent();
+    }
+
+    public function testAnOldVueIsAWarningWithTheInbox()
+    {
+        $this->partnerAnswers(404);
+        config()->set('zapmizer.inbox.enabled', true);
+        $this->reloadPackageRoutes();
+        $this->appFile('package.json', json_encode(['dependencies' => ['@zapmizer/embed' => 'github:zapmizer/embed#v0.1.2', 'vue' => '^3.2.47']]));
+
+        $old = $this->checkJson();
+        $this->assertSame(0, $old['exit']);
+        $this->assertSame('warn', $old['checks']['vue_version']['status']);
+        $this->assertStringContainsString('>= 3.3', $old['checks']['vue_version']['message']);
+
+        $this->appFile('package.json', json_encode(['dependencies' => ['@zapmizer/embed' => 'github:zapmizer/embed#v0.1.2', 'vue' => '^3.5.13']]));
+        $this->assertArrayNotHasKey('vue_version', $this->checkJson()['checks']);
     }
 
     public function testTheJsonOutputListsEveryCheck()

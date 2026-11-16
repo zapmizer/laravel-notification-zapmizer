@@ -3,10 +3,12 @@
 namespace NotificationChannels\Zapmizer\Test\Unit;
 
 use Illuminate\Http\Client\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use NotificationChannels\Zapmizer\Test\Fixtures\CreatesConnectionTables;
+use NotificationChannels\Zapmizer\Test\Fixtures\PlainUser;
 use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesFirstTeam;
 use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesNothing;
 use NotificationChannels\Zapmizer\Test\Fixtures\Team;
@@ -196,17 +198,69 @@ class InboxRouteTest extends TestCase
     {
         Log::spy();
         $user = $this->connectedUser();
-        $this->fakeSession(403, ['error' => 'missing_ability', 'message' => 'The token lacks inbox:attend.']);
+        $this->fakeSession(403, ['error' => 'origin_not_allowed', 'message' => 'Esta origem não está liberada para o parceiro.']);
 
         $this->postJson(route('zapmizer.inbox.session'))
             ->assertStatus(403)
-            ->assertExactJson(['code' => 'missing_ability']);
+            ->assertExactJson(['code' => 'origin_not_allowed']);
 
         Log::shouldHaveReceived('warning')->with('zapmizer: inbox session refused.', [
             'connection_id' => $user->zapmizerConnection->getKey(),
             'status' => 403,
-            'code' => 'missing_ability',
+            'code' => 'origin_not_allowed',
         ])->once();
+    }
+
+    public function testMissingAbilityAsksForANewConnect()
+    {
+        $this->assertAsksForANewConnect('missing_ability');
+    }
+
+    public function testNotAPartnerConnectionAsksForANewConnect()
+    {
+        $this->assertAsksForANewConnect('not_a_partner_connection');
+    }
+
+    private function assertAsksForANewConnect(string $error): void
+    {
+        Log::spy();
+        $user = $this->connectedUser();
+        $this->fakeSession(403, ['error' => $error, 'message' => 'refused']);
+
+        $this->postJson(route('zapmizer.inbox.session'))
+            ->assertStatus(422)
+            ->assertExactJson(['code' => 'reauth_required']);
+
+        Log::shouldHaveReceived('warning')->with('zapmizer: inbox session refused.', [
+            'connection_id' => $user->zapmizerConnection->getKey(),
+            'status' => 403,
+            'code' => $error,
+        ])->once();
+    }
+
+    public function testAUserThatIsNotConnectableIsNoConnectableNotA500()
+    {
+        $this->actingAs(PlainUser::create(['name' => 'Ana']));
+        Http::fake();
+
+        $this->postJson(route('zapmizer.inbox.session'))
+            ->assertStatus(403)
+            ->assertExactJson(['code' => 'no_connectable']);
+
+        Http::assertNothingSent();
+    }
+
+    public function testATokenThatNoLongerDecryptsAsksForANewConnect()
+    {
+        $user = $this->connectedUser();
+        DB::table('zapmizer_connections')->update(['api_token' => 'written-with-another-app-key']);
+        Http::fake();
+
+        $this->postJson(route('zapmizer.inbox.session'))
+            ->assertStatus(422)
+            ->assertExactJson(['code' => 'reauth_required']);
+
+        Http::assertNothingSent();
     }
 
     public function testZapmizerDownIsUnavailable()
@@ -247,7 +301,7 @@ class InboxRouteTest extends TestCase
         Http::assertNothingSent();
     }
 
-    public function testTheSessionRouteIsAWebRouteWithCsrfAndThrottle()
+    public function testTheSessionRouteIsBehindWebAuthAndThrottle()
     {
         $route = Route::getRoutes()->getByName('zapmizer.inbox.session');
 
@@ -260,5 +314,21 @@ class InboxRouteTest extends TestCase
         $keepalive = Route::getRoutes()->getByName('zapmizer.inbox.keepalive');
         $this->assertSame('zapmizer/inbox/keepalive', $keepalive->uri());
         $this->assertContains('GET', $keepalive->methods());
+    }
+
+    public function testTheSessionNeedsTheCsrfToken()
+    {
+        $this->connectedUser();
+        $this->fakeSession();
+        // VerifyCsrfToken lets every request through while running unit
+        // tests (`testing`): leave that environment to exercise it.
+        $this->app['env'] = 'local';
+
+        $this->postJson(route('zapmizer.inbox.session'))->assertStatus(419);
+        Http::assertNothingSent();
+
+        $this->withSession(['_token' => 'csrf-test-token'])
+            ->postJson(route('zapmizer.inbox.session'), [], ['X-CSRF-TOKEN' => 'csrf-test-token'])
+            ->assertOk();
     }
 }

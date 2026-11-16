@@ -53,17 +53,34 @@ final class ApiError
         );
     }
 
+    /**
+     * The message followed by the first error of each field. The very first
+     * error is left out when the message already carries it: Laravel's 422
+     * `message` is that error (plus "(and N more errors)").
+     */
     public function reason(): string
     {
         $parts = [$this->message];
+        $first = true;
 
         foreach ($this->errors as $messages) {
-            $parts[] = $messages[0];
+            if (!$first || !$this->carries($this->message, $messages[0])) {
+                $parts[] = $messages[0];
+            }
+
+            $first = false;
         }
 
         $reason = implode(' ', array_filter($parts, fn (?string $part) => $part !== null && trim($part) !== ''));
 
         return $reason !== '' ? $reason : $this->body;
+    }
+
+    private function carries(?string $message, string $error): bool
+    {
+        $error = trim($error);
+
+        return $message !== null && $error !== '' && str_contains(mb_strtolower($message), mb_strtolower($error));
     }
 
     private static function errorCode(array $payload): ?string

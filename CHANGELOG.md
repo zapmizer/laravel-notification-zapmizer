@@ -98,6 +98,7 @@ Subclasses: a propriedade `$http` não existe mais (as chamadas passam pelo `$tr
 
 - `Exceptions\ZapmizerException` (abstrata) é a raiz de todas as exceções da lib: `catch (ZapmizerException $e)` pega as do connect, do envio e do verify-number.
 - `Exceptions\ZapmizerApiException`, filha de `ZapmizerConnectException`: a Zapmizer recusou a chamada (4xx). `status()`, `error()` (o código da API, ou `null`), `reason()`, `errors()`, `payload()` e `apiError()`. Mensagem: `Zapmizer refused the request (HTTP {status}[, {error}])[: {reason}].`
+- `reason()` não repete o primeiro erro de campo quando o `message` já o traz (desde a 2.0.0-beta.4): o 422 do Laravel põe o primeiro erro no `message`, e a mensagem saía como `The to field is invalid. invalid.`.
 - `ZapmizerApiException::context()`: o `report()` do Laravel loga `zapmizer_status`, `zapmizer_error` e, na `ZapmizerRateLimitedException`, `zapmizer_retry_after` (veja `docs/erros.md`).
 - `Exceptions\ZapmizerRateLimitedException` (429), com `retryAfter(): ?int` lido do `Retry-After` em segundos; data HTTP, negativo ou texto dão `null`.
 - `Exceptions\ErrorCode`: uma constante por código `error` do contrato da API (`ErrorCode::WINDOW_CLOSED`, `ErrorCode::BOT_OFFLINE`, ...). `ErrorCode::UNKNOWN_API_VERSION` (400 de uma `api-version` que a Zapmizer não conhece em `GET /whatsapp-messages` e `POST /webhooks`) entrou com o snapshot do contrato de 16/11. `error()` devolve string: um código novo chega ao app sem release da lib.

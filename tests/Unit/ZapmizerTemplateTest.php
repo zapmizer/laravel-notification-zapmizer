@@ -193,7 +193,7 @@ class ZapmizerTemplateTest extends TestCase
             '409 bot_offline' => [409, '{"error":"bot_offline","message":"Conta do Whatsapp 5581999990000 offline."}', ZapmizerApiException::class, ErrorCode::BOT_OFFLINE, 'Conta do Whatsapp 5581999990000 offline.'],
             '422 refused, only message' => [422, '{"message":"Nenhum template com esse nome neste número."}', ZapmizerApiException::class, null, 'Nenhum template com esse nome neste número.'],
             '422 QR number' => [422, '{"message":"Este número não envia template aprovado."}', ZapmizerApiException::class, null, 'Este número não envia template aprovado.'],
-            '422 validation' => [422, '{"message":"The template field is required.","errors":{"template":["The template field is required."]}}', ZapmizerApiException::class, null, 'The template field is required. The template field is required.'],
+            '422 validation' => [422, '{"message":"The template field is required.","errors":{"template":["The template field is required."]}}', ZapmizerApiException::class, null, 'The template field is required.'],
         ];
     }
 

@@ -10,7 +10,7 @@ use NotificationChannels\Zapmizer\Exceptions\MediaRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\MediaRejectedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
-use NotificationChannels\Zapmizer\InboundMessage;
+use NotificationChannels\Zapmizer\Messages\Message;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
 use NotificationChannels\Zapmizer\Test\Fixtures\CreatesConnectionTables;
 use NotificationChannels\Zapmizer\Test\Fixtures\ExternalIdTeam;
@@ -348,16 +348,34 @@ class ConnectableTest extends TestCase
         $this->assertTrue(ZapmizerConnection::first()->connectable->is($team));
     }
 
-    protected function inboundMessage(): InboundMessage
+    protected function inboundMessage(): Message
     {
-        return InboundMessage::fromMessage([
-            'id' => ['_serialized' => 'true_5581999998888@c.us_3EB0ABC123', 'id' => '3EB0ABC123'],
+        return Message::fromContract([
+            'id' => '3EB0ABC123',
+            'chat' => '5581999998888@c.us',
+            'sender' => '5581999998888@c.us',
+            'type' => 'image',
+            'timestamp' => 1700000000,
+            'media' => ['mime' => 'image/png'],
+        ]);
+    }
+
+    public function testMediaAsksWithTheIdOfAMessageFromTheLegacyWebhookToo()
+    {
+        $this->fakeHttp(new Response(202, ['Content-Type' => 'application/json'], '{"media_state":"downloading"}'));
+        $connection = $this->connectedTeam(overrides: ['api_token' => 'team-token', 'bot_instance_id' => 77])->zapmizerConnection;
+
+        $connection->media(Message::fromLegacy([
+            'id' => ['_serialized' => 'false_5581999998888@c.us_3EB0ABC123', 'id' => '3EB0ABC123'],
             'from' => '5581999998888@c.us',
             'type' => 'image',
             'hasMedia' => true,
             'timestamp' => 1700000000,
             '_data' => ['mimetype' => 'image/png'],
-        ], '5581911110000@c.us');
+        ]));
+
+        parse_str(parse_url((string) $this->history[0]['request']->getUri(), PHP_URL_QUERY), $query);
+        $this->assertEquals(['bot_instance_id' => '77', 'message_id' => '3EB0ABC123', 'timestamp' => '1700000000'], $query);
     }
 
     public function testMediaAsksForTheConnectionsInstanceAndTheMessage()
@@ -371,7 +389,7 @@ class ConnectableTest extends TestCase
         $this->assertEquals('png-bytes', $download->contents());
         $request = $this->history[0]['request'];
         parse_str($request->getUri()->getQuery(), $query);
-        $this->assertEquals(['bot_instance_id' => '77', 'message_id' => 'true_5581999998888@c.us_3EB0ABC123', 'timestamp' => '1700000000'], $query);
+        $this->assertEquals(['bot_instance_id' => '77', 'message_id' => '3EB0ABC123', 'timestamp' => '1700000000'], $query);
         $this->assertEquals('Bearer team-token', $request->getHeaderLine('Authorization'));
     }
 

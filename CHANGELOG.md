@@ -2,9 +2,11 @@
 
 # Unreleased
 
-**Quebra a 0.3.** Leia "Upgrade da 0.3" antes de atualizar; o resto desta seção traz o de/para por tema.
+**Quebra a 0.3 e a 0.4.** Leia "Upgrade da 0.3 e da 0.4" antes de atualizar; o resto desta seção traz o de/para por tema.
 
-## Upgrade da 0.3
+## Upgrade da 0.3 e da 0.4
+
+A 0.4 só acrescentou o `syncMessages()` à 0.3, que segue igual aqui: a lista vale para as duas.
 
 1. **Zapmizer 1.148.10 ou superior.** O contrato que esta versão usa está todo nela (`user_id`/`team_id` no `connect/token`, reconnect, revogação e `partner/users` desde a 1.148.8; `appearance` da caixa e `user.email` do embed desde a 1.148.10). A 1.149.0 e a 1.150.0 citadas nas versões anteriores nunca foram lançadas.
 2. **Procure `CouldNotSendNotification` no app.** A classe saiu, e um `catch` dela não dá erro: só deixa de casar, e a exceção escapa. Troque por `catch (ZapmizerException $e)` ou pelas classes de "Envio" abaixo.
@@ -125,7 +127,7 @@ Subclasses: `Zapmizer` ganhou os métodos públicos `sentMessage()`, `metaMessag
 
 ## Connect
 
-**Breaking no fluxo de connect.** O de/para está na tabela; veja também "Connect flow" em "Upgrading from 0.3.x" (`docs/connect.md`).
+**Breaking no fluxo de connect.** O de/para está na tabela; veja também "Connect flow" em "Upgrading from 0.3.x or 0.4.x" (`docs/connect.md`).
 
 | Antes | Agora |
 | --- | --- |
@@ -219,7 +221,7 @@ Mídia recebida:
 - Um download de mídia cortado (erro de transporte, falha de leitura ou de escrita no meio da cópia, ou corpo menor que o `Content-Length` sem `Transfer-Encoding`) lança `ZapmizerUnavailableException` e não deixa arquivo. Antes lançava um `RuntimeException` cru, ou devolvia um `attached` truncado quando a conexão fechava limpa.
 - Sem conseguir criar ou abrir o arquivo temporário, uma resposta `200` de mídia lança `ZapmizerUnavailableException` (antes estourava `ErrorException`); os outros status não criam arquivo.
 - `MediaDownload::$size` passa a ser o total gravado no arquivo e deixa de ser `null` num download anexado (com gzip o `Content-Length` some da resposta).
-- `ZapmizerConnection::media()` sem instância pareada passa de `ZapmizerUnauthorizedException` a `ZapmizerConnectException` (`notPaired()`).
+- `ZapmizerConnection::media()` e `syncMessages()` sem instância pareada passam de `ZapmizerUnauthorizedException` a `ZapmizerConnectException` (`notPaired()`).
 - `Retry-After` não numérico na mídia passa de `0` para `null` (mensagem sem `Retry in`). O `reason()` da mídia corta HTML em 500 caracteres e deixa de incluir valor escalar não-string de `errors` (número).
 
 Subclasses: `InstanceClient::reasonFrom()` saiu (a regra está em `Support\ApiError`). Subclasses de `InstanceClient` ganham `reconnect()`, `revokeToken()`, `conversationSession()`, `inboxSession()` e, do trait `Connect\Concerns\BuildsZapmizerRequests`, `guardState()`, `withoutNulls()` e `clampExpiresIn()`. Esses nomes podem colidir com métodos já existentes nelas.
@@ -260,6 +262,18 @@ Veja "Per-connection webhook URL (opt-in)" em `docs/connect.md`.
   - na mesma rota, sem `zapmizer.partner.id`/`secret` (`partnerCredentialsNotProvided()`): de 500 a 503 `zapmizer_unavailable` com `report()`;
   - na mesma rota, com um usuário autenticado sem `Connectable` no resolvedor padrão (`notConnectable()`): de 500 a 503 `zapmizer_unavailable` com `report()`;
   - o `VerificationClient` não muda.
+
+# 0.4.1
+
+Só documentação. `syncMessages()` devolve as mensagens **gravadas** depois do cursor: as que chegam no sync de uma reconexão entram, mas a edição de uma mensagem que já existia não volta (o Zapmizer pagina pela chave primária). O texto da 0.4.0 dizia "editadas, apagadas".
+
+# 0.4.0
+
+Sem breaking. **Recuperar mensagens exige o Zapmizer 1.148.15 ou superior** (`GET /api/whatsapp-messages`).
+
+- **Sincronizar as mensagens do número.** `ZapmizerConnection::syncMessages($cursor = null, $since = null, $limit = null): Connect\SyncedMessages` lê tudo o que mudou nas mensagens do número desde o cursor (recebidas e enviadas, editadas, apagadas, as do sync na reconexão), cada uma traduzida como no webhook (`InboundMessage::fromMessage()`, motor wwebjs ou Rust). O Zapmizer não filtra nem deduplica: pule `fromMe` e deduplique por `$message->id`. `SyncedMessages` traz `messages`, `payloads` (o objeto cru, na mesma ordem), `cursor` (opaco; mantém o anterior quando nada veio) e `hasMore`. Entrada sem id é descartada sem travar a página. Sem `bot_instance_id` lança `ZapmizerUnauthorizedException`. Veja "Recovering what the webhook missed" em `docs/connect.md`.
+- `Connect\InstanceClient::syncMessages(int $botInstanceId, ?string $cursor = null, ?int $since = null, ?int $limit = null)`.
+- Laravel do 8.83 ao 13, com PHP 8.1.
 
 # 0.3.1
 

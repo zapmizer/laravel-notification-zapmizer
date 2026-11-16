@@ -188,7 +188,7 @@ Mídia recebida:
 - Um download de mídia cortado (erro de transporte, falha de leitura ou de escrita no meio da cópia, ou corpo menor que o `Content-Length` sem `Transfer-Encoding`) lança `ZapmizerUnavailableException` e não deixa arquivo. Antes lançava um `RuntimeException` cru, ou devolvia um `attached` truncado quando a conexão fechava limpa.
 - Sem conseguir criar ou abrir o arquivo temporário, uma resposta `200` de mídia lança `ZapmizerUnavailableException` (antes estourava `ErrorException`); os outros status não criam arquivo.
 - `MediaDownload::$size` passa a ser o total gravado no arquivo e deixa de ser `null` num download anexado (com gzip o `Content-Length` some da resposta).
-- `ZapmizerConnection::media()` sem instância pareada passa de `ZapmizerUnauthorizedException` a `ZapmizerConnectException` (`notPaired()`).
+- `ZapmizerConnection::media()` e `syncMessages()` sem instância pareada passam de `ZapmizerUnauthorizedException` a `ZapmizerConnectException` (`notPaired()`).
 - `Retry-After` não numérico na mídia passa de `0` para `null` (mensagem sem `Retry in`). O `reason()` da mídia corta HTML em 500 caracteres e deixa de incluir valor escalar não-string de `errors` (número).
 
 Subclasses: `InstanceClient::reasonFrom()` saiu (a regra está em `Support\ApiError`). Subclasses de `InstanceClient` ganham `reconnect()`, `revokeToken()`, `conversationSession()`, `inboxSession()` e, do trait `Connect\Concerns\BuildsZapmizerRequests`, `guardState()`, `withoutNulls()` e `clampExpiresIn()`. Esses nomes podem colidir com métodos já existentes nelas.

@@ -759,6 +759,12 @@ class ConnectController extends Controller
         return 'exchange_failed';
     }
 
+    /**
+     * The page that posts `$status` to the opener. A status without a
+     * message here (a subclass's POPUP_ERRORS or popupStatus() with one of
+     * its own) keeps its name and gets the generic message, logged: a 500
+     * would never reach the opener.
+     */
     protected function result(string $status): View
     {
         $messages = [
@@ -774,9 +780,13 @@ class ConnectController extends Controller
             'no_connectable' => 'There is nothing to connect on this account. Close this window, sign in again and retry.',
         ];
 
+        if (!isset($messages[$status])) {
+            Log::warning('zapmizer: connect result without a message.', ['status' => mb_substr($status, 0, 100)]);
+        }
+
         return view('zapmizer::connect-result', [
             'status' => $status,
-            'message' => $messages[$status],
+            'message' => $messages[$status] ?? $messages['exchange_failed'],
         ]);
     }
 }

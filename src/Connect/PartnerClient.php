@@ -19,6 +19,9 @@ use Psr\Http\Message\ResponseInterface;
  * team token. Creates the authorization session the popup opens, exchanges
  * the callback code for the authorized team's token, and reads the
  * subscription and creates the checkout of a customer by its `external_id`.
+ *
+ * It sends no `api-version`, on purpose: Zapmizer's partner routes do not
+ * read it, and their answers are the same with or without it.
  */
 class PartnerClient
 {

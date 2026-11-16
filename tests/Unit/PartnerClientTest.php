@@ -1037,4 +1037,52 @@ class PartnerClientTest extends TestCase
 
         Http::assertNothingSent();
     }
+
+    /**
+     * The partner routes (connect/sessions, connect/token, partner/users/*)
+     * do not read `api-version` on Zapmizer: the client does not send it,
+     * whatever `zapmizer.api_version` says.
+     */
+    public function testThePartnerCallsDoNotSendTheApiVersionOfTheConfig()
+    {
+        config(['zapmizer.api_version' => '2026-10-20']);
+
+        $client = $this->makeClient(new MockHandler([
+            new Response(201, [], json_encode(['url' => 'http://localhost/connect/1'])),
+            new Response(404),
+        ]));
+
+        $client->createSession('https://app.test/cb', 'state-1');
+        $client->subscription('team-1');
+
+        $this->assertCount(2, $this->history);
+
+        foreach ($this->history as $entry) {
+            $this->assertFalse($entry['request']->hasHeader('api-version'));
+        }
+    }
+
+    /**
+     * The partner fixes only `Accept` and `X-Partner-Key`: an `api-version`
+     * a subclass passes to request() goes as it came.
+     */
+    public function testAnApiVersionASubclassPassesGoesAsItCame()
+    {
+        $this->fakeZapmizer(new MockHandler([new Response(404)]));
+
+        $client = new class('partner-id', 'partner-secret', new LaravelHttpTransport(), 'http://localhost/api') extends PartnerClient {
+            protected function request(string $method, string $path, array $options = []): \Psr\Http\Message\ResponseInterface
+            {
+                $options['headers'] = ['api-version' => '2026-10-20', 'x-partner-key' => 'other|key'];
+
+                return parent::request($method, $path, $options);
+            }
+        };
+
+        $client->subscription('team-1');
+
+        $request = $this->history[0]['request'];
+        $this->assertSame('2026-10-20', $request->getHeaderLine('api-version'));
+        $this->assertSame('partner-id|partner-secret', $request->getHeaderLine('X-Partner-Key'));
+    }
 }

@@ -345,6 +345,19 @@ class ConnectableTest extends TestCase
         }
     }
 
+    public function testSyncMessagesRequiresAPairedInstance()
+    {
+        $connection = $this->connectedTeam(overrides: ['bot_instance_id' => null])->zapmizerConnection;
+
+        try {
+            $connection->syncMessages();
+            $this->fail('expected a ZapmizerConnectException');
+        } catch (ZapmizerConnectException $exception) {
+            $this->assertNotInstanceOf(ZapmizerUnauthorizedException::class, $exception);
+            $this->assertSame('There is no paired Zapmizer instance for this connection.', $exception->getMessage());
+        }
+    }
+
     public function testAwaitMediaRetriesWhileDownloading()
     {
         $this->fakeHttp(

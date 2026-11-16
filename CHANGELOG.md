@@ -176,6 +176,21 @@ Subclasses:
 
 Veja "Connect flow" em "Upgrading from 0.3.x" (`docs/connect.md`).
 
+**Webhook por conexão:**
+
+- Webhook com endereço por conexão, opt-in:
+  - `zapmizer.webhook.per_connection` (`ZAPMIZER_WEBHOOK_PER_CONNECTION`), desligado por padrão. Quem publicou `config/zapmizer.php` precisa acrescentar a chave, porque o merge da config é raso. Use junto com `zapmizer.connect.revoke_previous_token=true`.
+  - Migration opcional `--tag=zapmizer-migrations-webhook-key` (coluna `webhook_key`).
+  - Rota `POST {prefix}/webhook/{chave}` (`zapmizer.webhook.connection`) e middleware `VerifyConnectionWebhookSignature`, que descarta com 200 o evento cujo `wid` não é o número da conexão.
+  - Desligado, nada muda. As conexões existentes seguem na rota única até um connect novo.
+- `ZapmizerConnection::$hidden` inclui `webhook_key`.
+
+Veja "Per-connection webhook URL (opt-in)" em `docs/connect.md`.
+
+**Webhook na versão 2026-10-20:**
+
+- Uma entrega `message_received` ou `message_sent` (eventos do contrato de mensagens, webhook na versão `2026-10-20`) continua respondida com 200 `Webhook Received`, mas loga um warning (uma vez por entrega, com `name`, `version`, `connection_id` e `wid`): esta versão não lê esses eventos, o `MessageReceived` não dispara e o webhook precisa ser recriado na versão `2024-02-27`. Constante `WebhookController::MESSAGE_CONTRACT_EVENTS`; método protegido `warnAboutTheMessageContract()`, que pode colidir com o de uma subclasse.
+
 **Upgrade da 0.3:**
 
 - `new PartnerClient($id, $secret, $guzzle, $uri)` → `new PartnerClient($id, $secret, null, $uri)` (o transporte vem do container, com a config) ou com um `Contracts\Transport` no lugar do `null`.

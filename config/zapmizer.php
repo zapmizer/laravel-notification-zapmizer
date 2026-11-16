@@ -60,6 +60,16 @@ return [
         // Accepted drift between X-Zapmizer-Timestamp and now, in seconds.
         // Closes replay of an old delivery without breaking legitimate retries.
         'tolerance' => (int) env('ZAPMIZER_WEBHOOK_TOLERANCE', 300),
+        // Give each connection made through the connect flow its own webhook URL
+        // ({prefix}/webhook/{key}): the owner is found by the path, only its secret
+        // is tested, and events of another number are discarded. Needs the
+        // zapmizer-migrations-webhook-key migration, and is meant to run with
+        // connect.revoke_previous_token = true (otherwise the old webhooks keep
+        // delivering until revoked on Zapmizer). Connections made before keep using
+        // the shared route. Do not turn it off while any connection uses its own
+        // URL: its deliveries would get 404. A published config/zapmizer.php must
+        // get this key added by hand.
+        'per_connection' => env('ZAPMIZER_WEBHOOK_PER_CONNECTION', false),
     ],
 
     'models' => [

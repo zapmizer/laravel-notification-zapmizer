@@ -195,7 +195,7 @@ X-Zapmizer-Signature: v1=<hex>[,v1=<hex>]     # HMAC-SHA256(secret, "{timestamp}
 
 The package applies `VerifyWebhookSignature` to `POST /zapmizer/webhook` itself. Two kinds of secret can sign a delivery:
 
-- **`zapmizer.webhook.secret`** (`ZAPMIZER_WEBHOOK_SECRET`) — the secret of the webhook you registered by hand on Zapmizer's "Webhooks" screen, the single-tenant setup. It is tested first, without touching the database. A delivery it signs carries **no connection** (`$event->connection === null`).
+- **`zapmizer.webhook.secret`** (`ZAPMIZER_WEBHOOK_SECRET`) — the secret of the webhook you registered by hand on Zapmizer's "Webhooks" screen, the single-tenant setup. Create that webhook with version **`2024-02-27`**: the screen suggests `2026-10-20`, and with it the `message` event never comes. It is tested first, without touching the database. A delivery it signs carries **no connection** (`$event->connection === null`).
 - **each `ZapmizerConnection`'s secret** — registered by the connect flow. The connections whose `phone_number` matches `X-Wid` are queried first; only on a miss is the whole table scanned (a signed delivery is never refused because `X-Wid` lied — the proof is the HMAC). An application that never published the `zapmizer_connections` migration skips this leg: the table's existence is checked (and cached once true), not assumed.
 
 It accepts a 5-minute clock drift (`zapmizer.webhook.tolerance`), refuses with **401 and a log line** (reason, wid, timestamp, ip — never the signature), and refuses an inactive connection with 403. A credential that no longer decrypts (`APP_KEY` changed) only takes its own connection out of the matching.
@@ -344,7 +344,7 @@ foreach ($page->messages as $i => $message) {
 $cursor = $page->cursor; // keep it; call again while $page->hasMore
 ```
 
-Each message is an `InboundMessage` built exactly like the webhook's, so the same listener handles both. Zapmizer neither filters nor deduplicates: the listener must skip `fromMe` and be idempotent on `$message->id`, since a message may come back more than once. Run it on a schedule (every minute is fine: the endpoint allows 30 calls a minute per number). Requires Zapmizer with `GET /api/whatsapp-messages`.
+The call always goes with `api-version: 2025-06-27`, whatever `zapmizer.api_version` says: from `2026-10-20` on Zapmizer answers in its message contract, which this version does not read (it throws instead of returning an empty page). Each message is an `InboundMessage` built exactly like the webhook's, so the same listener handles both. Zapmizer neither filters nor deduplicates: the listener must skip `fromMe` and be idempotent on `$message->id`, since a message may come back more than once. Run it on a schedule (every minute is fine: the endpoint allows 30 calls a minute per number). Requires Zapmizer with `GET /api/whatsapp-messages`.
 
 ## 7. Rotating the webhook secret
 

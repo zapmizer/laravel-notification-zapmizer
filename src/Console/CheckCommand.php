@@ -5,15 +5,21 @@ namespace NotificationChannels\Zapmizer\Console;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
+use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Connect\ZapmizerApi;
 use NotificationChannels\Zapmizer\Contracts\Transport;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerRateLimitedException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
 use NotificationChannels\Zapmizer\Install\ConnectableModel;
 use NotificationChannels\Zapmizer\Install\EnvFile;
 use NotificationChannels\Zapmizer\Support\BaseUri;
 use NotificationChannels\Zapmizer\Support\ConnectionWebhook;
 use NotificationChannels\Zapmizer\Support\EmbedBrand;
+use NotificationChannels\Zapmizer\Support\PhoneNumber;
 use NotificationChannels\Zapmizer\Support\RouteGroups;
 use Symfony\Component\Console\Formatter\OutputFormatter;
 use Throwable;
@@ -21,13 +27,19 @@ use Throwable;
 /**
  * Class CheckCommand.
  *
- * `php artisan zapmizer:check`: what the connect and the inbox need, one
- * line each, ✓/✗/!/-. Exits non-zero when anything critical fails. The only
- * remote call is `GET /api/partner/users/{external_id}` with the partner
- * key, which reads and writes nothing: Zapmizer answers 401 for a key it
- * does not accept (before anything else), and 200 or 404 once it accepts
- * it. Without network (or with `--offline`) that check is skipped with a
- * warning. `--json` prints the same for an agent.
+ * `php artisan zapmizer:check`: what the app uses, one line each,
+ * ✓/✗/!/-/○. The send is always checked (the token, the base URI, the
+ * default `from`); each route group (connect, webhook, inbox,
+ * verify-number) only when it is switched on, and `off` (○) otherwise,
+ * which is neither a failure nor a warning. Exits non-zero only when
+ * something critical fails.
+ *
+ * The remote calls read and write nothing: `GET /api/bot-instances` with
+ * the app's token (when it has one), and, with the connect on,
+ * `GET /api/partner/users/{external_id}` with the partner key (Zapmizer
+ * answers 401 for a key it does not accept, and 200 or 404 once it accepts
+ * it). Without network (or with `--offline`) they are skipped. `--json`
+ * prints the same for an agent.
  *
  * Kept parseable on PHP 8.0: Artisan instantiates it on every boot.
  */
@@ -41,6 +53,9 @@ class CheckCommand extends Command
 
     public const SKIP = 'skip';
 
+    /** A route group switched off: nothing of it is checked. */
+    public const OFF = 'off';
+
     /**
      * The external id of the probe: valid for Zapmizer, and harmless if a
      * customer happens to have it (a 200 proves the key just the same).
@@ -52,12 +67,12 @@ class CheckCommand extends Command
      */
     protected $signature = 'zapmizer:check
         {--json : Saída em JSON, para agentes}
-        {--offline : Pula a checagem das credenciais na API da Zapmizer}';
+        {--offline : Pula as checagens na API da Zapmizer}';
 
     /**
      * @var string
      */
-    protected $description = 'Confere a instalação da Zapmizer: credenciais, migration, model Connectable, rotas, caixa de entrada e APP_URL';
+    protected $description = 'Confere a instalação da Zapmizer: o envio sempre, e o connect, o webhook, a caixa de entrada e o verify-number quando ligados';
 
     /** @var array<int, array{id: string, status: string, message: string, hint: string|null}> */
     protected array $checks = [];
@@ -67,17 +82,20 @@ class CheckCommand extends Command
         // Artisan::call() reuses the instance: start clean every run.
         $this->checks = [];
 
-        $this->checkAppKey();
+        $connect = RouteGroups::switchedOn(RouteGroups::CONNECT);
+        $inbox = $this->inboxEnabled();
+        $verify = RouteGroups::switchedOn(RouteGroups::VERIFY_NUMBER);
+
+        $this->checkAppKey($connect);
         $this->checkConfig();
         $baseUri = $this->checkBaseUri();
-        $credentials = $this->checkPartnerCredentials();
-        $this->checkPartnerApi($credentials, $baseUri);
-        $this->checkMigration();
-        $this->checkConnectable();
-        $this->checkConnectRoutes();
+        $token = $this->checkApiToken($connect, $verify);
+        $this->checkSendApi($token, $baseUri);
+        $this->checkFromNumber();
+        $this->checkConnect($connect, $baseUri);
         $this->checkWebhookRoutes();
-        $inbox = $this->inboxEnabled();
         $this->checkInboxRoutes($inbox);
+        $this->checkVerifyNumber($verify);
         $this->checkEmbedPackage($inbox);
         $this->checkEmbedBrand($inbox);
         $this->checkAppUrl($inbox);
@@ -89,8 +107,148 @@ class CheckCommand extends Command
         return $failed > 0 ? self::FAILURE : self::SUCCESS;
     }
 
-    protected function checkAppKey(): void
+    /**
+     * The checks of the connect, or each of them `off` with the group.
+     */
+    protected function checkConnect(bool $connect, bool $baseUri): void
     {
+        if (!$connect) {
+            foreach (['partner_credentials' => 'credenciais de parceiro', 'partner_api' => 'credenciais na API', 'migration' => 'tabela das conexões', 'connectable' => 'model Connectable'] as $id => $what) {
+                $this->off($id, "{$what}: só com o connect", RouteGroups::CONNECT);
+            }
+
+            $this->off('connect_routes', 'connect desligado (ZAPMIZER_ROUTES_CONNECT)', RouteGroups::CONNECT);
+
+            return;
+        }
+
+        $credentials = $this->checkPartnerCredentials();
+        $this->checkPartnerApi($credentials, $baseUri);
+        $this->checkMigration();
+        $this->checkConnectable();
+        $this->checkConnectRoutes();
+    }
+
+    /**
+     * A group switched off: not a failure nor a warning, with how to switch
+     * it on.
+     */
+    protected function off(string $id, string $message, string $group): void
+    {
+        $how = [
+            RouteGroups::CONNECT => 'Se o app conecta números de usuários ou times: ZAPMIZER_ROUTES_CONNECT=true no .env (o zapmizer:install --model liga).',
+            RouteGroups::WEBHOOK => 'Se o app recebe mensagens ou eventos pela lib: ZAPMIZER_ROUTES_WEBHOOK=true no .env (o zapmizer:install --webhook liga).',
+            RouteGroups::INBOX => 'Se o app mostra a caixa de entrada: ZAPMIZER_ROUTES_INBOX=true no .env, com o connect (o zapmizer:install --inbox liga os dois).',
+            RouteGroups::VERIFY_NUMBER => 'Se o app manda o usuário verificar o número pela rota da lib: ZAPMIZER_ROUTES_VERIFY_NUMBER=true no .env.',
+        ];
+
+        $this->record($id, self::OFF, $message, $how[$group] ?? null);
+    }
+
+    /**
+     * The app's own token (`ZAPMIZER_API_TOKEN`): what `ZapmizerMessage`,
+     * `app(Zapmizer::class)` and the verify-number send with. With the
+     * connect, each connection sends with its own and the app's is
+     * optional, unless the verify-number is on.
+     */
+    protected function checkApiToken(bool $connect, bool $verify): bool
+    {
+        if (filled(config('zapmizer.api_token'))) {
+            $this->record('api_token', self::OK, 'ZAPMIZER_API_TOKEN preenchido');
+
+            return true;
+        }
+
+        if ($connect && !$verify) {
+            $this->record('api_token', self::SKIP, 'ZAPMIZER_API_TOKEN vazio: cada conexão envia com o próprio token ($model->zapmizerMessage())', 'Preencha só se o app também envia pelo número dele (ZapmizerMessage::create(), o canal sem conexão).');
+
+            return false;
+        }
+
+        $this->record('api_token', self::FAIL, 'ZAPMIZER_API_TOKEN vazio: ' . ($verify ? 'a verificação de número e o envio precisam do token do time' : 'nada é enviado sem o token do time'), 'O token de API do time na Zapmizer (Configurações > API). Peça ao humano; não invente.');
+
+        return false;
+    }
+
+    /**
+     * `GET {base}/bot-instances` with the app's token: reads and changes
+     * nothing, and proves the token (401 refuses it) and that it sees a
+     * number to send from.
+     */
+    protected function checkSendApi(bool $token, bool $baseUri): void
+    {
+        if (!$token || !$baseUri) {
+            $this->record('send_api', self::SKIP, 'token na API: pulado, ' . (!$token ? 'sem ZAPMIZER_API_TOKEN' : 'ZAPMIZER_BASE_URI inválida'));
+
+            return;
+        }
+
+        if ($this->option('offline')) {
+            $this->record('send_api', self::SKIP, 'token na API: pulado (--offline)');
+
+            return;
+        }
+
+        $tokenHint = 'Confira ZAPMIZER_API_TOKEN e ZAPMIZER_BASE_URI (o token é de um deploy só).';
+
+        try {
+            $numbers = (new InstanceClient((string) config('zapmizer.api_token'), app(Transport::class), (string) config('zapmizer.base_uri'), config('zapmizer.api_version')))->instances();
+        } catch (ZapmizerUnauthorizedException) {
+            $this->record('send_api', self::FAIL, 'a Zapmizer recusou o ZAPMIZER_API_TOKEN (401)', $tokenHint);
+
+            return;
+        } catch (ZapmizerRateLimitedException) {
+            $this->record('send_api', self::WARN, 'a Zapmizer respondeu 429: não deu para conferir o token agora', 'Rode de novo em um minuto.');
+
+            return;
+        } catch (ZapmizerApiException $exception) {
+            $this->record('send_api', self::FAIL, "a Zapmizer recusou a leitura dos números com o ZAPMIZER_API_TOKEN ({$exception->status()}: {$exception->getMessage()})", $exception->status() === 404 ? 'A ZAPMIZER_BASE_URI precisa ser a API, terminando em /api.' : $tokenHint);
+
+            return;
+        } catch (ZapmizerUnavailableException) {
+            $this->record('send_api', self::WARN, 'sem resposta da Zapmizer (sem rede ou 5xx): checagem do token pulada', 'Rode de novo com rede para conferir o token.');
+
+            return;
+        } catch (ZapmizerConnectException $exception) {
+            $this->record('send_api', self::FAIL, "a ZAPMIZER_BASE_URI não respondeu como a API da Zapmizer ({$exception->getMessage()})", 'Confira a ZAPMIZER_BASE_URI: https://app.zapmizer.com/api/ ou https://app.parlichat.com/api/.');
+
+            return;
+        }
+
+        $numbers === []
+            ? $this->record('send_api', self::WARN, 'a Zapmizer aceitou o ZAPMIZER_API_TOKEN, mas ele não vê número nenhum: nada sai até o time conectar um', 'Conecte um número no time da Zapmizer dono do token.')
+            : $this->record('send_api', self::OK, 'a Zapmizer aceitou o ZAPMIZER_API_TOKEN (' . count($numbers) . (count($numbers) === 1 ? ' número' : ' números') . ')');
+    }
+
+    /**
+     * `ZAPMIZER_FROM_NUMBER`, when set, is a number: the `from` of the sends
+     * that take it from the config.
+     */
+    protected function checkFromNumber(): void
+    {
+        $from = config('zapmizer.from_number');
+
+        if (blank($from)) {
+            $this->record('from_number', self::SKIP, 'ZAPMIZER_FROM_NUMBER vazio: cada envio diz o from');
+
+            return;
+        }
+
+        $digits = PhoneNumber::digits(Str::before(is_scalar($from) ? (string) $from : '', '@'));
+
+        strlen($digits) >= 10 && strlen($digits) <= 15
+            ? $this->record('from_number', self::OK, "ZAPMIZER_FROM_NUMBER {$digits}")
+            : $this->record('from_number', self::FAIL, 'ZAPMIZER_FROM_NUMBER não é um número de WhatsApp (' . (is_scalar($from) ? (string) $from : get_debug_type($from)) . ')', 'O número do time com DDI e DDD, só dígitos: 5511999999999.');
+    }
+
+    protected function checkAppKey(bool $connect): void
+    {
+        if (!$connect) {
+            $this->off('app_key', 'APP_KEY: só com o connect (cifra o token das conexões)', RouteGroups::CONNECT);
+
+            return;
+        }
+
         filled(config('app.key'))
             ? $this->record('app_key', self::OK, 'APP_KEY definida (cifra o token e o segredo das conexões)')
             : $this->record('app_key', self::FAIL, 'APP_KEY vazia: o token das conexões é gravado cifrado', 'php artisan key:generate');
@@ -98,9 +256,16 @@ class CheckCommand extends Command
 
     protected function checkConfig(): void
     {
-        is_file(config_path('zapmizer.php'))
-            ? $this->record('config', self::OK, 'config/zapmizer.php publicada')
-            : $this->record('config', self::WARN, 'config/zapmizer.php não publicada: valem os padrões da lib', 'php artisan zapmizer:install');
+        if (is_file(config_path('zapmizer.php'))) {
+            $this->record('config', self::OK, 'config/zapmizer.php publicada');
+
+            return;
+        }
+
+        // Sending needs only the .env; the groups have keys worth seeing.
+        $this->anyGroupOn()
+            ? $this->record('config', self::WARN, 'config/zapmizer.php não publicada: valem os padrões da lib', 'php artisan zapmizer:install')
+            : $this->record('config', self::SKIP, 'config/zapmizer.php não publicada: o envio lê o .env (ZAPMIZER_*)');
     }
 
     protected function checkBaseUri(): bool
@@ -261,12 +426,6 @@ class CheckCommand extends Command
 
     protected function checkConnectRoutes(): void
     {
-        if (!RouteGroups::switchedOn(RouteGroups::CONNECT)) {
-            $this->record('connect_routes', self::FAIL, 'rotas do connect desligadas (ZAPMIZER_ROUTES_CONNECT)', 'ZAPMIZER_ROUTES_CONNECT=true no .env (o zapmizer:install --model liga), e php artisan config:clear se a config estiver em cache.');
-
-            return;
-        }
-
         $missing = $this->missingRoutes(['zapmizer.connect.show', 'zapmizer.connect.start', 'zapmizer.connect.callback', 'zapmizer.connect.destroy', 'zapmizer.connect.reconnect', 'zapmizer.connect.reconnect.callback']);
 
         $missing === []
@@ -283,7 +442,7 @@ class CheckCommand extends Command
         if (!RouteGroups::switchedOn(RouteGroups::WEBHOOK)) {
             RouteGroups::switchedOn(RouteGroups::CONNECT)
                 ? $this->record('webhook_routes', self::WARN, 'webhook da lib desligado (ZAPMIZER_ROUTES_WEBHOOK): as conexões novas nascem sem webhook e não recebem mensagens nem eventos', 'Se o app recebe mensagens pela lib, ZAPMIZER_ROUTES_WEBHOOK=true (o zapmizer:install --webhook liga); as conexões feitas sem ele precisam conectar de novo.')
-                : $this->record('webhook_routes', self::SKIP, 'webhook da lib desligado (ZAPMIZER_ROUTES_WEBHOOK)');
+                : $this->off('webhook_routes', 'webhook da lib desligado (ZAPMIZER_ROUTES_WEBHOOK)', RouteGroups::WEBHOOK);
 
             return;
         }
@@ -302,7 +461,7 @@ class CheckCommand extends Command
 
             $legacy
                 ? $this->record('inbox_routes', self::WARN, 'ZAPMIZER_INBOX_ENABLED não liga mais a caixa de entrada (desde a 2.0.0-beta.4)', 'Troque por ZAPMIZER_ROUTES_INBOX=true no .env (e tire a chave antiga), ou apague a chave antiga se o app não usa a caixa da lib.')
-                : $this->record('inbox_routes', self::SKIP, 'caixa de entrada desligada (ZAPMIZER_ROUTES_INBOX)');
+                : $this->off('inbox_routes', 'caixa de entrada desligada (ZAPMIZER_ROUTES_INBOX)', RouteGroups::INBOX);
 
             return;
         }
@@ -318,6 +477,49 @@ class CheckCommand extends Command
         $missing === []
             ? $this->record('inbox_routes', self::OK, 'rotas da caixa de entrada registradas')
             : $this->record('inbox_routes', self::FAIL, 'rotas ausentes: ' . implode(', ', $missing), $this->missingRoutesHint());
+    }
+
+    /**
+     * The verify-number route sends the logged-in user to the hosted page:
+     * the user model implements MustVerifyWhatsapp, and the state lives in
+     * `whatsapp_verifieds`. The token is checked by `api_token`.
+     */
+    protected function checkVerifyNumber(bool $verify): void
+    {
+        if (!$verify) {
+            $this->off('verify_number_routes', 'verify-number desligado (ZAPMIZER_ROUTES_VERIFY_NUMBER)', RouteGroups::VERIFY_NUMBER);
+
+            return;
+        }
+
+        if ($this->missingRoutes(['zapmizer.verify_number']) !== []) {
+            $this->record('verify_number_routes', self::FAIL, 'rota ausente: zapmizer.verify_number', $this->missingRoutesHint());
+
+            return;
+        }
+
+        $user = ltrim((string) config('auth.providers.users.model'), '\\');
+
+        if ($user === '' || !class_exists($user) || !is_subclass_of($user, 'NotificationChannels\Zapmizer\Contracts\MustVerifyWhatsapp')) {
+            $this->record('verify_number_routes', self::FAIL, "o verify-number usa o usuário logado, mas {$user} não implementa MustVerifyWhatsapp", 'No model de usuário, implements Contracts\\MustVerifyWhatsapp (o contrato) e use MustVerifyWhatsapp (o trait): docs/verify-number.md.');
+
+            return;
+        }
+
+        $model = config('zapmizer.models.whatsapp_verified', 'NotificationChannels\Zapmizer\Models\WhatsappVerified');
+
+        try {
+            $table = (new $model())->getTable();
+            $exists = Schema::connection((new $model())->getConnectionName())->hasTable($table);
+        } catch (Throwable $exception) {
+            $this->record('verify_number_routes', self::FAIL, 'não deu para ler o banco: ' . $exception->getMessage(), 'Confira a conexão do banco e rode php artisan migrate.');
+
+            return;
+        }
+
+        $exists
+            ? $this->record('verify_number_routes', self::OK, "verify-number registrado ({$user} é MustVerifyWhatsapp, tabela {$table} criada)")
+            : $this->record('verify_number_routes', self::FAIL, "tabela {$table} não existe (estado da verificação de número)", 'php artisan vendor:publish --tag=zapmizer-migrations-verify e php artisan migrate');
     }
 
     /**
@@ -351,7 +553,7 @@ class CheckCommand extends Command
     protected function checkEmbedPackage(bool $inbox): void
     {
         if (!$inbox) {
-            $this->record('embed_package', self::SKIP, '@zapmizer/embed: não precisa sem a caixa de entrada');
+            $this->off('embed_package', '@zapmizer/embed: só com a caixa de entrada', RouteGroups::INBOX);
 
             return;
         }
@@ -396,7 +598,7 @@ class CheckCommand extends Command
     protected function checkEmbedBrand(bool $inbox): void
     {
         if (!$inbox) {
-            $this->record('embed_brand', self::SKIP, 'marca do embed: não precisa sem a caixa de entrada');
+            $this->off('embed_brand', 'marca do embed: só com a caixa de entrada', RouteGroups::INBOX);
 
             return;
         }
@@ -468,6 +670,12 @@ class CheckCommand extends Command
      */
     protected function checkAppUrl(bool $inbox): void
     {
+        if (!$this->anyGroupOn()) {
+            $this->off('app_url', 'APP_URL: só com um grupo de rotas ligado (o envio não usa)', RouteGroups::CONNECT);
+
+            return;
+        }
+
         $url = (string) config('app.url');
         $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
         $host = strtolower((string) parse_url($url, PHP_URL_HOST));
@@ -498,6 +706,35 @@ class CheckCommand extends Command
         if ($inbox && is_string($origin) && trim($origin) !== '' && preg_match('#^https?://[^/?\#]+/?$#i', trim($origin)) !== 1) {
             $this->record('parent_origin', self::FAIL, "ZAPMIZER_INBOX_PARENT_ORIGIN ({$origin}) não é uma origem", 'Só esquema, host e porta: https://seu-app.com');
         }
+    }
+
+    /**
+     * "o envio, o connect e a caixa de entrada": what was checked.
+     */
+    protected function checkedParts(): string
+    {
+        $names = [
+            RouteGroups::CONNECT => 'o connect',
+            RouteGroups::WEBHOOK => 'o webhook',
+            RouteGroups::INBOX => 'a caixa de entrada',
+            RouteGroups::VERIFY_NUMBER => 'o verify-number',
+        ];
+        $parts = ['o envio'];
+
+        foreach ($names as $group => $name) {
+            if (RouteGroups::switchedOn($group)) {
+                $parts[] = $name;
+            }
+        }
+
+        $last = array_pop($parts);
+
+        return $parts === [] ? $last : implode(', ', $parts) . ' e ' . $last;
+    }
+
+    protected function anyGroupOn(): bool
+    {
+        return array_filter(RouteGroups::ALL, fn (string $group) => RouteGroups::switchedOn($group)) !== [];
     }
 
     protected function inboxEnabled(): bool
@@ -561,6 +798,7 @@ class CheckCommand extends Command
             self::FAIL => '<fg=red>✗</>',
             self::WARN => '<comment>!</comment>',
             self::SKIP => '<fg=gray>-</>',
+            self::OFF => '<fg=gray>○</>',
         ];
 
         $this->line('');
@@ -570,14 +808,14 @@ class CheckCommand extends Command
         foreach ($this->checks as $check) {
             $this->line("  {$marks[$check['status']]} " . OutputFormatter::escape($check['message']));
 
-            if ($check['hint'] !== null && $check['status'] !== self::OK) {
+            if ($check['hint'] !== null && !in_array($check['status'], [self::OK, self::OFF], true)) {
                 $this->line('      <fg=gray>→ ' . OutputFormatter::escape($check['hint']) . '</>');
             }
         }
 
         $this->line('');
         $this->line($failed === 0
-            ? '  <info>Tudo certo para o connect' . ($this->inboxEnabled() ? ' e a caixa de entrada' : '') . '.</info>'
+            ? '  <info>Tudo certo para ' . $this->checkedParts() . '.</info>'
             : "  <fg=red>{$failed} " . ($failed === 1 ? 'problema crítico' : 'problemas críticos') . '.</>');
         $this->line('');
     }

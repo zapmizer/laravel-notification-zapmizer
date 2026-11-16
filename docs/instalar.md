@@ -29,7 +29,7 @@ Pergunte uma coisa por vez, e só o que você não conseguir descobrir lendo o a
 ### 1. Instalar o pacote
 
 ```bash
-composer require "zapmizer/laravel-notification-zapmizer:^2.0.0-beta.4@beta"
+composer require "zapmizer/laravel-notification-zapmizer:^2.0.0-beta.5@beta"
 ```
 
 ### 2. Rodar o instalador
@@ -216,32 +216,52 @@ Num host fora da tabela, a lib pergunta a marca ao próprio deploy: `GET {raiz w
 ### 5. Conferir
 
 ```bash
-php artisan zapmizer:check          # para humanos: ✓, ✗, ! e -
+php artisan zapmizer:check          # para humanos: ✓, ✗, !, - e ○
 php artisan zapmizer:check --json   # para agentes
 php artisan zapmizer:check --offline
 ```
 
-Sai com código diferente de zero quando algo crítico falha. As chamadas externas só leem: `GET {ZAPMIZER_BASE_URI}/partner/users/zapmizer-check` com a chave de parceiro e, com a caixa ligada num host fora dos deploys conhecidos, o `GET /brand/manifest.json` do deploy (veja [A marca do embed](#a-marca-do-embed)). A Zapmizer responde `401` para uma chave que não aceita; aceitando, responde `200` com o cliente ou o `404` de cliente desconhecido, `{"message": "Record not found.", "details": "Record not found."}`. Só esses dois provam a chave: um 404 de rota (uma `base_uri` sem `/api`, ou outro servidor) falha com a dica de conferir a `ZAPMIZER_BASE_URI`. Sem rede, ou com `--offline`, essa checagem é pulada com aviso. A evidência está no servidor: `ResolvesPartnerUser` faz `abort_if(..., 404, 'Record not found.')`, e o handler de 404 de `api/*` (`bootstrap/app.php`) responde `message: "Record not found."` com a mensagem original em `details`.
+O check confere **só o que está ligado**: o envio sempre; o connect, o webhook, a caixa de entrada e o verify-number só com o grupo ligado (`ZAPMIZER_ROUTES_*`). Um grupo desligado aparece como `off` (○), com a dica de como ligar, e não conta como falha nem como aviso: um app que só envia passa com todos os grupos em `off`. As dependências entre os grupos continuam valendo: a caixa ligada sem o connect falha, e o connect ligado sem o webhook avisa.
 
-| `id` | Confere | Crítico |
+Sai com código diferente de zero só quando algo crítico falha (`fail`); `ok`, `warn`, `skip` e `off` saem com 0. As chamadas externas só leem:
+
+- `GET {ZAPMIZER_BASE_URI}/bot-instances` com o `ZAPMIZER_API_TOKEN`, quando ele está preenchido: a lista de números que o token vê, sem efeito colateral. `401` recusa o token; uma lista vazia avisa que nada sai até o time conectar um número.
+- Com o connect ligado, `GET {ZAPMIZER_BASE_URI}/partner/users/zapmizer-check` com a chave de parceiro. A Zapmizer responde `401` para uma chave que não aceita; aceitando, responde `200` com o cliente ou o `404` de cliente desconhecido, `{"message": "Record not found.", "details": "Record not found."}`. Só esses dois provam a chave: um 404 de rota (uma `base_uri` sem `/api`, ou outro servidor) falha com a dica de conferir a `ZAPMIZER_BASE_URI`. A evidência está no servidor: `ResolvesPartnerUser` faz `abort_if(..., 404, 'Record not found.')`, e o handler de 404 de `api/*` (`bootstrap/app.php`) responde `message: "Record not found."` com a mensagem original em `details`.
+- Com a caixa ligada num host fora dos deploys conhecidos, o `GET /brand/manifest.json` do deploy (veja [A marca do embed](#a-marca-do-embed)).
+
+Sem rede, ou com `--offline`, as checagens remotas são puladas (`skip`, ou aviso quando a Zapmizer não responde).
+
+| `id` | Confere | Quando | Crítico |
+| --- | --- | --- | --- |
+| `app_key` | `APP_KEY` definida (o token das conexões é gravado cifrado) | connect | sim |
+| `config` | `config/zapmizer.php` publicada | sempre | não (aviso com algum grupo ligado; `skip` num app que só envia) |
+| `base_uri` | `ZAPMIZER_BASE_URI` é uma URL http(s) absoluta terminando em `/api` | sempre | sim |
+| `api_token` | `ZAPMIZER_API_TOKEN` preenchido | sempre | sim sem o connect ou com o verify-number; `skip` com o connect (cada conexão envia com o próprio token) |
+| `send_api` | a Zapmizer aceita o `ZAPMIZER_API_TOKEN` (`GET /bot-instances`) | com o token | sim no `401`, num `4xx` ou numa resposta que não é a API; aviso sem rede, em `5xx`, `429` ou sem número |
+| `from_number` | `ZAPMIZER_FROM_NUMBER`, quando definido, é um número (10 a 15 dígitos, máscara e `@c.us` à parte) | sempre | sim; `skip` vazio |
+| `partner_credentials` | `ZAPMIZER_PARTNER_ID` (só dígitos) e `ZAPMIZER_PARTNER_SECRET` preenchidos | connect | sim |
+| `partner_api` | a Zapmizer aceita as credenciais (`200` com o cliente ou `404 Record not found.`) | connect | sim no `401`/`403`, num 404 de rota ou numa resposta que não é a API; aviso sem rede, em `5xx` ou `429` |
+| `migration` | a tabela `zapmizer_connections` existe | connect | sim |
+| `connectable` | o model que o resolver usa implementa `Connectable` | connect | sim |
+| `connect_routes` | as rotas do connect e do reconnect registradas | connect | sim |
+| `webhook_routes` | a rota do webhook registrada (e a por conexão, com `ZAPMIZER_WEBHOOK_PER_CONNECTION`) | webhook | sim com a rota ausente; aviso com o connect ligado e o webhook não (as conexões não recebem mensagens) |
+| `inbox_routes` | o connect ligado e as rotas da caixa registradas | caixa | sim; aviso quando o app ainda tem a `ZAPMIZER_INBOX_ENABLED`, que não liga mais nada |
+| `verify_number_routes` | a rota `zapmizer.verify_number` registrada, o model de usuário com `MustVerifyWhatsapp` e a tabela `whatsapp_verifieds` | verify-number | sim |
+| `embed_package` | `@zapmizer/embed` no `package.json`, com tag fixa a partir da v0.1.3 | caixa | sim sem o pacote; aviso sem tag ou com tag anterior à v0.1.3 |
+| `vue_version` | aparece só com a caixa ligada e um `vue` < 3.3 no `package.json` | caixa | não (aviso) |
+| `embed_brand` | `VITE_ZAPMIZER_BRAND` do `.env` igual à marca do deploy da `ZAPMIZER_BASE_URI` (pelo host conhecido, ou lida de `/brand/manifest.json` do deploy) | caixa | sim; aviso num host fora da tabela que não diz a marca |
+| `app_url` | `APP_URL` absoluto; aviso com `http` ou host local | algum grupo | sim só se não for URL |
+| `parent_origin` | `ZAPMIZER_INBOX_PARENT_ORIGIN`, quando definido, é uma origem | caixa | sim |
+
+Fora do "Quando", o item sai como `off`. No JSON, cada item traz `id`, `status`, `message` e `hint` (a dica, ou `null`); `ok` diz se nada falhou. O `status` é um destes, e a lista não muda sem aviso no CHANGELOG:
+
+| `status` | Significa | Exit code |
 | --- | --- | --- |
-| `app_key` | `APP_KEY` definida (o token das conexões é gravado cifrado) | sim |
-| `config` | `config/zapmizer.php` publicada | não |
-| `base_uri` | `ZAPMIZER_BASE_URI` é uma URL http(s) absoluta terminando em `/api` | sim |
-| `partner_credentials` | `ZAPMIZER_PARTNER_ID` (só dígitos) e `ZAPMIZER_PARTNER_SECRET` preenchidos | sim |
-| `partner_api` | a Zapmizer aceita as credenciais (`200` com o cliente ou `404 Record not found.`) | sim no `401`/`403`, num 404 de rota ou numa resposta que não é a API; aviso sem rede, em `5xx` ou `429` |
-| `migration` | a tabela `zapmizer_connections` existe | sim |
-| `connectable` | o model que o resolver usa implementa `Connectable` | sim |
-| `connect_routes` | `ZAPMIZER_ROUTES_CONNECT=true` e as rotas do connect e do reconnect registradas | sim |
-| `webhook_routes` | com `ZAPMIZER_ROUTES_WEBHOOK=true`, a rota do webhook registrada (e a por conexão, com `ZAPMIZER_WEBHOOK_PER_CONNECTION`) | sim com o grupo ligado e a rota ausente; aviso com o connect ligado e o webhook não (as conexões não recebem mensagens) |
-| `inbox_routes` | com `ZAPMIZER_ROUTES_INBOX=true`, o connect ligado e as rotas da caixa registradas | sim; aviso quando o app ainda tem a `ZAPMIZER_INBOX_ENABLED`, que não liga mais nada |
-| `embed_package` | `@zapmizer/embed` no `package.json`, com tag fixa a partir da v0.1.3 | sim sem o pacote; aviso sem tag ou com tag anterior à v0.1.3 |
-| `vue_version` | aparece só com a caixa ligada e um `vue` < 3.3 no `package.json` | não (aviso) |
-| `embed_brand` | `VITE_ZAPMIZER_BRAND` do `.env` igual à marca do deploy da `ZAPMIZER_BASE_URI` (pelo host conhecido, ou lida de `/brand/manifest.json` do deploy) | sim, com a caixa ligada; aviso num host fora da tabela que não diz a marca |
-| `app_url` | `APP_URL` absoluto; aviso com `http` ou host local | sim só se não for URL |
-| `parent_origin` | `ZAPMIZER_INBOX_PARENT_ORIGIN`, quando definido, é uma origem | sim |
-
-No JSON, cada item traz `id`, `status` (`ok`, `fail`, `warn` ou `skip`), `message` e `hint`, e `ok` diz se nada falhou.
+| `ok` | conferido e certo | 0 |
+| `warn` | funciona, mas vale olhar | 0 |
+| `skip` | não deu ou não precisou conferir (sem rede, `--offline`, sem o valor opcional) | 0 |
+| `off` | o grupo está desligado: nada dele foi conferido; o `hint` diz como ligar (desde a 2.0.0-beta.5) | 0 |
+| `fail` | crítico | 1 |
 
 ### 6. O que fica para o humano
 

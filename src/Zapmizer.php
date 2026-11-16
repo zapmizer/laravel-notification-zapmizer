@@ -13,16 +13,27 @@ use NotificationChannels\Zapmizer\Messages\QrMessageStatus;
 use NotificationChannels\Zapmizer\Messages\SentMessage;
 use NotificationChannels\Zapmizer\Messages\SentTemplate;
 use NotificationChannels\Zapmizer\Messages\TrackingPayload;
+use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
+use NotificationChannels\Zapmizer\Testing\ZapmizerFake;
 use NotificationChannels\Zapmizer\Support\JsonResponse;
 use NotificationChannels\Zapmizer\Support\Payload;
 use Psr\Http\Message\ResponseInterface;
 
 /**
  * Class Zapmizer.
+ *
+ * The messages client, and the one way out of every send of the package:
+ * `ZapmizerMessage::send()`, the `zapmizer` channel and the client of a
+ * connection all send through it. While `Facades\Zapmizer::fake()` is on,
+ * the sends and the tracking go to the fake instead (see
+ * Testing\ZapmizerFake), whichever way the client was made.
  */
 class Zapmizer
 {
     protected Transport $transport;
+
+    /** The connection this client sends as, when it was made for one. */
+    protected ?ZapmizerConnection $connection = null;
 
     /** @var null|string Zapmizer Bot API Token. */
     protected ?string $token;
@@ -53,6 +64,25 @@ class Zapmizer
     public function setToken(string $token): self
     {
         $this->token = $token;
+
+        return $this;
+    }
+
+    /**
+     * The connection this client sends as (`ZapmizerConnection::zapmizer()`),
+     * or null for the app's own token.
+     */
+    public function getConnection(): ?ZapmizerConnection
+    {
+        return $this->connection;
+    }
+
+    /**
+     * @return $this
+     */
+    public function setConnection(?ZapmizerConnection $connection): self
+    {
+        $this->connection = $connection;
 
         return $this;
     }
@@ -100,6 +130,10 @@ class Zapmizer
      */
     public function sendMessage(array $params): SentMessage
     {
+        if (($fake = $this->fake()) !== null) {
+            return $fake->message($params, null, $this->token, $this->apiBaseUri, $this->connection);
+        }
+
         $this->guardToken();
 
         return SentMessage::fromArray($this->decode($this->post(['form_params' => $params])));
@@ -110,6 +144,10 @@ class Zapmizer
      */
     public function sendMessageWithFile(array $params, string $filePath): SentMessage
     {
+        if (($fake = $this->fake()) !== null) {
+            return $fake->message($params, $filePath, $this->token, $this->apiBaseUri, $this->connection);
+        }
+
         $this->guardToken();
 
         $file = @fopen($filePath, 'r');
@@ -155,8 +193,6 @@ class Zapmizer
      */
     public function sendTemplate(string $from, string $to, string $template, ?string $language = null, array $body = [], ?string $header = null): SentTemplate
     {
-        $this->guardToken();
-
         $variables = array_filter([
             'body' => $body === [] ? null : array_values($body),
             'header' => $header,
@@ -169,6 +205,12 @@ class Zapmizer
             'language' => $language,
             'variables' => $variables === [] ? null : $variables,
         ], fn ($value) => $value !== null);
+
+        if (($fake = $this->fake()) !== null) {
+            return $fake->template($payload, $this->token, $this->apiBaseUri, $this->connection);
+        }
+
+        $this->guardToken();
 
         return SentTemplate::fromArray($this->decode($this->request('POST', '/template-messages', ['json' => $payload])));
     }
@@ -184,6 +226,10 @@ class Zapmizer
     {
         if (!TrackingPayload::isId($id)) {
             throw new InvalidArgumentException('The sent message id must not be empty, `.` nor `..`.');
+        }
+
+        if (($fake = $this->fake()) !== null) {
+            return $fake->qrStatus($id);
         }
 
         $this->guardToken();
@@ -204,6 +250,10 @@ class Zapmizer
 
         if ($id === null) {
             throw new InvalidArgumentException('The meta message id must be a positive integer.');
+        }
+
+        if (($fake = $this->fake()) !== null) {
+            return $fake->metaStatus((string) $id);
         }
 
         $this->guardToken();
@@ -312,6 +362,16 @@ class Zapmizer
         }
 
         return $payload;
+    }
+
+    /**
+     * The fake of `Facades\Zapmizer::fake()`, while it is on.
+     */
+    protected function fake(): ?ZapmizerFake
+    {
+        $container = Container::getInstance();
+
+        return $container->bound(ZapmizerFake::class) ? $container->make(ZapmizerFake::class) : null;
     }
 
     /**

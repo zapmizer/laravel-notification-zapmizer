@@ -37,6 +37,8 @@ use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesFirstTeam;
 use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesExternalIdTeam;
 use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesNothing;
 use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesPlainModel;
+use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesNull;
+use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesWithABug;
 use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesTeamWithoutTheKeyColumn;
 use NotificationChannels\Zapmizer\Test\Fixtures\SignsWebhookDeliveries;
 use NotificationChannels\Zapmizer\Test\Fixtures\Team;
@@ -2719,22 +2721,67 @@ class ConnectRouteTest extends TestCase
 
     // --- resolver -------------------------------------------------------
 
-    public function testAResolverReturningANonConnectableFailsNamingTheClass()
+    public function testAResolverReturningANonConnectableIsNoConnectableOnEveryRoute()
     {
+        // A custom resolver that hands back a model without Connectable is
+        // the same setup defect as the default one with a user model that
+        // lacks it: 403 no_connectable (and the popup's no_connectable),
+        // never a 500, with a warning naming the class and the resolver.
+        Log::spy();
         $this->fakeHttp();
         config()->set('zapmizer.connect.resolver', ResolvesPlainModel::class);
         $this->actingAsUser();
+        $this->recordReports();
+
+        $this->getJson(route('zapmizer.connect.show'))->assertForbidden()->assertExactJson(['code' => 'no_connectable']);
+        $this->deleteJson(route('zapmizer.connect.destroy'))->assertForbidden()->assertExactJson(['code' => 'no_connectable']);
+        $this->postJson(route('zapmizer.connect.start'))->assertForbidden()->assertExactJson(['code' => 'no_connectable']);
+        $this->postJson(route('zapmizer.connect.reconnect'))->assertForbidden()->assertExactJson(['code' => 'no_connectable']);
+
+        $this->withSession($this->pendingSession())
+            ->get(route('zapmizer.connect.callback', ['code' => 'c', 'state' => 's']))
+            ->assertOk()
+            ->assertSee('status: "no_connectable"', false);
+
+        $this->get(route('zapmizer.connect.reconnect.callback', ['status' => 'reconnected', 'state' => 's']))
+            ->assertOk()
+            ->assertSee('status: "no_connectable"', false);
+
+        $this->assertCount(0, $this->reported);
+        $this->assertCount(0, $this->history);
+        Log::shouldHaveReceived('warning')
+            ->with('zapmizer: the connect resolver returned a model that is not Connectable.', \Mockery::on(fn (array $context) => $context['resolver'] === ResolvesPlainModel::class
+                && $context['returned'] === PlainModel::class
+                && str_contains($context['reason'], PlainModel::class)))
+            ->times(6);
+    }
+
+    public function testAResolverReturningNullIsNoConnectableToo()
+    {
+        Log::spy();
+        $this->fakeHttp();
+        config()->set('zapmizer.connect.resolver', ResolvesNull::class);
+        $this->actingAsUser();
+
+        $this->getJson(route('zapmizer.connect.show'))->assertForbidden()->assertExactJson(['code' => 'no_connectable']);
+
+        Log::shouldHaveReceived('warning')
+            ->with('zapmizer: the connect resolver returned a model that is not Connectable.', \Mockery::on(fn (array $context) => $context['resolver'] === ResolvesNull::class && $context['returned'] === 'null'))
+            ->once();
+    }
+
+    public function testATypeErrorInsideTheResolverIsNotSwallowed()
+    {
+        // Only the resolver's own return type is a setup defect; a bug
+        // inside it stays a bug.
+        $this->fakeHttp();
+        config()->set('zapmizer.connect.resolver', ResolvesWithABug::class);
+        $this->actingAsUser();
         $this->withoutExceptionHandling();
 
-        // The contract is the return type: no method_exists deep in the
-        // controller, the resolver itself refuses to hand the model over.
-        try {
-            $this->getJson(route('zapmizer.connect.show'));
-            $this->fail('Expected TypeError.');
-        } catch (\TypeError $exception) {
-            $this->assertStringContainsString('Contracts\\Connectable', $exception->getMessage());
-            $this->assertStringContainsString(PlainModel::class, $exception->getMessage());
-        }
+        $this->expectException(\TypeError::class);
+
+        $this->getJson(route('zapmizer.connect.show'));
     }
 
     public function testAResolverWithNothingToConnectAnswers403WithAStableCode()

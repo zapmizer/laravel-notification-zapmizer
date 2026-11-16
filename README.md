@@ -11,7 +11,7 @@ Instale a lib zapmizer/laravel-notification-zapmizer (2.0 beta) neste app, com o
 The commands, in order (Inertia + Vue 3 app; the guide covers Blade):
 
 ```bash
-composer require "zapmizer/laravel-notification-zapmizer:^2.0.0-beta.4@beta"
+composer require "zapmizer/laravel-notification-zapmizer:^2.0.0-beta.5@beta"
 php artisan zapmizer:install --base-uri=https://app.zapmizer.com/api/ --model=App\\Models\\User --inbox --no-interaction   # or https://app.parlichat.com/api/
 php artisan migrate
 npm install github:zapmizer/embed#v0.1.3 axios lucide-vue-next   # or bun/pnpm/yarn add, as the install output says
@@ -22,7 +22,7 @@ Then mount `resources/js/zapmizer/InboxScreen.vue` (all the components sit in th
 
 > Full guides live in [`docs/`](docs/README.md). The [wiki](https://github.com/zapmizer/laravel-notification-zapmizer/wiki) is a mirror of `docs/` on `main`; edit `docs/`, not the wiki.
 
-Send WhatsApp messages from Laravel through [Zapmizer](https://app.zapmizer.com): a `zapmizer` notification channel and a `ZapmizerMessage` builder for text and files. On top of that, optional pieces you turn on as you need them: each model (a `Team`, a `User`) connects its own WhatsApp number in a hosted popup and receives messages on a signed webhook (`Connectable`), the conversation or the inbox opens embedded in your app (`EmbedSessionResponse`), and users verify their number (`MustVerifyWhatsapp`). Every exception of the package extends `ZapmizerException`, and the sending, connect and embed calls go through Laravel's `Http`, so `Http::fake()` covers them in tests.
+Send WhatsApp messages from Laravel through [Zapmizer](https://app.zapmizer.com): a `zapmizer` notification channel and a `ZapmizerMessage` builder for text and files. On top of that, optional pieces you turn on as you need them: each model (a `Team`, a `User`) connects its own WhatsApp number in a hosted popup and receives messages on a signed webhook (`Connectable`), the conversation or the inbox opens embedded in your app (`EmbedSessionResponse`), and users verify their number (`MustVerifyWhatsapp`). Every exception of the package extends `ZapmizerException`, and the sending, connect and embed calls go through Laravel's `Http`, so `Http::fake()` covers them in tests; for the sends, `NotificationChannels\Zapmizer\Facades\Zapmizer::fake()` catches every one, whatever the path, with `assertSent()` and friends (see [docs/envio.md](docs/envio.md#testes)).
 
 ## Requirements
 

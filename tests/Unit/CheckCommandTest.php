@@ -455,18 +455,33 @@ class CheckCommandTest extends TestCase
         $this->assertStringContainsString('route:clear', $result['checks']['inbox_routes']['hint']);
     }
 
-    public function testALocalAppUrlIsAWarningAndABrokenOneAFailure()
+    public function testALocalAppUrlIsAWarningOnlyAgainstAProductionDeploy()
     {
         $this->partnerAnswers(404);
-
         config()->set('app.url', 'http://localhost');
-        $local = $this->checkJson();
-        $this->assertSame(0, $local['exit']);
-        $this->assertSame('warn', $local['checks']['app_url']['status']);
-        $this->assertStringContainsString('https', $local['checks']['app_url']['message']);
 
+        // Against a local or staging Zapmizer, http is fine: the zapbot's
+        // PartnerUrlRule asks for https only when isProduction().
+        $dev = $this->checkJson();
+        $this->assertSame(0, $dev['exit']);
+        $this->assertSame('ok', $dev['checks']['app_url']['status']);
+        $this->assertStringContainsString('https só é exigido em produção', $dev['checks']['app_url']['message']);
+
+        // Against a production deploy it is a warning, with the tunnel hint.
+        config()->set('zapmizer.base_uri', 'https://app.zapmizer.com/api/');
+        $production = $this->checkJson(['--offline' => true]);
+        $this->assertSame('warn', $production['checks']['app_url']['status']);
+        $this->assertStringContainsString('deploy de produção', $production['checks']['app_url']['message']);
+        $this->assertStringContainsString('túnel', $production['checks']['app_url']['hint']);
+    }
+
+    public function testABrokenAppUrlFails()
+    {
+        $this->partnerAnswers(404);
         config()->set('app.url', 'not a url');
+
         $broken = $this->checkJson();
+
         $this->assertSame(1, $broken['exit']);
         $this->assertSame('fail', $broken['checks']['app_url']['status']);
     }

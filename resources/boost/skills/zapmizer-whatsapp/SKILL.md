@@ -119,7 +119,7 @@ Each check has `id`, `status` (`ok`, `fail`, `warn`, `skip`), `message` and `hin
 - `embed_brand` fails: set `VITE_ZAPMIZER_BRAND` to the brand the hint gives and rebuild; ask the human only if the `ZAPMIZER_BASE_URI` itself is in doubt.
 - `embed_brand` warns that the host is not a known deploy: ask the human the deploy's brand, then set `VITE_ZAPMIZER_BRAND` and `ZAPMIZER_EMBED_BRAND` to it and rebuild.
 - The inbox falls back to the connect button ("A conexão com o WhatsApp precisa ser refeita"): the token was revoked, no longer decrypts, or predates the inbox (`missing_ability`, `not_a_partner_connection`, answered as `422 reauth_required`). The user connects again.
-- Connecting the number itself (popup + QR code on the phone) is the human's step. Testing it in development needs a public https URL (a tunnel) allowed on the partner account.
+- Connecting the number itself (popup, approval and picking or pairing the number) is the human's step. Testing it in development against a production deploy (app.zapmizer.com, app.parlichat.com) needs a public https URL (a tunnel) allowed on the partner account; against a local Zapmizer, http works.
 
 ## Sending
 

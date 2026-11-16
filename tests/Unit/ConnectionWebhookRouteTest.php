@@ -195,6 +195,28 @@ class ConnectionWebhookRouteTest extends TestCase
         $this->assertSame('http://localhost/zapmizer/webhook', $this->sentBody(0)['webhook_url']);
     }
 
+    /** @dataProvider perConnectionValues */
+    #[DataProvider('perConnectionValues')]
+    public function testWithTheWebhookGroupOffTheConnectAsksForNoWebhook(?string $value, bool $on)
+    {
+        // A connect-only app (sends through the connected numbers, receives
+        // nothing): no public route, so no webhook_url, nor webhook_version,
+        // nor a webhook key for the connection.
+        $this->addWebhookKeyColumn();
+        $this->applyPerConnection($value);
+        config()->set('zapmizer.routes.webhook', false);
+        $this->reloadPackageRoutes();
+        $this->actingAsUser();
+        $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer(['webhook_id' => null, 'webhook_secret' => null]));
+
+        $this->assertFalse(Route::has('zapmizer.webhook'));
+        $this->connect()->assertSee('status: "ok"', false);
+
+        $this->assertArrayNotHasKey('webhook_url', $this->sentBody(0));
+        $this->assertArrayNotHasKey('webhook_version', $this->sentBody(0));
+        $this->assertNull(DB::table('zapmizer_connections')->value('webhook_key'));
+    }
+
     public function testC40ThePackageRegistersNothing()
     {
         config()->set('zapmizer.routes.enabled', false);

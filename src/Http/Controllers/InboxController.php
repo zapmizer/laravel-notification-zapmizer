@@ -21,7 +21,7 @@ use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
 /**
  * Class InboxController.
  *
- * The backend of the embedded inbox (`zapmizer.inbox.enabled`): `session`
+ * The backend of the embedded inbox (`zapmizer.routes.inbox`): `session`
  * is the endpoint the `openSession` of @zapmizer/embed calls, and
  * `keepalive` the one its `keepAlive` pings. The connection is the one of
  * the model `zapmizer.connect.resolver` returns — the same the connect flow

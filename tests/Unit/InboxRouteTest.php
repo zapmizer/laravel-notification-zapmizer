@@ -30,7 +30,7 @@ class InboxRouteTest extends TestCase
     {
         $app['config']->set('app.key', 'base64:' . base64_encode(random_bytes(32)));
         $app['config']->set('zapmizer.base_uri', 'http://zap.test/api/');
-        $app['config']->set('zapmizer.inbox.enabled', true);
+        $app['config']->set('zapmizer.routes.inbox', true);
     }
 
     protected function connectedUser(array $overrides = [], string $name = 'Ana Atendente'): User

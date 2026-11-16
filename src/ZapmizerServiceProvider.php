@@ -18,6 +18,8 @@ use NotificationChannels\Zapmizer\Contracts\ResolvesConnectable;
 use NotificationChannels\Zapmizer\Contracts\Transport;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Support\ConnectionWebhook;
+use NotificationChannels\Zapmizer\Support\RouteGroups;
+use Illuminate\Contracts\Foundation\CachesConfiguration;
 
 class ZapmizerServiceProvider extends ServiceProvider
 {
@@ -76,7 +78,25 @@ class ZapmizerServiceProvider extends ServiceProvider
 
         if ($this->isLumen() === false) {
             $this->mergeConfigFrom(__DIR__ . '/../config/zapmizer.php', 'zapmizer');
+            $this->mergeRouteGroups();
         }
+    }
+
+    /**
+     * The config merge is shallow: a `config/zapmizer.php` published before
+     * the route groups has `routes` without their keys. Fill in the missing
+     * ones from the package's (with their env), keeping the app's.
+     */
+    protected function mergeRouteGroups(): void
+    {
+        if ($this->app instanceof CachesConfiguration && $this->app->configurationIsCached()) {
+            return;
+        }
+
+        $routes = config('zapmizer.routes');
+        $defaults = (require __DIR__ . '/../config/zapmizer.php')['routes'];
+
+        config(['zapmizer.routes' => array_replace($defaults, is_array($routes) ? $routes : [])]);
     }
 
     /**
@@ -90,29 +110,33 @@ class ZapmizerServiceProvider extends ServiceProvider
     }
 
     /**
-     * Register the package routes.
-     *
-     * Disable via `zapmizer.routes.enabled` to mount your own instead.
+     * Register the package routes, group by group: each only when switched
+     * on in `zapmizer.routes.{group}` (all off by default), and none with
+     * `zapmizer.routes.enabled` false (mount your own). See
+     * Support\RouteGroups.
      *
      * @return void
      */
     public function registerRoutes()
     {
-        if (config('zapmizer.routes.enabled', true) === false) {
-            return;
+        $prefix = config('zapmizer.routes.prefix', 'zapmizer');
+        $middleware = config('zapmizer.routes.middleware', ['web', 'auth']);
+
+        if (RouteGroups::enabled(RouteGroups::VERIFY_NUMBER)) {
+            Route::group(['prefix' => $prefix, 'middleware' => $middleware, 'as' => 'zapmizer.'], function () {
+                $this->loadRoutesFrom(__DIR__ . '/../routes/verify-number.php');
+            });
         }
 
-        Route::group([
-            'prefix' => config('zapmizer.routes.prefix', 'zapmizer'),
-            'middleware' => config('zapmizer.routes.middleware', ['web', 'auth']),
-            'as' => 'zapmizer.',
-        ], function () {
-            $this->loadRoutesFrom(__DIR__ . '/../routes/web.php');
-        });
+        if (RouteGroups::enabled(RouteGroups::CONNECT)) {
+            Route::group(['prefix' => $prefix, 'middleware' => $middleware, 'as' => 'zapmizer.'], function () {
+                $this->loadRoutesFrom(__DIR__ . '/../routes/web.php');
+            });
+        }
 
-        if (filter_var(config('zapmizer.inbox.enabled', false), FILTER_VALIDATE_BOOLEAN)) {
+        if (RouteGroups::enabled(RouteGroups::INBOX)) {
             Route::group([
-                'prefix' => config('zapmizer.routes.prefix', 'zapmizer'),
+                'prefix' => $prefix,
                 'middleware' => config('zapmizer.inbox.middleware', ['web', 'auth']),
                 'as' => 'zapmizer.',
             ], function () {
@@ -125,17 +149,19 @@ class ZapmizerServiceProvider extends ServiceProvider
         // route itself (routes/webhook.php), not left to the config. The
         // per-connection route (`zapmizer.webhook.per_connection`) joins it,
         // same group.
-        Route::group([
-            'prefix' => config('zapmizer.routes.prefix', 'zapmizer'),
-            'middleware' => config('zapmizer.routes.webhook_middleware', []),
-            'as' => 'zapmizer.',
-        ], function () {
-            $this->loadRoutesFrom(__DIR__ . '/../routes/webhook.php');
+        if (RouteGroups::enabled(RouteGroups::WEBHOOK)) {
+            Route::group([
+                'prefix' => $prefix,
+                'middleware' => config('zapmizer.routes.webhook_middleware', []),
+                'as' => 'zapmizer.',
+            ], function () {
+                $this->loadRoutesFrom(__DIR__ . '/../routes/webhook.php');
 
-            if (ConnectionWebhook::enabled()) {
-                $this->loadRoutesFrom(__DIR__ . '/../routes/connection-webhook.php');
-            }
-        });
+                if (ConnectionWebhook::enabled()) {
+                    $this->loadRoutesFrom(__DIR__ . '/../routes/connection-webhook.php');
+                }
+            });
+        }
     }
 
     /**

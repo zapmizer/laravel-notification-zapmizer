@@ -10,7 +10,7 @@ import { zapmizerRoute } from './zapmizerRoute';
 /**
  * A caixa de entrada do WhatsApp embutida, contra as rotas da lib
  * (`zapmizer.inbox.session` e `zapmizer.inbox.keepalive`, ligadas por
- * `ZAPMIZER_INBOX_ENABLED=true`). Sem conexão, ou com a conexão pedindo
+ * `ZAPMIZER_ROUTES_INBOX=true`). Sem conexão, ou com a conexão pedindo
  * para ser refeita, mostra o ConnectButton; conectou, abre a caixa.
  *
  * `person` é quem atende, estável e por pessoa: a chave da retomada

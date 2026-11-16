@@ -21,7 +21,7 @@ Pergunte uma coisa por vez, e só o que você não conseguir descobrir lendo o a
 
 1. **URL da API da conta de parceiro** (`ZAPMIZER_BASE_URI`): `https://app.zapmizer.com/api/` ou `https://app.parlichat.com/api/`, ou outra (um ambiente local, por exemplo). A conta de parceiro, as credenciais e a [marca do embed](#a-marca-do-embed) são de um deploy só. Pergunte junto das credenciais. **Quando a URL não é uma das duas, pergunte também a marca do deploy** (`zapmizer` ou `parli`): o instalador tenta lê-la do próprio deploy, mas, se ele não responder, só o humano sabe.
 2. **Credenciais de parceiro**: `ZAPMIZER_PARTNER_ID` (só dígitos) e `ZAPMIZER_PARTNER_SECRET`. A Zapmizer emite as duas para a aplicação parceira. Nunca invente valores, não as coloque em código nem em commit: elas vão só no `.env`. Sem elas o connect não abre.
-3. **Host liberado na conta de parceiro**: o host do `APP_URL` precisa estar na lista de hosts da conta de parceiro na Zapmizer, porque é ele que vai no `redirect_uri` e no `webhook_url` do connect e no `parent_origin` da caixa. Quem libera é a equipe da Zapmizer. Em produção a Zapmizer só aceita `https`, e o `redirect_uri` e o `webhook_url` precisam de um endereço público (`localhost` não serve).
+3. **Host liberado na conta de parceiro**: o host do `APP_URL` precisa estar na lista de hosts da conta de parceiro na Zapmizer, porque é ele que vai no `redirect_uri` e (com o webhook ligado) no `webhook_url` do connect e no `parent_origin` da caixa. Quem libera é a equipe da Zapmizer. Em produção a Zapmizer só aceita `https`, e o `redirect_uri` e o `webhook_url` precisam de um endereço público (`localhost` não serve).
 4. **Quem é dono do número**: o usuário logado (`App\Models\User`, o padrão) ou outro model, como o time. Se o app tem times (Jetstream, `currentTeam`), pergunte. Sem times, use o usuário.
 
 ## Roteiro
@@ -29,7 +29,7 @@ Pergunte uma coisa por vez, e só o que você não conseguir descobrir lendo o a
 ### 1. Instalar o pacote
 
 ```bash
-composer require "zapmizer/laravel-notification-zapmizer:^2.0.0-beta.3@beta"
+composer require "zapmizer/laravel-notification-zapmizer:^2.0.0-beta.4@beta"
 ```
 
 ### 2. Rodar o instalador
@@ -42,8 +42,9 @@ php artisan zapmizer:install --base-uri=https://app.parlichat.com/api/ --model=A
 
 - `--base-uri`: a URL da API da conta de parceiro, terminando em `/api`. Grava `ZAPMIZER_BASE_URI` quando a chave falta no `.env`. Uma chave que já tem valor nunca é sobrescrita: um `--base-uri` diferente dela faz o comando avisar e sair com erro (troque à mão, se for o caso). Sem a flag e sem a chave, ele grava `https://app.zapmizer.com/api/` e pede, nos próximos passos, que você confirme o deploy com o humano.
 
-- `--model`: o model dono do número. Aceita o nome curto (`--model=Team` procura `App\Models\Team` e depois `App\Team`).
-- `--inbox`: liga a caixa de entrada e publica os componentes Vue. Tire-o se o app não usa Vue (veja [Sem Inertia/Vue](#sem-inertiavue)).
+- `--model`: o model dono do número. Aceita o nome curto (`--model=Team` procura `App\Models\Team` e depois `App\Team`). Liga as [rotas do connect](#as-rotas-da-lib) (`ZAPMIZER_ROUTES_CONNECT=true`).
+- `--inbox`: liga a caixa de entrada (`ZAPMIZER_ROUTES_INBOX=true`, e o connect junto, de que ela depende) e publica os componentes Vue. Tire-o se o app não usa Vue (veja [Sem Inertia/Vue](#sem-inertiavue)).
+- `--webhook`: liga o webhook da lib (`ZAPMIZER_ROUTES_WEBHOOK=true`), a rota pública assinada por onde as conexões recebem mensagens e eventos. Sem ele o connect funciona, mas as conexões só enviam. Veja [Webhook](#webhook-opcional).
 - `--migrate`: roda as migrations no fim. Sem ele, rode `php artisan migrate` depois.
 - `--force`: sobrescreve a config, a migration e os componentes já publicados. Sem ele, o que já existe fica como está.
 
@@ -53,7 +54,7 @@ O comando é idempotente: rodar de novo só faz o que falta. Sem `--no-interacti
 | --- | --- |
 | config | `config/zapmizer.php`, se ainda não existe |
 | migration | `database/migrations/*_create_zapmizer_connections_table.php`, uma vez só |
-| `.env` e `.env.example` | acrescenta só as chaves ausentes (as presentes, inclusive as credenciais, ficam como estão): `ZAPMIZER_BASE_URI`, `ZAPMIZER_API_VERSION=2025-06-27`, `ZAPMIZER_PARTNER_ID=` e `ZAPMIZER_PARTNER_SECRET=` vazios, `VITE_ZAPMIZER_BRAND` (a [marca do embed](#a-marca-do-embed); num host fora dos deploys conhecidos, também `ZAPMIZER_EMBED_BRAND`, quando o deploy diz a marca) e `ZAPMIZER_INBOX_ENABLED=true` com `--inbox` |
+| `.env` e `.env.example` | acrescenta só as chaves ausentes (as presentes, inclusive as credenciais, ficam como estão): `ZAPMIZER_BASE_URI`, `ZAPMIZER_API_VERSION=2025-06-27`, `ZAPMIZER_PARTNER_ID=` e `ZAPMIZER_PARTNER_SECRET=` vazios, `VITE_ZAPMIZER_BRAND` (a [marca do embed](#a-marca-do-embed); num host fora dos deploys conhecidos, também `ZAPMIZER_EMBED_BRAND`, quando o deploy diz a marca) e as chaves das [rotas](#as-rotas-da-lib) que as flags pediram: `ZAPMIZER_ROUTES_CONNECT=true` com `--model` ou `--inbox`, `ZAPMIZER_ROUTES_WEBHOOK=true` com `--webhook`, `ZAPMIZER_ROUTES_INBOX=true` com `--inbox` (uma dessas já presente com outro valor é ligada) |
 | `--model` | `implements Connectable` e `use ConnectsZapmizer;` no model, com os `use` no topo |
 | `--inbox` | os componentes em `resources/js/zapmizer/` (os mesmos de `vendor:publish --tag=zapmizer-wizard --tag=zapmizer-inbox`), se o `package.json` tem `vue`. Sem `vue`, nada é publicado e os próximos passos apontam para o [caminho Blade](#sem-inertiavue) |
 
@@ -231,8 +232,9 @@ Sai com código diferente de zero quando algo crítico falha. As chamadas extern
 | `partner_api` | a Zapmizer aceita as credenciais (`200` com o cliente ou `404 Record not found.`) | sim no `401`/`403`, num 404 de rota ou numa resposta que não é a API; aviso sem rede, em `5xx` ou `429` |
 | `migration` | a tabela `zapmizer_connections` existe | sim |
 | `connectable` | o model que o resolver usa implementa `Connectable` | sim |
-| `connect_routes` | rotas do connect e do webhook registradas | sim |
-| `inbox_routes` | rotas da caixa registradas, com `ZAPMIZER_INBOX_ENABLED=true` | sim |
+| `connect_routes` | `ZAPMIZER_ROUTES_CONNECT=true` e as rotas do connect e do reconnect registradas | sim |
+| `webhook_routes` | com `ZAPMIZER_ROUTES_WEBHOOK=true`, a rota do webhook registrada (e a por conexão, com `ZAPMIZER_WEBHOOK_PER_CONNECTION`) | sim com o grupo ligado e a rota ausente; aviso com o connect ligado e o webhook não (as conexões não recebem mensagens) |
+| `inbox_routes` | com `ZAPMIZER_ROUTES_INBOX=true`, o connect ligado e as rotas da caixa registradas | sim; aviso quando o app ainda tem a `ZAPMIZER_INBOX_ENABLED`, que não liga mais nada |
 | `embed_package` | `@zapmizer/embed` no `package.json`, com tag fixa a partir da v0.1.3 | sim sem o pacote; aviso sem tag ou com tag anterior à v0.1.3 |
 | `vue_version` | aparece só com a caixa ligada e um `vue` < 3.3 no `package.json` | não (aviso) |
 | `embed_brand` | `VITE_ZAPMIZER_BRAND` do `.env` igual à marca do deploy da `ZAPMIZER_BASE_URI` (pelo host conhecido, ou lida de `/brand/manifest.json` do deploy) | sim, com a caixa ligada; aviso num host fora da tabela que não diz a marca |
@@ -483,11 +485,30 @@ document.addEventListener('submit', (event) => {
   - `403 {"code": "no_connectable"}`: o resolver não acha o que abrir, inclusive quando devolve um model que não é `Connectable`;
   - `409 {"code": "not_connected"}`: o model ainda não tem conexão;
   - `422 {"code": "reauth_required"}` também para o `403 missing_ability` e o `403 not_a_partner_connection` da Zapmizer (o token não tem `inbox:attend`, ou não veio do connect: conexões anteriores à caixa) e para um token que não decifra mais. Os dois 403 só se resolvem com um connect novo, então o front mostra o botão de conectar (a ação `reconnect` do `@zapmizer/embed`). O log `zapmizer: inbox session refused.` guarda o código original. No servidor: `EmbedSessionController` (`not_a_partner_connection`, `MissingAbilityException` sem `inbox:attend`) e o handler de `AccessDeniedHttpException` em `bootstrap/app.php` (`error: missing_ability`). O `origin_not_allowed` (host não liberado) segue como `403`: não é caso de reconectar.
-- Desligue com `ZAPMIZER_INBOX_ENABLED=false`. `ZAPMIZER_ROUTES_ENABLED=false` desliga estas junto com as do connect.
+- Ligue com `ZAPMIZER_ROUTES_INBOX=true` (o `--inbox` liga), junto com `ZAPMIZER_ROUTES_CONNECT=true`. Até a 2.0.0-beta.3 a chave era `ZAPMIZER_INBOX_ENABLED`, que não liga mais nada. `ZAPMIZER_ROUTES_ENABLED=false` desliga estas junto com todas as outras.
+
+## As rotas da lib
+
+A lib registra as rotas em grupos, e **cada grupo só existe se for ligado**. Todos vêm desligados: um app que só envia mensagens não ganha nenhuma rota (`php artisan route:list` não mostra nada da lib). O `zapmizer:install` liga os grupos que as flags pediram.
+
+| Grupo | Chave e env | Rotas | Middleware |
+| --- | --- | --- | --- |
+| connect | `zapmizer.routes.connect`, `ZAPMIZER_ROUTES_CONNECT` | `zapmizer.connect.show`, `.destroy`, `.start`, `.callback`, `.reconnect`, `.reconnect.callback` | `zapmizer.routes.middleware` (`web`, `auth`) |
+| webhook | `zapmizer.routes.webhook`, `ZAPMIZER_ROUTES_WEBHOOK` | `zapmizer.webhook` (`POST /zapmizer/webhook`, pública e assinada) e, com `ZAPMIZER_WEBHOOK_PER_CONNECTION=true`, `zapmizer.webhook.connection` | `zapmizer.routes.webhook_middleware` (nenhum) |
+| inbox | `zapmizer.routes.inbox`, `ZAPMIZER_ROUTES_INBOX` | `zapmizer.inbox.session`, `zapmizer.inbox.keepalive` | `zapmizer.inbox.middleware` (`web`, `auth`) |
+| verify_number | `zapmizer.routes.verify_number`, `ZAPMIZER_ROUTES_VERIFY_NUMBER` | `zapmizer.verify_number` | `zapmizer.routes.middleware` |
+
+- `zapmizer.routes.enabled` (`ZAPMIZER_ROUTES_ENABLED`, padrão `true`) continua sendo a chave mestra: com `false`, nenhuma rota da lib, com os grupos ligados ou não, e o app monta as suas.
+- Os valores aceitam `true`/`false`, `1`/`0`, `on`/`off`.
+- A caixa abre para a conexão que o connect fez: com a caixa ligada e o connect não, o `zapmizer:check` falha.
+- **Connect sem webhook** é uma configuração válida: o connect não pede webhook à Zapmizer (a sessão sai sem `webhook_url`), e as conexões enviam, mas não recebem mensagens nem eventos. O `zapmizer:check` avisa. Ligar o webhook depois não dá webhook às conexões já feitas: elas precisam conectar de novo.
+- Uma `config/zapmizer.php` publicada antes dos grupos não tem as chaves deles em `routes`: o provider as completa com as da lib (e as envs), sem mexer nas que o app tem. Não é preciso republicar.
+- Com o grupo webhook ligado, `ZAPMIZER_WEBHOOK_SECRET` (`zapmizer.webhook.secret`) assina a rota `zapmizer.webhook`. Se o app já usa essa chave para outro fim, renomeie a dele antes de ligar.
+- Depois de mudar o `.env` com a config em cache, rode `php artisan config:clear` (ou `config:cache`); com as rotas em cache, `php artisan route:clear`.
 
 ## Webhook (opcional)
 
-O connect já manda `route('zapmizer.webhook')` como `webhook_url`, e a lib recebe e confere as entregas assinadas. Para o app reagir às mensagens, ouça os eventos `MessageReceived` e `MessageSent`. Nada disso é preciso para o connect e a caixa funcionarem. Veja [connect.md](connect.md), seção 6, e [webhook.md](webhook.md).
+Com o grupo webhook ligado (`ZAPMIZER_ROUTES_WEBHOOK=true`, o `--webhook` do instalador), o connect manda `route('zapmizer.webhook')` como `webhook_url`, e a lib recebe e confere as entregas assinadas. Desligado, o connect não pede webhook e as conexões só enviam. Para o app reagir às mensagens, ouça os eventos `MessageReceived` e `MessageSent`. Nada disso é preciso para o connect e a caixa funcionarem. Veja [connect.md](connect.md), seção 6, e [webhook.md](webhook.md).
 
 ## Laravel Boost
 

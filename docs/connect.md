@@ -30,7 +30,7 @@ Zapmizer validates `webhook_url` the way it validates `redirect_uri`: **https in
 
 ## 2. Package setup
 
-The quick way is `php artisan zapmizer:install --base-uri=https://app.zapmizer.com/api/ --model=App\\Models\\User` (add `--inbox` for the embedded inbox): it publishes the config and the migration, adds the missing `ZAPMIZER_*` keys to `.env` and `.env.example`, makes the model `Connectable` and prints what is left. `php artisan zapmizer:check` verifies the result. See [instalar.md](instalar.md) (Portuguese). By hand:
+The quick way is `php artisan zapmizer:install --base-uri=https://app.zapmizer.com/api/ --model=App\\Models\\User --webhook` (add `--inbox` for the embedded inbox): it publishes the config and the migration, adds the missing `ZAPMIZER_*` keys to `.env` and `.env.example` (with the route groups the flags ask for), makes the model `Connectable` and prints what is left. `php artisan zapmizer:check` verifies the result. See [instalar.md](instalar.md) (Portuguese). By hand:
 
 ```bash
 php artisan vendor:publish --provider="NotificationChannels\Zapmizer\ZapmizerServiceProvider" --tag=config
@@ -128,6 +128,8 @@ The state stored at `start` is bound to the resolved model, so a callback for an
 ## 5. The connect flow
 
 ### Routes
+
+**The package routes are opt-in, by group** (all off by default; [instalar.md](instalar.md#as-rotas-da-lib) has the table): the connect routes below need `ZAPMIZER_ROUTES_CONNECT=true` (`zapmizer.routes.connect`), and the webhook of section 6 `ZAPMIZER_ROUTES_WEBHOOK=true` (`zapmizer.routes.webhook`). With the connect on and the webhook off, `start` sends no `webhook_url` (nor `webhook_version`): the connections send but receive nothing, and turning the webhook on later does not give one to the connections made before (they connect again). `zapmizer.routes.enabled = false` still turns every package route off; then `start` sends `route('zapmizer.webhook')` as before, and the app mounts it.
 
 All under the package prefix (`zapmizer`), behind `web` + `auth`:
 
@@ -330,7 +332,7 @@ onMounted(startPolling);
 </template>
 ```
 - `types.ts` — `ZapmizerConnection`, `ZapmizerConnectStatus`, `ZapmizerConnectMessage`, `ZapmizerReconnectStatus`, `ZapmizerReconnectMessage`, `ZapmizerRelinkResult`.
-- `InboxScreen.vue` (tag `zapmizer-inbox`) — the embedded inbox over the package's inbox routes (`zapmizer.inbox.enabled`), with `@zapmizer/embed/vue`. Without a connection, or when the session asks for a new connect, it shows `ConnectButton`. See [instalar.md](instalar.md).
+- `InboxScreen.vue` (tag `zapmizer-inbox`) — the embedded inbox over the package's inbox routes (`zapmizer.routes.inbox`, `ZAPMIZER_ROUTES_INBOX`), with `@zapmizer/embed/vue`. Without a connection, or when the session asks for a new connect, it shows `ConnectButton`. See [instalar.md](instalar.md).
 - `zapmizerEmbed.ts` (tag `zapmizer-inbox`) — the `openSession` and `keepAlive` of `@zapmizer/embed` against those routes (with Laravel's CSRF), `listenToZapmizerLogout()` and `endZapmizerEmbeds()`. The embed brand comes from `VITE_ZAPMIZER_BRAND` and must be the one of the deploy `base_uri` points at (see "A marca do embed" in [instalar.md](instalar.md#a-marca-do-embed)).
 - `zapmizerBrand.ts` — the brand of the deploy (`VITE_ZAPMIZER_BRAND`) and its name with the article for the texts ("com a Parli", "do Zapmizer"), so the button and the panel never say "Zapmizer" on a Parli deploy.
 - `zapmizerRoute.ts` — the package's URLs: Ziggy's `route()` when the app has it, else the paths under the default `/zapmizer` prefix.
@@ -340,6 +342,8 @@ The lasting warning of a `webhook_failed` is the panel's: the button emits `conn
 They expect `axios` and `lucide-vue-next` (and `@zapmizer/embed` for the inbox screen); Ziggy's `route()` is used when present, not required; the markup uses utility classes from the app they came from (`gp-*`) — restyle them as yours. The popup pages are Blade views you can publish with `--tag=views` (`resources/views/vendor/zapmizer/connect-result.blade.php`, `connect-wait.blade.php` and `reconnect-result.blade.php`).
 
 ## 6. Receiving messages: the signed webhook
+
+The webhook route (`POST {prefix}/webhook`, `zapmizer.webhook`) is registered only with the webhook group on: `ZAPMIZER_ROUTES_WEBHOOK=true` (`zapmizer.routes.webhook`; `zapmizer:install --webhook` writes it). With it on, `zapmizer.webhook.secret` (`ZAPMIZER_WEBHOOK_SECRET`) signs this route: an app that used that key for something else renames its own before switching the group on.
 
 Every webhook on Zapmizer has a secret, and every bot event (`message`, `qr`, ...) is signed with it:
 
@@ -865,7 +869,7 @@ The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceCli
 | `zapmizer.webhook.tolerance` | accepted timestamp drift in seconds (default 300) |
 | `zapmizer.webhook.per_connection` | each connection made through the connect flow gets its own webhook URL (`ZAPMIZER_WEBHOOK_PER_CONNECTION`, default off; [section 6](#per-connection-webhook-url-opt-in)) |
 | `zapmizer.models.connection` | subclass the connection model |
-| `zapmizer.routes.*` | enable/prefix/middleware of the package routes |
+| `zapmizer.routes.*` | the route groups (`connect`, `webhook`, `inbox`, `verify_number`, each off by default, `ZAPMIZER_ROUTES_*`), the master switch `enabled`, prefix and middleware |
 
 On the model, `zapmizerExternalId()` (section 3). For behaviour after a connect or a refused reconnect, the `NumberConnected` and `ReconnectRefused` events (section 5).
 
@@ -873,6 +877,7 @@ On the model, `zapmizerExternalId()` (section 3). For behaviour after a connect 
 
 The partner client changed, and so did the connect flow ("Connect flow" below).
 
+- **The package routes are opt-in now.** 0.3/0.4 registered the connect, the webhook and the verify-number routes on their own; 2.0 registers none until switched on. Keep what you used: `ZAPMIZER_ROUTES_CONNECT=true` (connect and reconnect), `ZAPMIZER_ROUTES_WEBHOOK=true` (the signed webhook, the per-connection one included) and, if you link to `zapmizer.verify_number`, `ZAPMIZER_ROUTES_VERIFY_NUMBER=true`. A published `config/zapmizer.php` needs no edit: the provider adds the group keys. Without them the connect answers 404 and every webhook delivery too (Zapmizer retries, then gives up).
 - Needs Zapmizer **1.148.10 or later** (section 1).
 - `PartnerClient::createSession($redirectUri, $state = null, $webhookUrl = null, $expiresIn = null, $externalId = null, $webhookVersion = null)`: `state` became optional and `externalId` and `webhookVersion` were added at the end. Named and positional calls keep working; a subclass that overrides `createSession()` must update its signature.
 - `createSession()`, `subscription()` and `checkout()` throw `InvalidArgumentException` for an invalid `external_id` or `state` (`""`, `"0"` or whitespace at either end) before calling Zapmizer.

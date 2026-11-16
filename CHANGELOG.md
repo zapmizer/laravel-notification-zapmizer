@@ -2,11 +2,33 @@
 
 # Unreleased
 
-**Quebra a 0.3 e a 0.4.** Leia "Upgrade da 0.3 e da 0.4" antes de atualizar; o resto desta seção traz o de/para por tema.
+**Quebra a 0.x.** Leia "Upgrade das versões 0.0, 0.1 e 0.2" ou "Upgrade da 0.3 e da 0.4" antes de atualizar; o resto desta seção traz o de/para por tema.
+
+## Rotas por grupo, todas desligadas (desde a 2.0.0-beta.4)
+
+**Breaking.** A lib não registra rota nenhuma até o app ligar um grupo. Até a 2.0.0-beta.3 (e na 0.0.6 a 0.4), subir de versão dava ao app as rotas do connect, do reconnect, do webhook público e do verify-number, mesmo num app que só envia.
+
+| Grupo | Chave | Env | Rotas |
+| --- | --- | --- | --- |
+| connect | `zapmizer.routes.connect` | `ZAPMIZER_ROUTES_CONNECT` | `zapmizer.connect.show`, `.destroy`, `.start`, `.callback`, `.reconnect`, `.reconnect.callback` |
+| webhook | `zapmizer.routes.webhook` | `ZAPMIZER_ROUTES_WEBHOOK` | `zapmizer.webhook` e, com `webhook.per_connection`, `zapmizer.webhook.connection` |
+| inbox | `zapmizer.routes.inbox` | `ZAPMIZER_ROUTES_INBOX` | `zapmizer.inbox.session`, `zapmizer.inbox.keepalive` |
+| verify_number | `zapmizer.routes.verify_number` | `ZAPMIZER_ROUTES_VERIFY_NUMBER` | `zapmizer.verify_number` |
+
+- Todos `false` por padrão. `zapmizer.routes.enabled` (`ZAPMIZER_ROUTES_ENABLED`) segue como chave mestra: com `false`, nenhuma rota.
+- **`zapmizer.inbox.enabled` (`ZAPMIZER_INBOX_ENABLED`) saiu**, trocada por `zapmizer.routes.inbox` (`ZAPMIZER_ROUTES_INBOX`). A chave antiga não liga mais nada; o `zapmizer:check` avisa quando ela continua no `.env` ou na config.
+- Uma `config/zapmizer.php` publicada sem as chaves novas em `routes` as recebe da lib (o provider completa `routes`, sem mexer nas chaves do app): basta a env.
+- **Connect sem webhook** é válido: com o connect ligado e o webhook não, o `start` não manda `webhook_url` nem `webhook_version`, e as conexões só enviam. Ligar o webhook depois não dá webhook às conexões já feitas.
+- `zapmizer:install`: `--model` liga o connect, `--inbox` a caixa e o connect, e `--webhook` (novo) o webhook; grava `ZAPMIZER_ROUTES_*=true` no `.env` e no `.env.example`, e liga uma chave já presente com outro valor. Sem flag, nenhuma. Os próximos passos avisam quando o connect fica sem webhook. Interativo, pergunta também pelo webhook.
+- `zapmizer:check`: `connect_routes` falha com o connect desligado; `webhook_routes` (novo) avisa com o connect ligado e o webhook não, e falha com o grupo ligado e a rota ausente; `inbox_routes` falha com a caixa ligada e o connect não.
+- `routes/web.php` fica só com o connect e o reconnect; o verify-number passa a `routes/verify-number.php`.
+- Testes do app que batiam nas rotas da lib precisam ligar os grupos (no `phpunit.xml`, por exemplo, `<env name="ZAPMIZER_ROUTES_CONNECT" value="true"/>`).
 
 ## Upgrade da 0.3 e da 0.4
 
 A 0.4 só acrescentou o `syncMessages()` à 0.3, que segue igual aqui: a lista vale para as duas.
+
+0. **Ligue as rotas que o app usa** (desde a 2.0.0-beta.4 nenhuma vem ligada; veja "Rotas por grupo"): `ZAPMIZER_ROUTES_CONNECT=true` (connect e reconnect), `ZAPMIZER_ROUTES_WEBHOOK=true` (o webhook assinado, inclusive o por conexão) e, se o app manda o usuário para `zapmizer.verify_number`, `ZAPMIZER_ROUTES_VERIFY_NUMBER=true`. Sem isso o connect responde 404, e as entregas do webhook também (a Zapmizer tenta de novo e desiste: as mensagens se perdem). Uma `config/zapmizer.php` publicada não precisa de edição para isso.
 
 1. **Zapmizer 1.148.10 ou superior.** O contrato que esta versão usa está todo nela (`user_id`/`team_id` no `connect/token`, reconnect, revogação e `partner/users` desde a 1.148.8; `appearance` da caixa e `user.email` do embed desde a 1.148.10). A 1.149.0 e a 1.150.0 citadas nas versões anteriores nunca foram lançadas.
 2. **Procure `CouldNotSendNotification` no app.** A classe saiu, e um `catch` dela não dá erro: só deixa de casar, e a exceção escapa. Troque por `catch (ZapmizerException $e)` ou pelas classes de "Envio" abaixo.

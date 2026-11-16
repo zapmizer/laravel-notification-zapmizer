@@ -28,6 +28,23 @@ public function toZapmizer(object $notifiable)
 
 O WID de destino segue o padrão do WhatsApp: o número com código do país e DDD (`558181643260`), o mesmo com o sufixo `@c.us`, ou o id de um grupo (`128172192@g.us`).
 
+O `toZapmizer()` também pode devolver a mensagem **sem** `->send()`: o canal a envia. Sem `to`, ele usa a rota do notifiable (`routeNotificationForZapmizer()` no model, ou `Notification::route('zapmizer', '5511999999999')`); sem `to` e sem rota, nada sai. Assim o método pode declarar `: ZapmizerMessage`, e o envio fica a cargo do canal:
+
+```php
+public function toZapmizer(object $notifiable): ZapmizerMessage
+{
+    return ZapmizerMessage::create(from: config('zapmizer.from_number'))->text('Seu pedido saiu para entrega.');
+}
+
+// no model
+public function routeNotificationForZapmizer(): string
+{
+    return $this->whatsapp;
+}
+```
+
+Os dois jeitos dão o mesmo `SentMessage` ao `NotificationSent` (veja abaixo), e nenhum envia duas vezes: o canal não envia um `SentMessage`, nem uma mensagem que o `toZapmizer()` já enviou (`$message->send(); return $message;`). `$message->sentMessage()` devolve o que o último `send()` respondeu, ou `null`.
+
 ## Model com número próprio
 
 Um model que usa o trait `Connectable` (um `Team`, um `User`) manda pelo número dele, sem passar por `config('zapmizer.from_number')`:

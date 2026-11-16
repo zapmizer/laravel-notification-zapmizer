@@ -26,9 +26,12 @@ class ZapmizerServiceProvider extends ServiceProvider
      */
     public function register()
     {
+        // `app(Zapmizer::class, [...])` takes `api_token`, `base_uri` and
+        // `api_version`, and for the HTTP side `timeout` / `connect_timeout`
+        // (seconds, over `zapmizer.http.*`) or a ready `transport`.
         $this->app->bind(Zapmizer::class, fn (Application $app, $config) => new Zapmizer(
             Arr::get($config, 'api_token', config('zapmizer.api_token')),
-            $app->make(Transport::class),
+            $this->transportFor($app, is_array($config) ? $config : []),
             Arr::get($config, 'base_uri', config('zapmizer.base_uri')),
             Arr::get($config, 'api_version', config('zapmizer.api_version'))
         ));
@@ -198,7 +201,40 @@ class ZapmizerServiceProvider extends ServiceProvider
         ]);
     }
 
-    protected function makeTransport(Application $app): Transport
+    /**
+     * The transport of a client made with parameters: the `transport` given,
+     * or the configured one with the `timeout` / `connect_timeout` given in
+     * place of `zapmizer.http.*`. Without either, the container's.
+     */
+    protected function transportFor(Application $app, array $config): Transport
+    {
+        $transport = $config['transport'] ?? null;
+
+        if ($transport instanceof Transport) {
+            return $transport;
+        }
+
+        if ($transport !== null) {
+            throw new InvalidArgumentException(sprintf(
+                'The transport parameter must be an instance of %s, got %s.',
+                Transport::class,
+                get_debug_type($transport),
+            ));
+        }
+
+        $timeouts = array_filter([
+            'connectTimeout' => $this->seconds($config['connect_timeout'] ?? null),
+            'timeout' => $this->seconds($config['timeout'] ?? null),
+        ], fn ($value) => $value !== null);
+
+        return $timeouts === [] ? $app->make(Transport::class) : $this->makeTransport($app, $timeouts);
+    }
+
+    /**
+     * @param array<string, float> $timeouts over the config's, by the
+     *                                       constructor's parameter names
+     */
+    protected function makeTransport(Application $app, array $timeouts = []): Transport
     {
         $class = config('zapmizer.http.transport');
 
@@ -214,14 +250,14 @@ class ZapmizerServiceProvider extends ServiceProvider
             ));
         }
 
-        if ($app->bound($class)) {
+        if ($timeouts === [] && $app->bound($class)) {
             return $app->make($class);
         }
 
-        return $app->make($class, array_filter([
+        return $app->make($class, array_replace(array_filter([
             'connectTimeout' => $this->seconds(config('zapmizer.http.connect_timeout')),
             'timeout' => $this->seconds(config('zapmizer.http.timeout')),
-        ], fn ($value) => $value !== null));
+        ], fn ($value) => $value !== null), $timeouts));
     }
 
     protected function seconds(mixed $value): ?float

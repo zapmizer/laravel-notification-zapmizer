@@ -4,6 +4,8 @@ namespace NotificationChannels\Zapmizer\Test\Unit;
 
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Container\BindingResolutionException;
+use Illuminate\Http\Client\Request;
+use Illuminate\Support\Facades\Http;
 use InvalidArgumentException;
 use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Connect\PartnerClient;
@@ -187,5 +189,74 @@ class TransportResolutionTest extends TestCase
         } finally {
             Container::setInstance($app);
         }
+    }
+
+    public function testTheSendClientTakesItsOwnTimeoutsOnMake()
+    {
+        // What setHttpClient(new Client(['timeout' => ...])) did before: own
+        // timeouts for one client, without rebuilding it from the config.
+        config()->set('zapmizer.api_token', 'token');
+        config()->set('zapmizer.base_uri', 'https://zap.test/api/');
+        config()->set('zapmizer.http.timeout', 99);
+        $options = [];
+        Http::fake(function (Request $request, array $sent) use (&$options) {
+            $options[] = $sent;
+
+            return Http::response(['id' => '1'], 201);
+        });
+
+        $this->app->make(Zapmizer::class, ['timeout' => 10, 'connect_timeout' => 5, 'api_version' => '2025-06-27'])
+            ->sendMessage(['type' => 'chat', 'to' => '5511999999999']);
+        $this->app->make(Zapmizer::class)->sendMessage(['type' => 'chat', 'to' => '5511999999999']);
+
+        $this->assertEquals(10, $options[0]['timeout']);
+        $this->assertEquals(5, $options[0]['connect_timeout']);
+        $this->assertEquals(99, $options[1]['timeout'], 'the config still holds for the others');
+        Http::assertSent(fn (Request $request) => $request->hasHeader('api-version', '2025-06-27'));
+    }
+
+    public function testTheTimeoutsOnMakeReachTheConfiguredTransportClass()
+    {
+        config()->set('zapmizer.http.transport', TimeoutCapturingTransport::class);
+        config()->set('zapmizer.http.connect_timeout', 1);
+        config()->set('zapmizer.http.timeout', 2);
+
+        $transport = $this->transportOf($this->app->make(Zapmizer::class, ['timeout' => '10', 'connect_timeout' => 5]));
+
+        $this->assertInstanceOf(TimeoutCapturingTransport::class, $transport);
+        $this->assertSame(5.0, $transport->connectTimeout);
+        $this->assertSame(10.0, $transport->timeout);
+
+        // Only the one given is replaced; an invalid one is left to the config.
+        $transport = $this->transportOf($this->app->make(Zapmizer::class, ['timeout' => 0, 'connect_timeout' => 7]));
+
+        $this->assertSame(7.0, $transport->connectTimeout);
+        $this->assertSame(2.0, $transport->timeout);
+    }
+
+    public function testTheSendClientTakesATransportOnMake()
+    {
+        config()->set('zapmizer.api_token', 'token');
+        config()->set('zapmizer.base_uri', 'https://zap.test/api/');
+        $mine = new RecordingTransport(new \GuzzleHttp\Psr7\Response(201, ['Content-Type' => 'application/json'], '{"id":"1"}'));
+
+        $sent = $this->app->make(Zapmizer::class, ['transport' => $mine])->sendMessage(['type' => 'chat']);
+
+        $this->assertSame('1', $sent->id);
+        $this->assertCount(1, $mine->calls);
+        $this->assertSame($mine, $this->transportOf($this->app->make(Zapmizer::class, ['transport' => $mine, 'timeout' => 3])));
+    }
+
+    public function testATransportOnMakeThatIsNotATransportThrows()
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Contracts\\Transport');
+
+        $this->app->make(Zapmizer::class, ['transport' => new \stdClass()]);
+    }
+
+    protected function transportOf(Zapmizer $zapmizer): Transport
+    {
+        return (fn () => $this->transport)->call($zapmizer);
     }
 }

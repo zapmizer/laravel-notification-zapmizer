@@ -38,6 +38,7 @@ class PublishTagsTest extends TestCase
             'ConnectionPanel.vue',
             'types.ts',
             'useZapmizerIntegration.ts',
+            'zapmizerBrand.ts',
             'zapmizerRoute.ts',
         ], $files);
         $this->assertSame([resource_path('js/zapmizer')], array_values(ServiceProvider::pathsToPublish(ZapmizerServiceProvider::class, 'zapmizer-wizard')));
@@ -80,5 +81,24 @@ class PublishTagsTest extends TestCase
                 }
             }
         }
+    }
+
+    public function testTheConnectTextsFollowTheBrandInsteadOfNamingOne()
+    {
+        $source = array_keys(ServiceProvider::pathsToPublish(ZapmizerServiceProvider::class, 'zapmizer-wizard'))[0];
+
+        foreach (['ConnectButton.vue', 'ConnectionPanel.vue'] as $file) {
+            $code = (string) file_get_contents($source . '/' . $file);
+            // What people read: the code without comments.
+            $visible = preg_replace(['#/\*.*?\*/#s', '#<!--.*?-->#s', '#^\s*//.*$#m'], '', $code);
+
+            $this->assertDoesNotMatchRegularExpression('/(?<![A-Za-z_])(Zapmizer|Parli)(?![A-Za-z_])/', $visible, "{$file} names a brand: use brand from zapmizerBrand.ts");
+            $this->assertStringContainsString("import { brand } from './zapmizerBrand';", $code, $file);
+        }
+
+        $brand = (string) file_get_contents($source . '/zapmizerBrand.ts');
+        $this->assertStringContainsString('import.meta.env.VITE_ZAPMIZER_BRAND', $brand);
+        $this->assertStringContainsString("parli: { name: 'Parli', feminine: true }", $brand);
+        $this->assertStringContainsString("zapmizer: { name: 'Zapmizer', feminine: false }", $brand);
     }
 }

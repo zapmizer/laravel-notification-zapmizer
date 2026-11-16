@@ -332,6 +332,7 @@ onMounted(startPolling);
 - `types.ts` — `ZapmizerConnection`, `ZapmizerConnectStatus`, `ZapmizerConnectMessage`, `ZapmizerReconnectStatus`, `ZapmizerReconnectMessage`, `ZapmizerRelinkResult`.
 - `InboxScreen.vue` (tag `zapmizer-inbox`) — the embedded inbox over the package's inbox routes (`zapmizer.inbox.enabled`), with `@zapmizer/embed/vue`. Without a connection, or when the session asks for a new connect, it shows `ConnectButton`. See [instalar.md](instalar.md).
 - `zapmizerEmbed.ts` (tag `zapmizer-inbox`) — the `openSession` and `keepAlive` of `@zapmizer/embed` against those routes (with Laravel's CSRF), `listenToZapmizerLogout()` and `endZapmizerEmbeds()`. The embed brand comes from `VITE_ZAPMIZER_BRAND` and must be the one of the deploy `base_uri` points at (see "A marca do embed" in [instalar.md](instalar.md#a-marca-do-embed)).
+- `zapmizerBrand.ts` — the brand of the deploy (`VITE_ZAPMIZER_BRAND`) and its name with the article for the texts ("com a Parli", "do Zapmizer"), so the button and the panel never say "Zapmizer" on a Parli deploy.
 - `zapmizerRoute.ts` — the package's URLs: Ziggy's `route()` when the app has it, else the paths under the default `/zapmizer` prefix.
 
 The lasting warning of a `webhook_failed` is the panel's: the button emits `connected`, the screen switches to the panel, and the button's warning goes with it.

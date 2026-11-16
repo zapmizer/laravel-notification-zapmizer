@@ -2,6 +2,7 @@
 import { AlertCircleIcon, ArrowRightIcon, MessageCircleIcon } from 'lucide-vue-next';
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { openZapmizerConnect } from './useZapmizerIntegration';
+import { brand } from './zapmizerBrand';
 import type { ZapmizerConnectMessage } from './types';
 
 withDefaults(defineProps<{ reauthRequired?: boolean }>(), { reauthRequired: false });
@@ -21,13 +22,13 @@ const error = ref('');
 
 const MESSAGES: Record<string, string> = {
   denied: 'Autorização cancelada. Tente novamente quando quiser conectar.',
-  plan_limit: 'O plano do Zapmizer não tem vaga para mais um número. Libere um número lá (ou mude de plano) e tente de novo.',
-  subscription_required: 'A conta do Zapmizer foi vinculada, mas não tem assinatura ativa. Conecte de novo para assinar.',
+  plan_limit: `O plano ${brand.do} não tem vaga para mais um número. Libere um número lá (ou mude de plano) e tente de novo.`,
+  subscription_required: `A conta ${brand.do} foi vinculada, mas não tem assinatura ativa. Conecte de novo para assinar.`,
   invalid_state: 'O link de autorização expirou. Tente novamente.',
   exchange_failed: 'Não foi possível concluir a conexão. Tente novamente.',
-  rate_limited: 'O Zapmizer está ocupado agora. Feche a janela e conecte de novo em um minuto.',
+  rate_limited: `Muitas tentativas ${brand.no} agora. Feche a janela e conecte de novo em um minuto.`,
   webhook_failed: 'Conectado e enviando, mas as mensagens recebidas não podem ser verificadas. Desconecte e conecte de novo para receber.',
-  team_already_connected: 'Essa conta do Zapmizer já está conectada a outra conta aqui. Desconecte lá primeiro ou autorize outro time do Zapmizer.',
+  team_already_connected: `Essa conta ${brand.do} já está conectada a outra conta aqui. Desconecte lá primeiro ou autorize outro time ${brand.do}.`,
   no_connectable: 'Não há o que conectar nesta conta. Entre de novo e tente outra vez.',
 };
 
@@ -70,9 +71,9 @@ async function connect() {
     // "Server Error"; nenhum dos dois diz ao usuário o que fazer.
     error.value =
       status === 503
-        ? 'O Zapmizer está indisponível no momento. Tente novamente em instantes.'
+        ? `${brand.O} está indisponível no momento. Tente novamente em instantes.`
         : status >= 500 || status === 0
-          ? 'Não foi possível falar com o Zapmizer agora. Tente novamente em instantes.'
+          ? `Não foi possível falar com ${brand.o} agora. Tente novamente em instantes.`
           : (response?.data?.message ?? 'Não foi possível iniciar a conexão. Tente novamente.');
   } finally {
     starting.value = false;
@@ -85,7 +86,7 @@ async function connect() {
     <div class="gp-eyebrow">Conexão</div>
     <h3 class="mt-1 text-base font-semibold tracking-tight text-gp-text">Conecte um número de WhatsApp</h3>
     <p class="mt-1 text-[12px] text-gp-muted">
-      É a conta do Zapmizer que fala com o WhatsApp. Na janela que abre você entra, autoriza e lê o QR code com o
+      É a conta {{ brand.do }} que fala com o WhatsApp. Na janela que abre você entra, autoriza e lê o QR code com o
       celular — tudo lá.
     </p>
 
@@ -94,7 +95,7 @@ async function connect() {
       class="mt-3 flex items-start gap-2 rounded border border-gp-amber/40 bg-gp-amber/10 px-3 py-2 text-[12px] text-gp-amber"
     >
       <AlertCircleIcon class="mt-px size-3.5 shrink-0" />
-      A autorização com o Zapmizer expirou. Conecte novamente para continuar.
+      A autorização {{ brand.com }} expirou. Conecte novamente para continuar.
     </p>
 
     <p
@@ -109,7 +110,7 @@ async function connect() {
       <div class="flex size-10 items-center justify-center rounded border border-gp-teal/40 bg-gp-teal/10 text-gp-teal">
         <MessageCircleIcon class="size-5" />
       </div>
-      <p class="mt-3 text-[13px] font-medium text-gp-text">Uma janela do Zapmizer vai abrir</p>
+      <p class="mt-3 text-[13px] font-medium text-gp-text">Uma janela {{ brand.do }} vai abrir</p>
       <p class="mx-auto mt-1 max-w-sm text-[12px] text-gp-muted">
         Entre (ou crie sua conta), autorize o acesso e leia o QR code. Você volta para cá automaticamente.
       </p>
@@ -119,7 +120,7 @@ async function connect() {
         :disabled="starting"
         @click="connect"
       >
-        {{ starting ? 'Abrindo o Zapmizer...' : 'Conectar com o Zapmizer' }}
+        {{ starting ? `Abrindo ${brand.o}...` : `Conectar ${brand.com}` }}
         <ArrowRightIcon class="size-3.5" />
       </button>
       <!-- Popup fechado na mão, ou bloqueado e reaberto por fora: sem esta saída

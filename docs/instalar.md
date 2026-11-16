@@ -279,8 +279,10 @@ A página:
      data-session-url="{{ route('zapmizer.inbox.session') }}"
      data-keepalive-url="{{ route('zapmizer.inbox.keepalive') }}">
   <div data-connect hidden>
+    @php($marca = \NotificationChannels\Zapmizer\Support\EmbedBrand::name())
+    <p>Na janela que abre você entra na sua conta {{ $marca }}, autoriza e lê o QR code com o celular.</p>
     <p data-connect-message role="alert"></p>
-    <button type="button" data-connect-start>Conectar o WhatsApp</button>
+    <button type="button" data-connect-start>Conectar com {{ $marca }}</button>
     <button type="button" data-connect-recheck>Já conectei</button>
   </div>
   <div data-inbox hidden style="position: relative; height: 80vh"></div>
@@ -461,6 +463,7 @@ document.addEventListener('submit', (event) => {
 });
 ```
 
+- Os textos seguem a marca do deploy: `EmbedBrand::name()` dá `Parli` ou `Zapmizer` (a mesma marca do `data-brand`). Nos componentes Vue, `resources/js/zapmizer/zapmizerBrand.ts` faz o mesmo a partir do `VITE_ZAPMIZER_BRAND` ("Conectar com a Parli", "Conectar com o Zapmizer").
 - Ponha `resources/js/zapmizer.js` e `resources/js/zapmizer-logout.js` no `input` do `laravel-vite-plugin` em `vite.config.js`.
 - Os `status` do popup que não conectam são `denied`, `plan_limit`, `subscription_required`, `invalid_state`, `exchange_failed`, `rate_limited`, `team_already_connected` e `no_connectable`; o `message` que vem junto já é um texto para a pessoa.
 - O guia do front do embed: [caixa-de-entrada.md](https://github.com/zapmizer/embed/blob/v0.1.3/docs/caixa-de-entrada.md) e [backend.md](https://github.com/zapmizer/embed/blob/v0.1.3/docs/backend.md).

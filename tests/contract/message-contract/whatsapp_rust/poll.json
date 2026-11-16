@@ -1,0 +1,71 @@
+{
+    "raw_from": "whatsapp-rust-sidecar/message-poll.json",
+    "context": {
+        "bot_wid": "5511900000000@c.us",
+        "device": 0
+    },
+    "message": {
+        "id": "3EB0AAAA000000000033",
+        "serialized_id": "false_5511911111111@c.us_3EB0AAAA000000000033",
+        "chat": "5511911111111@c.us",
+        "sender": "5511911111111@c.us",
+        "sender_name": "Contato Teste",
+        "from_me": false,
+        "from_me_other_device": false,
+        "timestamp": 1760000000,
+        "type": "poll",
+        "text": "Qual o melhor dia?",
+        "quoted": null,
+        "forwarded": false,
+        "view_once": false,
+        "mentions": [],
+        "media": null,
+        "location": null,
+        "contacts": null,
+        "poll": {
+            "name": "Qual o melhor dia?",
+            "options": ["Sábado", "Domingo"],
+            "multiple": false
+        },
+        "reply": null,
+        "link_preview": null,
+        "ack": null,
+        "edited": false,
+        "reactions": [],
+        "received_at": null,
+        "native_type": "poll_creation"
+    },
+    "legacy_payload": {
+        "id": {
+            "id": "3EB0AAAA000000000033",
+            "_serialized": "false_5511911111111@c.us_3EB0AAAA000000000033",
+            "fromMe": false,
+            "remote": "5511911111111@c.us"
+        },
+        "from": "5511911111111@c.us",
+        "to": "5511900000000@c.us",
+        "fromMe": false,
+        "type": "poll_creation",
+        "body": "Qual o melhor dia?",
+        "timestamp": 1760000000,
+        "hasMedia": false,
+        "hasQuotedMsg": false,
+        "isForwarded": false,
+        "pollName": "Qual o melhor dia?",
+        "pollOptions": [
+            {
+                "name": "Sábado",
+                "localId": 0
+            },
+            {
+                "name": "Domingo",
+                "localId": 1
+            }
+        ],
+        "allowMultipleAnswers": false,
+        "_data": {
+            "notifyName": "Contato Teste",
+            "isViewOnce": false
+        }
+    }
+}

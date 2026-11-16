@@ -3,30 +3,40 @@
 namespace NotificationChannels\Zapmizer\Connect;
 
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
+use NotificationChannels\Zapmizer\Support\Payload;
 
 /**
  * Class ConnectToken.
  *
  * Result of exchanging the callback code: the team's Sanctum token on
- * Zapmizer, which team authorized, and — since the hosted page pairs the
- * number before handing out the code — the paired number, its instance and
- * the webhook Zapmizer registered for the session's `webhook_url`.
+ * Zapmizer, the user and team that authorized it, and — since the hosted
+ * page pairs the number before handing out the code — the paired number,
+ * its instance and the webhook Zapmizer registered for the session's
+ * `webhook_url`. `hasNumber()` is false when the number ceased to exist
+ * between the approval and the exchange; the callback answers that with
+ * `exchange_failed`, stores nothing and revokes the token.
  *
  * `webhookSecret` is null when no webhook was requested AND when Zapmizer
  * reused a webhook the team already had for that URL (the secret is only
- * ever handed out once, on creation): a null secret with a non-null id
- * means "rotate to get one".
+ * ever handed out once, on creation): a null secret with a non-null id is
+ * a reused webhook, whose secret is the one stored on the first connect.
+ *
+ * `webhookVersion` is the version that webhook delivers in. A reused webhook
+ * keeps the version it had, whatever the session asked for; null when there
+ * is no webhook or Zapmizer is older than 1.148.17 (which does not send it).
  */
 final class ConnectToken
 {
     public function __construct(
         public readonly string $token,
-        public readonly ?int $teamId = null,
+        public readonly int $userId,
+        public readonly int $teamId,
         public readonly ?string $teamName = null,
         public readonly ?string $phoneNumber = null,
         public readonly ?int $botInstanceId = null,
         public readonly ?int $webhookId = null,
         public readonly ?string $webhookSecret = null,
+        public readonly ?string $webhookVersion = null,
     ) {
     }
 
@@ -41,24 +51,72 @@ final class ConnectToken
             throw ZapmizerConnectException::unexpectedResponse('missing token');
         }
 
+        $userId = Payload::positiveId($data['user_id'] ?? null);
+
+        if ($userId === null) {
+            throw ZapmizerConnectException::unexpectedResponse('invalid user_id');
+        }
+
+        $teamId = Payload::positiveId($data['team_id'] ?? null);
+
+        if ($teamId === null) {
+            throw ZapmizerConnectException::unexpectedResponse('invalid team_id');
+        }
+
+        $botInstanceId = self::optionalId($data, 'bot_instance_id');
+        $webhookId = self::optionalId($data, 'webhook_id');
+
         return new self(
             token: (string) $data['token'],
-            teamId: isset($data['team_id']) ? (int) $data['team_id'] : null,
+            userId: $userId,
+            teamId: $teamId,
             teamName: isset($data['team_name']) ? (string) $data['team_name'] : null,
             phoneNumber: filled($data['phone_number'] ?? null) ? (string) $data['phone_number'] : null,
-            botInstanceId: isset($data['bot_instance_id']) ? (int) $data['bot_instance_id'] : null,
-            webhookId: isset($data['webhook_id']) ? (int) $data['webhook_id'] : null,
+            botInstanceId: $botInstanceId,
+            webhookId: $webhookId,
             webhookSecret: filled($data['webhook_secret'] ?? null) ? (string) $data['webhook_secret'] : null,
+            webhookVersion: is_string($data['webhook_version'] ?? null) && $data['webhook_version'] !== '' ? $data['webhook_version'] : null,
         );
     }
 
     /**
-     * Zapmizer registered (or reused) a webhook but did not hand the secret
-     * out: the caller must rotate to obtain one before any delivery can be
-     * verified.
+     * An id that may be absent or `null`; present, it must be a positive id.
+     *
+     * @throws ZapmizerConnectException
+     */
+    private static function optionalId(array $data, string $field): ?int
+    {
+        if (($data[$field] ?? null) === null) {
+            return null;
+        }
+
+        return Payload::positiveId($data[$field])
+            ?? throw ZapmizerConnectException::unexpectedResponse("invalid {$field}");
+    }
+
+    /**
+     * Zapmizer reused a webhook and did not hand the secret out (it only
+     * comes on creation): only a secret already stored for the same webhook
+     * can verify its deliveries.
      */
     public function needsWebhookSecret(): bool
     {
         return $this->webhookId !== null && $this->webhookSecret === null;
+    }
+
+    /**
+     * The webhook delivers in `2024-02-27`, the version Zapmizer deprecated
+     * (a reused webhook keeps the version it had). It works the same — the
+     * package translates its `message` event — but moving it to the message
+     * contract takes another `webhook_url`, or revoking and connecting again.
+     */
+    public function hasLegacyWebhookVersion(): bool
+    {
+        return $this->webhookVersion === InstanceClient::LEGACY_WEBHOOK_VERSION;
+    }
+
+    public function hasNumber(): bool
+    {
+        return $this->phoneNumber !== null && $this->botInstanceId !== null;
     }
 }

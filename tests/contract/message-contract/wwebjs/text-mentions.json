@@ -1,0 +1,256 @@
+{
+    "raw": {
+        "_data": {
+            "id": {
+                "fromMe": false,
+                "remote": "120363000000000001@g.us",
+                "id": "3AAAAA00000000000002",
+                "participant": {
+                    "server": "lid",
+                    "user": "100000000000001",
+                    "_serialized": "100000000000001@lid"
+                },
+                "$1": "false_120363000000000001@g.us_3AAAAA00000000000002_100000000000001@lid",
+                "_serialized": "false_120363000000000001@g.us_3AAAAA00000000000002_100000000000001@lid"
+            },
+            "rowId": 1000000001,
+            "viewed": false,
+            "body": "teste @100000000000002 mensagem exemplo texto simples conteudo neutro aqui linha valor",
+            "type": "chat",
+            "t": 1760000000,
+            "serverStoreTimeMicros": 1760000000917382,
+            "from": {
+                "server": "g.us",
+                "user": "120363000000000001",
+                "_serialized": "120363000000000001@g.us"
+            },
+            "to": {
+                "server": "c.us",
+                "user": "5511900000000",
+                "_serialized": "5511900000000@c.us"
+            },
+            "author": "5511911111111@c.us",
+            "ack": 3,
+            "invis": true,
+            "star": false,
+            "kicNotified": false,
+            "isFromTemplate": false,
+            "thumbnail": "",
+            "faviconMMSMetadata": null,
+            "isAdsMedia": false,
+            "pollOptions": [],
+            "pollInvalidated": false,
+            "pollVotesSnapshot": {
+                "pollVotes": []
+            },
+            "latestEditMsgKey": null,
+            "latestEditSenderTimestampMs": null,
+            "quotedMsg": {
+                "type": "chat",
+                "kind": "chat",
+                "body": "item produto pedido contato atendimento informacao",
+                "pollOptions": []
+            },
+            "quotedStanzaID": "3AAAAA00000000000001",
+            "quotedParticipant": "5511922222222@c.us",
+            "quotedType": 0,
+            "mentionedJidList": [
+                {
+                    "server": "lid",
+                    "user": "100000000000002",
+                    "_serialized": "100000000000002@lid"
+                }
+            ],
+            "groupMentions": [],
+            "eventInvalidated": false,
+            "statusMentioned": false,
+            "isVcardOverMmsDocument": false,
+            "questionReplyQuotedMessage": null,
+            "questionResponsesCount": 0,
+            "readQuestionResponsesCount": 0,
+            "forwardsCount": 0,
+            "hasReaction": true,
+            "newsletterAdminProfile": null,
+            "viewMode": "VISIBLE",
+            "messageSecret": [
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            ],
+            "productHeaderImageRejected": false,
+            "lastPlaybackProgress": 0,
+            "isDynamicReplyButtonsMsg": false,
+            "isCarouselCard": false,
+            "parentMsgId": null,
+            "callSilenceReason": null,
+            "isVideoCall": false,
+            "callDuration": null,
+            "callCreator": null,
+            "callParticipants": null,
+            "isCallLink": null,
+            "callLinkToken": null,
+            "terminatedByDeviceSwitch": null,
+            "selfOtherDeviceConnected": null,
+            "bytesSent": null,
+            "bytesReceived": null,
+            "isMdHistoryMsg": false,
+            "stickerSentTs": 0,
+            "isAvatar": false,
+            "lastUpdateFromServerTs": 0,
+            "invokedBotWid": null,
+            "metaFrom": null,
+            "bizBotType": null,
+            "botDeepLinkToken": null,
+            "aiMediaCollectionInfo": null,
+            "expectedImageCount": null,
+            "expectedVideoCount": null,
+            "botResponseTargetId": null,
+            "botResponseId": null,
+            "botPluginType": null,
+            "botPluginReferenceIndex": null,
+            "botPluginSearchProvider": null,
+            "botPluginSearchUrl": null,
+            "botPluginSearchQuery": null,
+            "botPluginMaybeParent": false,
+            "botReelPluginThumbnailCdnUrl": null,
+            "botMessageDisclaimerText": null,
+            "botSessionTransparencyType": null,
+            "botMsgBodyType": null,
+            "botModeSelection": null,
+            "botModeOverride": null,
+            "hatchMetadataSync": null,
+            "requiresDirectConnection": null,
+            "bizContentPlaceholderType": null,
+            "hostedBizEncStateMismatch": false,
+            "senderOrRecipientAccountTypeHosted": false,
+            "placeholderCreatedWhenAccountIsHosted": false,
+            "groupHistoryBundleMessageKey": null,
+            "groupHistoryBundleMetadata": null,
+            "groupHistoryIndividualMessageInfo": null,
+            "links": [],
+            "reactions": [
+                {
+                    "id": "❤",
+                    "aggregateEmoji": "❤",
+                    "hasReactionByMe": false,
+                    "senders": [
+                        {
+                            "id": "false_120363000000000001@g.us_ACAAAA00000000000000000000000003_100000000000002@lid",
+                            "orphan": 0,
+                            "timestamp": 1760001696,
+                            "reaction": "❤️",
+                            "read": true,
+                            "msgId": "false_120363000000000001@g.us_3AAAAA00000000000002_100000000000001@lid",
+                            "senderId": "5511933333333@c.us",
+                            "ack": 3
+                        }
+                    ]
+                }
+            ]
+        },
+        "id": {
+            "fromMe": false,
+            "remote": "120363000000000001@g.us",
+            "id": "3AAAAA00000000000002",
+            "participant": {
+                "server": "lid",
+                "user": "100000000000001",
+                "_serialized": "100000000000001@lid"
+            },
+            "$1": "false_120363000000000001@g.us_3AAAAA00000000000002_100000000000001@lid",
+            "_serialized": "false_120363000000000001@g.us_3AAAAA00000000000002_100000000000001@lid"
+        },
+        "ack": 3,
+        "hasMedia": false,
+        "body": "teste @100000000000002 mensagem exemplo texto simples conteudo neutro aqui linha valor",
+        "type": "chat",
+        "timestamp": 1760000000,
+        "from": "120363000000000001@g.us",
+        "to": "5511900000000@c.us",
+        "author": "5511911111111@c.us",
+        "deviceType": "ios",
+        "forwardingScore": 0,
+        "isStatus": false,
+        "isStarred": false,
+        "fromMe": false,
+        "hasQuotedMsg": true,
+        "hasReaction": true,
+        "vCards": [],
+        "mentionedIds": [
+            {
+                "server": "lid",
+                "user": "100000000000002",
+                "_serialized": "100000000000002@lid"
+            }
+        ],
+        "groupMentions": [],
+        "isGif": false,
+        "links": [],
+        "reactions": [
+            {
+                "id": "❤",
+                "aggregateEmoji": "❤",
+                "hasReactionByMe": false,
+                "senders": [
+                    {
+                        "id": "false_120363000000000001@g.us_ACAAAA00000000000000000000000003_100000000000002@lid",
+                        "orphan": 0,
+                        "timestamp": 1760001696,
+                        "reaction": "❤️",
+                        "read": true,
+                        "msgId": "false_120363000000000001@g.us_3AAAAA00000000000002_100000000000001@lid",
+                        "senderId": "5511933333333@c.us",
+                        "ack": 3
+                    }
+                ]
+            }
+        ],
+        "cid": "120363000000000001@g.us"
+    },
+    "message": {
+        "id": "3AAAAA00000000000002",
+        "serialized_id": "false_120363000000000001@g.us_3AAAAA00000000000002_100000000000001@lid",
+        "chat": "120363000000000001@g.us",
+        "sender": "5511911111111@c.us",
+        "sender_name": null,
+        "from_me": false,
+        "from_me_other_device": false,
+        "timestamp": 1760000000,
+        "type": "text",
+        "text": "teste @100000000000002 mensagem exemplo texto simples conteudo neutro aqui linha valor",
+        "quoted": {
+            "id": "3AAAAA00000000000001",
+            "sender": "5511922222222@c.us",
+            "type": "text",
+            "native_type": "chat",
+            "text": "item produto pedido contato atendimento informacao",
+            "view_once": false,
+            "location": null,
+            "contacts": null,
+            "media": null,
+            "poll": null
+        },
+        "forwarded": false,
+        "view_once": false,
+        "mentions": ["100000000000002@lid"],
+        "media": null,
+        "location": null,
+        "contacts": null,
+        "poll": null,
+        "reply": null,
+        "link_preview": null,
+        "ack": 3,
+        "edited": false,
+        "reactions": [
+            {
+                "emoji": "❤",
+                "senders": [
+                    {
+                        "id": "false_120363000000000001@g.us_ACAAAA00000000000000000000000003_100000000000002@lid",
+                        "sender": "5511933333333@c.us"
+                    }
+                ]
+            }
+        ],
+        "received_at": null,
+        "native_type": "chat"
+    }
+}

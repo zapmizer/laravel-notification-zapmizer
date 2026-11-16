@@ -2,106 +2,56 @@
 
 > Full guides live in [`docs/`](docs/README.md). The [wiki](https://github.com/zapmizer/laravel-notification-zapmizer/wiki) is a mirror of `docs/` on `main`; edit `docs/`, not the wiki.
 
-## Installation
+Send WhatsApp messages from Laravel through [Zapmizer](https://app.zapmizer.com): a `zapmizer` notification channel and a `ZapmizerMessage` builder for text and files. On top of that, optional pieces you turn on as you need them: each model (a `Team`, a `User`) connects its own WhatsApp number in a hosted popup and receives messages on a signed webhook (`Connectable`), the conversation or the inbox opens embedded in your app (`EmbedSessionResponse`), and users verify their number (`MustVerifyWhatsapp`). Every exception of the package extends `ZapmizerException`, and the sending, connect and embed calls go through Laravel's `Http`, so `Http::fake()` covers them in tests.
 
-You can install the package via composer:
+## Requirements
+
+- PHP 8.1 or later.
+- Laravel 8.83 to 13 (8.83+, 9.52+, 10, 11, 12 or 13).
+- Zapmizer 1.148.10 or later.
+- The `curl` extension is suggested: without it the 600 s total limit of media downloads is applied per read.
+
+## Installation
 
 ```bash
 composer require zapmizer/laravel-notification-zapmizer
 ```
 
-Now publish config file
+Publish the config file:
+
 ```bash
-php artisan vendor:publish --provider="Notification\Zapmizer\ZapmizerServiceProvider" --tag=config --force
+php artisan vendor:publish --provider="NotificationChannels\Zapmizer\ZapmizerServiceProvider" --tag=config
 ```
 
+Upgrading from 0.3 or 0.4? Read the "Upgrade da 0.3 e da 0.4" list at the top of the [CHANGELOG](CHANGELOG.md) first: this version breaks the 0.3/0.4 API, and a published `config/zapmizer.php` does not get the new keys by itself.
 
-### Setting up your Zapmizer account
-1. [Create a API TOKEN.](https://app.zapmizer.com/user/api-tokens)
-2. Paste your API token  in your `zapmizer.php` config file.
-3. Add environment viariables with values
-```php
-    ZAPMIZER_API_TOKEN="your-api-token"
-    ZAPMIZER_FROM_NUMBER="558181643260"
+## Setting up your Zapmizer account
+
+1. [Create an API token](https://app.zapmizer.com/user/api-tokens).
+2. Set the token and the number that sends:
+
+```env
+ZAPMIZER_API_TOKEN="your-api-token"
+ZAPMIZER_FROM_NUMBER="558181643260"
 ```
 
+That is the single-tenant setup: one token and one number for the whole application. To give each model its own number, see the connect guide below.
 
-## Usage
+**API version.** Set `ZAPMIZER_API_VERSION=2025-06-27` to track what you send (`2026-10-20` works the same from Zapmizer 1.148.17 on; an older Zapmizer only knows `2025-06-27` for sending). The routes that read messages do not follow it: `syncMessages()` and `createWebhook()` always ask for the message contract, `2026-10-20`.
 
-In every Notification you wish to notify via WhatsApp, you must add a toZapmizer function and add 'zapmizer' drive into via's array:
-```php
-    /**
-     * Get the notification's delivery channels.
-     *
-     * @return array<int, string>
-     */
-    public function via(object $notifiable): array
-    {
-        return ['mail', 'zapmizer'];
-    }
+**Receiving messages (single-tenant).** Create the webhook on Zapmizer's "Webhooks" screen in version **`2026-10-20`** (the message contract; `2024-02-27` also works, translated into the same `Message`), point it at `https://your-app/zapmizer/webhook` and put its secret in `ZAPMIZER_WEBHOOK_SECRET`. Received messages fire `MessageReceived`, and what the number sends fires `MessageSent`. See [Receiving messages](docs/connect.md#6-receiving-messages-the-signed-webhook).
 
-    /**
-     * Get the WhatsApp representation of the notification.
-     */
-    public function toZapmizer(object $notifiable)
-    {
-        $message = 'This is a message!' . PHP_EOL;
+## Documentation
 
-        //WID must follow the WhatsApp pattern, example: 558181643260; 558181643260@c.us 128172192@g.us(groups)
+The guides live in [docs/](docs/README.md), in the order you will need them:
 
-        return ZapmizerMessage::create(from: config('zapmizer.from_number'), to: $notifiable->wid)->type('chat')->text($message)->send();
-    }
-```
+1. [Sending notifications](docs/envio.md) (Portuguese)
+2. [Errors](docs/erros.md) (Portuguese)
+3. [Connecting a number per model (multi-tenant)](docs/connect.md)
+4. [Embedding the conversation and the inbox](docs/embed.md) (Portuguese)
+5. [Number verification](docs/verify-number.md)
+6. [HTTP transport, timeouts and tests](docs/transporte.md) (Portuguese)
 
-## Number verification
+## Changelog
 
-Mirroring Laravel's `MustVerifyEmail`: implement an interface and use a trait on your `User` model, and it gains the verification methods you'd expect. The user verifies through a hosted page on the Zapmizer domain — they message the team's WhatsApp number via wa.me and type back the code the bot replies with. Your app confirms the code (hosted page or your own input) and/or receives the terminal state on the team's webhooks. State lives in the package's own tables — your `users` table is never touched.
-
-```php
-use NotificationChannels\Zapmizer\Contracts\MustVerifyWhatsapp as MustVerifyWhatsappContract;
-use NotificationChannels\Zapmizer\MustVerifyWhatsapp;
-
-class User extends Authenticatable implements MustVerifyWhatsappContract
-{
-    use MustVerifyWhatsapp;
-}
-```
-
-```blade
-<a href="{{ route('zapmizer.verify_number') }}">Verify your WhatsApp</a>
-```
-
-```php
-$user->hasVerifiedWhatsapp(); // true after the user completes the hosted page
-```
-
-**See the full setup guide — credentials, env vars, migrations, User model, signed return URL, confirmation webhook and events — in [docs/verify-number.md](docs/verify-number.md).**
-
-## Connecting a number per team (multi-tenant)
-
-Mirroring Cashier's `Billable`: put the `Connectable` trait on the model that owns a WhatsApp number (a `Team`, a `User`, ...) and it gets its own Zapmizer connection. The whole flow happens in one hosted popup on Zapmizer — authorization, QR code pairing, webhook registration — and the callback lands with everything: no wizard, no QR code, no polling on your side. A connect button and a connection panel ship as publishable Inertia + Vue stubs. Inbound messages arrive signed on the package's webhook and fire `MessageReceived` with the connection that received them.
-
-```php
-use NotificationChannels\Zapmizer\Connectable as ConnectsZapmizer;
-use NotificationChannels\Zapmizer\Contracts\Connectable;
-
-class Team extends Model implements Connectable
-{
-    use ConnectsZapmizer;
-}
-
-$team->zapmizerMessage('5511999999999')->text('Hello')->send();
-```
-
-```php
-Event::listen(function (MessageReceived $event) {
-    $event->message->fromPhone;       // who wrote
-    $event->message->body;
-    $event->connection?->connectable; // the Team — null when the delivery was
-                                      // signed with the single-tenant secret
-});
-```
-
-Bot events (`message`, ...) are only accepted signed. Single-tenant applications set `ZAPMIZER_WEBHOOK_SECRET` to the secret of the webhook they registered on Zapmizer; connected models store their own.
-
-**See [docs/connect.md](docs/connect.md) for the setup: partner credentials, the resolver, routes and statuses, the Vue stubs, the signed webhook and secret rotation. Requires Zapmizer 1.149.0 or later (hosted pairing); receiving media (`$connection->media($message)`) requires 1.150.0 or later.**
+See [CHANGELOG.md](CHANGELOG.md).

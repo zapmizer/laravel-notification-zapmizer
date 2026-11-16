@@ -1,0 +1,55 @@
+{
+    "raw_from": "whatsapp-rust-sidecar/live-channel.json",
+    "context": {
+        "bot_wid": "5511900000000@c.us",
+        "device": 0
+    },
+    "message": {
+        "id": "3EB0CHANLIVE",
+        "serialized_id": "false_120363159616870828@newsletter_3EB0CHANLIVE",
+        "chat": "120363159616870828@newsletter",
+        "sender": "120363159616870828@newsletter",
+        "sender_name": null,
+        "from_me": false,
+        "from_me_other_device": false,
+        "timestamp": 1760000100,
+        "type": "text",
+        "text": "post novo do canal",
+        "quoted": null,
+        "forwarded": false,
+        "view_once": false,
+        "mentions": [],
+        "media": null,
+        "location": null,
+        "contacts": null,
+        "poll": null,
+        "reply": null,
+        "link_preview": null,
+        "ack": null,
+        "edited": false,
+        "reactions": [],
+        "received_at": null,
+        "native_type": "chat"
+    },
+    "legacy_payload": {
+        "id": {
+            "id": "3EB0CHANLIVE",
+            "_serialized": "false_120363159616870828@newsletter_3EB0CHANLIVE",
+            "fromMe": false,
+            "remote": "120363159616870828@newsletter"
+        },
+        "from": "120363159616870828@newsletter",
+        "to": "5511900000000@c.us",
+        "fromMe": false,
+        "type": "chat",
+        "body": "post novo do canal",
+        "timestamp": 1760000100,
+        "hasMedia": false,
+        "hasQuotedMsg": false,
+        "isForwarded": false,
+        "_data": {
+            "notifyName": "",
+            "isViewOnce": false
+        }
+    }
+}

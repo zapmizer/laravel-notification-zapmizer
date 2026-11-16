@@ -1,0 +1,83 @@
+{
+    "echo": {
+        "id": "3EB0BBBB000000000004",
+        "chat": "5511911111111@c.us",
+        "bot_wid": "5511900000000@c.us",
+        "timestamp": 1760000500,
+        "native_type": "poll_creation",
+        "text": "",
+        "media": null,
+        "link_preview": null,
+        "quoted": null,
+        "poll": {
+            "name": "Qual horário?",
+            "options": ["9h", "10h"],
+            "selectable_count": 2
+        },
+        "location": null,
+        "mentions": []
+    },
+    "message": {
+        "id": "3EB0BBBB000000000004",
+        "serialized_id": "true_5511911111111@c.us_3EB0BBBB000000000004",
+        "chat": "5511911111111@c.us",
+        "sender": "5511900000000@c.us",
+        "sender_name": null,
+        "from_me": true,
+        "from_me_other_device": false,
+        "timestamp": 1760000500,
+        "type": "poll",
+        "text": "Qual horário?",
+        "quoted": null,
+        "forwarded": false,
+        "view_once": false,
+        "mentions": [],
+        "media": null,
+        "location": null,
+        "contacts": null,
+        "poll": {
+            "name": "Qual horário?",
+            "options": ["9h", "10h"],
+            "multiple": true
+        },
+        "reply": null,
+        "link_preview": null,
+        "ack": 1,
+        "edited": false,
+        "reactions": [],
+        "received_at": null,
+        "native_type": "poll_creation"
+    },
+    "legacy_payload": {
+        "id": {
+            "id": "3EB0BBBB000000000004",
+            "_serialized": "true_5511911111111@c.us_3EB0BBBB000000000004",
+            "fromMe": true,
+            "remote": "5511911111111@c.us"
+        },
+        "from": "5511900000000@c.us",
+        "to": "5511911111111@c.us",
+        "fromMe": true,
+        "type": "poll_creation",
+        "body": "Qual horário?",
+        "pollName": "Qual horário?",
+        "pollOptions": [
+            {
+                "name": "9h",
+                "localId": 0
+            },
+            {
+                "name": "10h",
+                "localId": 1
+            }
+        ],
+        "allowMultipleAnswers": true,
+        "timestamp": 1760000500,
+        "hasMedia": false,
+        "hasQuotedMsg": false,
+        "ack": 1,
+        "_data": {
+            "notifyName": ""
+        }
+    }
+}

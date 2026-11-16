@@ -67,6 +67,6 @@ jobs:
 
       - name: Lint
         run: |
-          for file in src/ZapmizerServiceProvider.php src/Console/SendMessage.php src/Http/Controllers/VerifyNumberController.php routes/web.php routes/webhook.php config/zapmizer.php src/Connectable.php src/MustVerifyWhatsapp.php src/Contracts/Connectable.php src/Contracts/MustVerifyWhatsapp.php; do
+          for file in src/ZapmizerServiceProvider.php src/Console/SendMessage.php src/Http/Controllers/VerifyNumberController.php routes/web.php routes/webhook.php routes/connection-webhook.php config/zapmizer.php src/Connectable.php src/MustVerifyWhatsapp.php src/Contracts/Connectable.php src/Contracts/MustVerifyWhatsapp.php src/Support/ConnectionWebhook.php; do
             php -l "$file"
           done

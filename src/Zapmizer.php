@@ -2,11 +2,19 @@
 
 namespace NotificationChannels\Zapmizer;
 
-use Exception;
-use GuzzleHttp\Client as HttpClient;
-use GuzzleHttp\Exception\ClientException;
-use NotificationChannels\Zapmizer\Exceptions\CouldNotSendNotification;
+use Illuminate\Container\Container;
+use InvalidArgumentException;
+use NotificationChannels\Zapmizer\Connect\ZapmizerApi;
+use NotificationChannels\Zapmizer\Contracts\Transport;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
+use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
+use NotificationChannels\Zapmizer\Messages\MetaMessageStatus;
+use NotificationChannels\Zapmizer\Messages\QrMessageStatus;
+use NotificationChannels\Zapmizer\Messages\SentMessage;
+use NotificationChannels\Zapmizer\Messages\SentTemplate;
+use NotificationChannels\Zapmizer\Messages\TrackingPayload;
 use NotificationChannels\Zapmizer\Support\JsonResponse;
+use NotificationChannels\Zapmizer\Support\Payload;
 use Psr\Http\Message\ResponseInterface;
 
 /**
@@ -14,8 +22,7 @@ use Psr\Http\Message\ResponseInterface;
  */
 class Zapmizer
 {
-    /** @var HttpClient HTTP Client */
-    protected HttpClient $http;
+    protected Transport $transport;
 
     /** @var null|string Zapmizer Bot API Token. */
     protected ?string $token;
@@ -23,10 +30,10 @@ class Zapmizer
     /** @var string Zapmizer Bot API Base URI */
     protected string $apiBaseUri;
 
-    public function __construct(?string $token = null, ?HttpClient $httpClient = null, ?string $apiBaseUri = null, protected ?string $apiVersion = null)
+    public function __construct(?string $token = null, ?Transport $transport = null, ?string $apiBaseUri = null, protected ?string $apiVersion = null)
     {
         $this->token = $token;
-        $this->http = $httpClient;
+        $this->transport = $transport ?? Container::getInstance()->make(Transport::class);
         $this->setApiBaseUri($apiBaseUri ?? 'https://app.zapmizer.com/api/');
     }
 
@@ -71,18 +78,6 @@ class Zapmizer
     }
 
     /**
-     * Set HTTP Client.
-     *
-     * @return $this
-     */
-    public function setHttpClient(HttpClient $http): self
-    {
-        $this->http = $http;
-
-        return $this;
-    }
-
-    /**
      * Send text message.
      *
      * <code>
@@ -96,36 +91,40 @@ class Zapmizer
      * ];
      * </code>
      *
+     * The answer is the accepted send, not the delivery: follow it with
+     * `track()`.
+     *
      * @see https://app.zapmizer.com/docs
      *
-     * @throws CouldNotSendNotification
+     * @throws Exceptions\ZapmizerException
      */
-    public function sendMessage(array $params): ?ResponseInterface
+    public function sendMessage(array $params): SentMessage
     {
-        if (blank($this->token)) {
-            throw CouldNotSendNotification::zapmizerBotTokenNotProvided('You must provide your zapmizer bot token to make any API requests.');
-        }
+        $this->guardToken();
 
-        return $this->post(['form_params' => $params]);
+        return SentMessage::fromArray($this->decode($this->post(['form_params' => $params])));
     }
 
-    public function sendMessageWithFile(array $params, string $filePath): ?ResponseInterface
+    /**
+     * @throws Exceptions\ZapmizerException
+     */
+    public function sendMessageWithFile(array $params, string $filePath): SentMessage
     {
-        if (blank($this->token)) {
-            throw CouldNotSendNotification::zapmizerBotTokenNotProvided('You must provide your zapmizer bot token to make any API requests.');
+        $this->guardToken();
+
+        $file = @fopen($filePath, 'r');
+
+        if ($file === false) {
+            throw ZapmizerConnectException::unreadableFile($filePath);
         }
 
-        try {
-            $multipart = [
-                [
-                    'name' => 'uploaded_media',
-                    'contents' => fopen($filePath, 'r'),
-                    'filename' => basename($filePath),
-                ],
-            ];
-        } catch (Exception $exception) {
-            throw CouldNotSendNotification::couldNotCommunicateWithZapmizer($exception);
-        }
+        $multipart = [
+            [
+                'name' => 'uploaded_media',
+                'contents' => $file,
+                'filename' => basename($filePath),
+            ],
+        ];
 
         foreach ($params as $key => $value) {
             $multipart[] = [
@@ -134,46 +133,196 @@ class Zapmizer
             ];
         }
 
-        return $this->post(['multipart' => $multipart]);
+        return SentMessage::fromArray($this->decode($this->post([
+            'multipart' => $multipart,
+            'connect_timeout' => ZapmizerApi::TRANSFER_CONNECT_TIMEOUT,
+            'timeout' => ZapmizerApi::TRANSFER_TIMEOUT,
+        ])));
     }
 
     /**
-     * POST to the messages API and make sure what came back is an API
-     * answer. Redirects are not followed: with a revoked token Zapmizer
-     * redirects to its login page, and following it would turn a lost
-     * message into a 200.
+     * Send an approved template (`POST /template-messages`) — official
+     * number only. Free text there only goes up to 24 h after the contact's
+     * last message; past that, `sendMessage()` answers `409 window_closed`
+     * (`ErrorCode::WINDOW_CLOSED`) and a template is the way to reach them.
      *
-     * @throws CouldNotSendNotification
+     * @param string $template The name approved on Meta
+     * @param string|null $language Only needed when the name exists in more than one language
+     * @param array<int|string, string> $body The body variables, in the order they appear
+     * @param string|null $header The header variable, when the template has one
+     *
+     * @throws Exceptions\ZapmizerException
+     */
+    public function sendTemplate(string $from, string $to, string $template, ?string $language = null, array $body = [], ?string $header = null): SentTemplate
+    {
+        $this->guardToken();
+
+        $variables = array_filter([
+            'body' => $body === [] ? null : array_values($body),
+            'header' => $header,
+        ], fn ($value) => $value !== null);
+
+        $payload = array_filter([
+            'from' => $from,
+            'to' => $to,
+            'template' => $template,
+            'language' => $language,
+            'variables' => $variables === [] ? null : $variables,
+        ], fn ($value) => $value !== null);
+
+        return SentTemplate::fromArray($this->decode($this->request('POST', '/template-messages', ['json' => $payload])));
+    }
+
+    /**
+     * Where a send from a QR number is now (`GET /sent-messages/{id}`).
+     * Prefer `track()`, which reads the kind of number from the send.
+     *
+     * @throws InvalidArgumentException when `$id` is empty, `.` or `..`
+     * @throws Exceptions\ZapmizerException
+     */
+    public function sentMessage(string $id): QrMessageStatus
+    {
+        if (!TrackingPayload::isId($id)) {
+            throw new InvalidArgumentException('The sent message id must not be empty, `.` nor `..`.');
+        }
+
+        $this->guardToken();
+
+        return QrMessageStatus::fromArray($this->decode($this->request('GET', '/sent-messages/' . rawurlencode($id))));
+    }
+
+    /**
+     * Where a send from the official number is now (`GET /meta-messages/{id}`).
+     * Prefer `track()`, which reads the kind of number from the send.
+     *
+     * @throws InvalidArgumentException when `$id` is not a positive integer
+     * @throws Exceptions\ZapmizerException
+     */
+    public function metaMessage(int|string $id): MetaMessageStatus
+    {
+        $id = Payload::positiveId($id);
+
+        if ($id === null) {
+            throw new InvalidArgumentException('The meta message id must be a positive integer.');
+        }
+
+        $this->guardToken();
+
+        return MetaMessageStatus::fromArray($this->decode($this->request('GET', "/meta-messages/{$id}")));
+    }
+
+    /**
+     * Follow a send by its `links.self` — the `SentMessage` itself or the
+     * link stored from it. The link says whether the number is QR
+     * (`sent-messages`) or official (`meta-messages`); the call goes to
+     * this client's API base with this client's token, never to the host
+     * written in the link.
+     *
+     * Null when there is nothing to follow, which is not an error: an
+     * official send that went through a queue (no `links.self`, so a stored
+     * link may be null too), or a `SentMessage` of the legacy shape (sent
+     * without `api-version`, its link is `/messages/{id}`).
+     *
+     * @throws InvalidArgumentException when a link given as a string is not
+     *                                  a tracking link
+     * @throws Exceptions\ZapmizerException
+     */
+    public function track(SentMessage|string|null $sent): QrMessageStatus|MetaMessageStatus|null
+    {
+        if ($sent === null) {
+            return null;
+        }
+
+        if ($sent instanceof SentMessage) {
+            if (!$sent->isTrackable()) {
+                return null;
+            }
+
+            $sent = (string) $sent->selfUrl;
+        }
+
+        [$kind, $id] = $this->trackingLink($sent);
+
+        return $kind === 'meta-messages' ? $this->metaMessage($id) : $this->sentMessage($id);
+    }
+
+    /**
+     * The kind (`sent-messages` or `meta-messages`) and the id of a
+     * `links.self`.
+     *
+     * @return array{0: string, 1: string}
+     *
+     * @throws InvalidArgumentException
+     */
+    protected function trackingLink(string $link): array
+    {
+        return TrackingPayload::link($link)
+            ?? throw new InvalidArgumentException('Not a tracking link (`sent-messages/{id}` or `meta-messages/{id}`): send with `api-version: 2025-06-27` to get one.');
+    }
+
+    /**
+     * POST to the messages API — see `request()`.
+     *
+     * @throws Exceptions\ZapmizerException
      */
     protected function post(array $options): ResponseInterface
     {
-        try {
-            $response = $this->httpClient()->post($this->getApiBaseUri() . '/messages', $options + [
-                'allow_redirects' => false,
-                'headers' => array_filter([
-                    'Authorization' => 'Bearer ' . $this->token,
-                    'Accept' => 'application/json',
-                    'api-version' => $this->apiVersion,
-                ]),
-            ]);
-        } catch (ClientException $exception) {
-            throw CouldNotSendNotification::zapmizerRespondedWithAnError($exception);
-        } catch (Exception $exception) {
-            throw CouldNotSendNotification::couldNotCommunicateWithZapmizer($exception);
+        return $this->request('POST', '/messages', $options);
+    }
+
+    /**
+     * Call the API as the token's connection and make sure what came back
+     * is an API answer: 4xx become the API exceptions, 5xx and network
+     * failures `ZapmizerUnavailableException`, a redirect or a non-JSON
+     * answer `unexpectedResponse`. Redirects are not followed: with a
+     * revoked token Zapmizer redirects to its login page, and following it
+     * would turn a lost message into a 200.
+     *
+     * @throws Exceptions\ZapmizerException
+     */
+    protected function request(string $method, string $path, array $options = []): ResponseInterface
+    {
+        $response = (new ZapmizerApi($this->transport))->send($method, $this->getApiBaseUri() . $path, $options, array_filter([
+            'Authorization' => 'Bearer ' . $this->token,
+            'api-version' => $this->apiVersion,
+        ]));
+
+        if ($response->getStatusCode() >= 400) {
+            throw ZapmizerApi::failure($response);
         }
 
         if (($problem = JsonResponse::problem($response)) !== null) {
-            throw CouldNotSendNotification::zapmizerRespondedUnexpectedly($problem);
+            throw ZapmizerConnectException::unexpectedResponse($problem);
         }
 
         return $response;
     }
 
     /**
-     * Get HttpClient.
+     * The JSON object of a successful answer.
+     *
+     * @throws ZapmizerConnectException
      */
-    protected function httpClient(): HttpClient
+    protected function decode(ResponseInterface $response): array
     {
-        return $this->http;
+        $payload = json_decode((string) $response->getBody(), true);
+
+        if (!is_array($payload) || ($payload !== [] && array_is_list($payload))) {
+            throw ZapmizerConnectException::unexpectedResponse('response body is not a JSON object');
+        }
+
+        return $payload;
+    }
+
+    /**
+     * @throws ZapmizerUnauthorizedException
+     */
+    protected function guardToken(): void
+    {
+        if (blank($this->token)) {
+            $message = 'You must provide your zapmizer bot token to make any API requests.';
+
+            throw ZapmizerUnauthorizedException::withoutResponse($message);
+        }
     }
 }

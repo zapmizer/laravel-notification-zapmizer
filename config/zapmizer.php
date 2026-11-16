@@ -9,7 +9,10 @@ return [
     'from_number' => env('ZAPMIZER_FROM_NUMBER'),
     // Zapmizer versions its contract by header. Sent as `api-version` by
     // every client (single-tenant and connected models) when set; leave
-    // null for the legacy shape.
+    // null for the legacy shape. It decides the shape of sending
+    // (2025-06-27 to track it; 2026-10-20 too, from Zapmizer 1.148.17) and
+    // of the calls that do not read messages: syncMessages() and
+    // createWebhook() always ask for the message contract (2026-10-20).
     'api_version' => env('ZAPMIZER_API_VERSION'),
     // Country code prepended to numbers typed in national format (10 or 11
     // digits). The Brazilian ninth-digit tolerance only applies to 55.
@@ -25,14 +28,33 @@ return [
         'secret' => env('ZAPMIZER_PARTNER_SECRET'),
     ],
 
+    'http' => [
+        'transport' => \NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport::class,
+        'connect_timeout' => env('ZAPMIZER_HTTP_CONNECT_TIMEOUT'),
+        'timeout' => env('ZAPMIZER_HTTP_TIMEOUT'),
+    ],
+
     'connect' => [
         // Who is being connected on a given request. Must implement
         // NotificationChannels\Zapmizer\Contracts\ResolvesConnectable — the
         // default returns the authenticated user; point it at the current
         // team (or anything else using the Connectable trait) as needed.
         'resolver' => \NotificationChannels\Zapmizer\Connect\ResolvesAuthenticatedUser::class,
-        // How long the authorization popup has to come back with a code.
-        'state_ttl_minutes' => (int) env('ZAPMIZER_CONNECT_STATE_TTL', 10),
+        // How long the popup has to come back, in minutes. The hosted page may take
+        // the customer through checkout, so keep it generous. Also sent as the
+        // session's expires_in (Zapmizer's floor is 15 minutes).
+        'state_ttl_minutes' => (int) env('ZAPMIZER_CONNECT_STATE_TTL', 30),
+        // Revoke the token a connection held before when a new connect replaces it
+        // (DELETE /connect/token), so the model keeps a single grant on Zapmizer.
+        'revoke_previous_token' => env('ZAPMIZER_CONNECT_REVOKE_PREVIOUS_TOKEN', false),
+        // The version of the webhook the connect creates, sent as the
+        // session's `webhook_version` (Zapmizer 1.148.17 or later; an older
+        // one ignores it). 2026-10-20 delivers messages in Zapmizer's message
+        // contract; 2024-02-27 (deprecated) still works, translated. Empty
+        // leaves it to the partner account's default; any other value throws
+        // (Zapmizer would refuse it with a 422). A published
+        // config/zapmizer.php must get this key added by hand.
+        'webhook_version' => env('ZAPMIZER_WEBHOOK_VERSION', '2026-10-20'),
     ],
 
     'webhook' => [
@@ -49,6 +71,27 @@ return [
         // Accepted drift between X-Zapmizer-Timestamp and now, in seconds.
         // Closes replay of an old delivery without breaking legitimate retries.
         'tolerance' => (int) env('ZAPMIZER_WEBHOOK_TOLERANCE', 300),
+        // Give each connection made through the connect flow its own webhook URL
+        // ({prefix}/webhook/{key}): the owner is found by the path, only its secret
+        // is tested, and events of another number are discarded. Needs the
+        // zapmizer-migrations-webhook-key migration, and is meant to run with
+        // connect.revoke_previous_token = true (otherwise the old webhooks keep
+        // delivering until revoked on Zapmizer). Connections made before keep using
+        // the shared route. Do not turn it off while any connection uses its own
+        // URL: its deliveries would get 404. A published config/zapmizer.php must
+        // get this key added by hand.
+        'per_connection' => env('ZAPMIZER_WEBHOOK_PER_CONNECTION', false),
+        // Drop the repeats of a delivery by the envelope `id` (Zapmizer retries
+        // with the same one): a repeat gets 200 and fires nothing. Uses the
+        // Laravel cache (`deduplicate_store`, null = the default store). The id
+        // is held for 120 s while the delivery runs, then for `deduplicate_ttl`
+        // seconds (empty or <= 0: 21600) once it answered without a 5xx; a
+        // failure (exception or 5xx) frees it for the retry. With the cache down
+        // the delivery is processed and a warning logged. A published
+        // config/zapmizer.php must get these keys added by hand.
+        'deduplicate' => env('ZAPMIZER_WEBHOOK_DEDUPLICATE', false),
+        'deduplicate_ttl' => (int) env('ZAPMIZER_WEBHOOK_DEDUPLICATE_TTL', 21600),
+        'deduplicate_store' => env('ZAPMIZER_WEBHOOK_DEDUPLICATE_STORE'),
     ],
 
     'models' => [

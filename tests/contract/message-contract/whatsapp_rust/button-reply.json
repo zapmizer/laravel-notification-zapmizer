@@ -1,0 +1,59 @@
+{
+    "raw_from": "whatsapp-rust-sidecar/message-button-reply.json",
+    "context": {
+        "bot_wid": "5511900000000@c.us",
+        "device": 0
+    },
+    "message": {
+        "id": "3EB0AAAA000000000034",
+        "serialized_id": "false_5511911111111@c.us_3EB0AAAA000000000034",
+        "chat": "5511911111111@c.us",
+        "sender": "5511911111111@c.us",
+        "sender_name": "Contato Teste",
+        "from_me": false,
+        "from_me_other_device": false,
+        "timestamp": 1760000000,
+        "type": "button_reply",
+        "text": "Sim, quero",
+        "quoted": null,
+        "forwarded": false,
+        "view_once": false,
+        "mentions": [],
+        "media": null,
+        "location": null,
+        "contacts": null,
+        "poll": null,
+        "reply": {
+            "id": "btn_sim",
+            "label": "Sim, quero",
+            "description": null
+        },
+        "link_preview": null,
+        "ack": null,
+        "edited": false,
+        "reactions": [],
+        "received_at": null,
+        "native_type": "buttons_response"
+    },
+    "legacy_payload": {
+        "id": {
+            "id": "3EB0AAAA000000000034",
+            "_serialized": "false_5511911111111@c.us_3EB0AAAA000000000034",
+            "fromMe": false,
+            "remote": "5511911111111@c.us"
+        },
+        "from": "5511911111111@c.us",
+        "to": "5511900000000@c.us",
+        "fromMe": false,
+        "type": "buttons_response",
+        "body": "Sim, quero",
+        "timestamp": 1760000000,
+        "hasMedia": false,
+        "hasQuotedMsg": false,
+        "isForwarded": false,
+        "_data": {
+            "notifyName": "Contato Teste",
+            "isViewOnce": false
+        }
+    }
+}

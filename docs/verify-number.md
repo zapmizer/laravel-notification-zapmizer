@@ -149,7 +149,7 @@ Event::listen(function (WhatsappVerified $event) {
 });
 ```
 
-> **Security note:** `verify_number.*` events are delivered **unsigned** — Zapmizer sends them outside the bot, without the `X-Zapmizer-Signature` every bot event carries (see [docs/connect.md](connect.md#6-receiving-messages-the-signed-webhook)). The package accepts them without a signature — they are the *only* events it does that for — so anyone who knows the URL can POST a `verify_number.verified` for a number. The handlers only ever upgrade state idempotently, but do harden the endpoint: a throttle/IP allowlist via `zapmizer.routes.webhook_middleware`, or disable the package routes and mount the controller behind your own protection (e.g. an unguessable URL prefix).
+> **Security note:** `verify_number.*` events are delivered **unsigned** — Zapmizer sends them outside the bot, without the `X-Zapmizer-Signature` every bot event carries (see [connect.md](connect.md#6-receiving-messages-the-signed-webhook)). The package accepts them without a signature — they are the *only* events it does that for — so anyone who knows the URL can POST a `verify_number.verified` for a number. The handlers only ever upgrade state idempotently, but do harden the endpoint: a throttle/IP allowlist via `zapmizer.routes.webhook_middleware`, or disable the package routes and mount the controller behind your own protection (e.g. an unguessable URL prefix).
 
 Payload shapes, for reference:
 
@@ -180,7 +180,7 @@ abort_unless($user->hasVerifiedWhatsapp(), 403, 'Verify your WhatsApp first.');
 
 ## Error handling
 
-Timeouts and API errors never bubble up as loose Guzzle exceptions:
+Timeouts and API errors never bubble up as loose Guzzle exceptions (a malformed `base_uri` is the exception: it throws as it comes, see [erros.md](erros.md), in Portuguese):
 
 ```php
 use NotificationChannels\Zapmizer\Exceptions\VerificationConnectionFailed; // network/timeout
@@ -188,7 +188,7 @@ use NotificationChannels\Zapmizer\Exceptions\VerificationRequestFailed;    // 4x
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerVerificationException; // base of all of the above
 ```
 
-The client sends `Accept: application/json` and does **not** follow redirects: a revoked token makes Zapmizer redirect to its login page, and a redirect or a non-JSON answer throws `ZapmizerVerificationException` (`unexpectedResponse`) instead of passing an HTML page off as a result. The same holds for the messages client (`Zapmizer::sendMessage()` → `CouldNotSendNotification`).
+The client sends `Accept: application/json` and does **not** follow redirects: a revoked token makes Zapmizer redirect to its login page, and a redirect or a non-JSON answer throws `ZapmizerVerificationException` (`unexpectedResponse`) instead of passing an HTML page off as a result. The same holds for the messages client (`Zapmizer::sendMessage()` → `ZapmizerConnectException`, `unexpectedResponse`). `ZapmizerVerificationException` extends `ZapmizerException`, the root of every exception of the package.
 
 Notable API errors when creating a session: `503` when the team has no online bot, `422` when the `from` number doesn't match any of the team's WhatsApp accounts.
 

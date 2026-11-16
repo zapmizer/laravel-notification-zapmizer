@@ -435,6 +435,22 @@ It returns the last answer: `attached`, `unavailable` as soon as Zapmizer says s
 
 The media endpoint is in every Zapmizer this version supports (1.148.10 or later, section 1).
 
+### Recovering what the webhook missed
+
+Zapmizer tries each delivery 3 times in about 3 seconds and gives up. With the app down for longer, or with messages that arrived in the sync after the number reconnected, the `message` event never comes. `ZapmizerConnection::syncMessages(?string $cursor = null, ?int $since = null, ?int $limit = null)` reads back, from `GET /api/whatsapp-messages` (numbers by QR only), every message of the number stored after the cursor — received and sent, including the ones that came in the sync after a reconnect:
+
+```php
+$page = $connection->syncMessages($cursor, since: $cursor ? null : now()->subHour()->getTimestamp());
+
+foreach ($page->messages as $i => $message) {
+    event(new MessageReceived($message, $connection, ['name' => 'message', 'data' => [$page->payloads[$i]]]));
+}
+
+$cursor = $page->cursor; // keep it; call again while $page->hasMore
+```
+
+Each message is an `InboundMessage` built exactly like the webhook's, so the same listener handles both. Zapmizer neither filters nor deduplicates: the listener must skip `fromMe` and be idempotent on `$message->id`, since a message may come back more than once. Run it on a schedule (every minute is fine: the endpoint allows 30 calls a minute per number). Requires **Zapmizer 1.148.15 or later** (`GET /api/whatsapp-messages`), above the 1.148.10 the rest of this version needs.
+
 ### Per-connection webhook URL (opt-in)
 
 On the shared route a connection is found by `X-Wid`. Every refused delivery (a forged signature, an orphan webhook, a forgotten secret) scans the whole table, and a valid delivery without `X-Wid`, or with another number of the team, reads half of it on average: each row read decrypts one or two secrets. With `zapmizer.webhook.per_connection` on, each connection made through the connect flow gets its own URL, `POST /zapmizer/webhook/{key}`. The key in the path finds the owner with one select, only that connection's secrets are tested, and events of another number are discarded.

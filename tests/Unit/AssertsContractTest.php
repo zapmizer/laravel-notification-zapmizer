@@ -112,4 +112,34 @@ class AssertsContractTest extends TestCase
             'declares Retry-After',
         );
     }
+
+    public function testTheSnapshotHasTheEmbedUserEmail()
+    {
+        $email = self::contractDocument()->components->schemas->SessaoDeEmbed->properties->user->properties->email ?? null;
+
+        $this->assertNotNull($email);
+        $this->assertSame(255, $email->maxLength);
+        $this->assertSame('email', $email->format);
+    }
+
+    public function testAValidEmbedBodyMatchesItsSchema()
+    {
+        $this->assertMatchesSchema('#/components/schemas/SessaoDeEmbed', [
+            'component' => 'inbox',
+            'parent_origin' => 'https://app.test',
+            'user' => ['id' => 'u-1', 'name' => 'Ana', 'email' => 'ana@ex.com'],
+        ]);
+    }
+
+    public function testAnInvalidEmbedBodyFailsItsSchema()
+    {
+        $this->assertContractRefuses(
+            fn () => $this->assertMatchesSchema('#/components/schemas/SessaoDeEmbed', [
+                'component' => 'inbox',
+                'parent_origin' => 'https://app.test',
+                'user' => ['id' => 'u-1', 'name' => 'Ana', 'email' => 'x'],
+            ]),
+            'does not match #/components/schemas/SessaoDeEmbed',
+        );
+    }
 }

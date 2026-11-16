@@ -1,2 +1,3 @@
-source: zapbot docs/api-parceiros/openapi.json
-commit: a0d02c27051f97405902bb20f777e747d962d218 (main, 2026-10-07 21:22:41 -0300)
+source: https://docs.parlichat.com/openapi.json
+fetched: 2026-10-17 01:16:45 UTC
+commit: f02fa93ef656a41975e3e2e9d7544a1b4858cdd9 (main, 2026-10-16 21:44:56 -0300)

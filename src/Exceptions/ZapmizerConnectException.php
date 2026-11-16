@@ -52,6 +52,14 @@ class ZapmizerConnectException extends ZapmizerException
     }
 
     /**
+     * Thrown before any request when the API URL is not an absolute http(s) URL with a host and without user info.
+     */
+    public static function invalidBaseUri(): self
+    {
+        return new self('The Zapmizer API URL is not an absolute http(s) URL with a host and without user info: check zapmizer.base_uri.');
+    }
+
+    /**
      * Thrown when Zapmizer refused a media request (422): a `timestamp` in
      * the future, or an instance on Meta Cloud — there is no media endpoint
      * for those. The request will not do better on a retry. Carries the

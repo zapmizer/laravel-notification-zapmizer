@@ -117,6 +117,10 @@ class ConnectController extends Controller
             return $this->code('zapmizer_unavailable', 503);
         } catch (NoConnectableException) {
             return $this->code('no_connectable', 403);
+        } catch (ZapmizerConnectException $exception) {
+            report($exception);
+
+            return $this->code('zapmizer_unavailable', 503);
         }
 
         return new JsonResponse($session);

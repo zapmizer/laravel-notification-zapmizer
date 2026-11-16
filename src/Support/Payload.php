@@ -53,7 +53,7 @@ final class Payload
         return $date;
     }
 
-    public static function url(mixed $value): ?string
+    public static function url(mixed $value, bool $underscoreInHost = false): ?string
     {
         if (!is_string($value) || preg_match('/[\x00-\x20\x7F\\\\]/', $value) === 1) {
             return null;
@@ -67,7 +67,7 @@ final class Payload
             || !in_array(strtolower($parts['scheme']), ['http', 'https'], true)
             || isset($parts['user'])
             || isset($parts['pass'])
-            || !self::isHost($parts['host'])
+            || !self::isHost($parts['host'], $underscoreInHost)
         ) {
             return null;
         }
@@ -89,13 +89,13 @@ final class Payload
         return $scheme . '://' . strtolower($parts['host']) . ($port === null || $port === $default ? '' : ':' . $port);
     }
 
-    private static function isHost(string $host): bool
+    private static function isHost(string $host, bool $underscoreInHost): bool
     {
         if (str_starts_with($host, '[') && str_ends_with($host, ']')) {
             return filter_var(substr($host, 1, -1), FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false;
         }
 
-        return preg_match('/^[A-Za-z0-9.-]+\z/', $host) === 1;
+        return preg_match($underscoreInHost ? '/^[A-Za-z0-9._-]+\z/' : '/^[A-Za-z0-9.-]+\z/', $host) === 1;
     }
 
     private static function hasPort(string $url, int $port): bool

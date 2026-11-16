@@ -10,12 +10,15 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
 use NotificationChannels\Zapmizer\Support\ApiError;
+use NotificationChannels\Zapmizer\Test\Concerns\InvalidBaseUris;
 use NotificationChannels\Zapmizer\Test\Fixtures\RecordingTransport;
 use NotificationChannels\Zapmizer\Test\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 class ZapmizerApiTest extends TestCase
 {
+    use InvalidBaseUris;
+
     public function testC15JsonAnswerIsReturnedAndUrlPassedAsIs()
     {
         $transport = new RecordingTransport(new Response(200, ['Content-Type' => 'application/json'], '{}'));
@@ -139,5 +142,44 @@ class ZapmizerApiTest extends TestCase
 
         $this->assertSame($error, $exception->apiError());
         $this->assertSame('window_closed', $exception->error());
+    }
+
+    /** @dataProvider invalidBaseUris */
+    #[DataProvider('invalidBaseUris')]
+    public function testX18bAUrlFromABadBaseIsRefusedBeforeTheTransport(string $base)
+    {
+        $transport = new RecordingTransport(new Response(200, ['Content-Type' => 'application/json'], '{}'));
+
+        try {
+            (new ZapmizerApi($transport))->send('GET', rtrim($base, '/') . '/x');
+            $this->fail('Expected the invalid base URI.');
+        } catch (ZapmizerConnectException $e) {
+            $this->assertIsTheInvalidBaseUri($e);
+        }
+
+        $this->assertSame([], $transport->calls);
+    }
+
+    /** @dataProvider validBaseUris */
+    #[DataProvider('validBaseUris')]
+    public function testX18cAGoodBasePasses(string $base)
+    {
+        $transport = new RecordingTransport(new Response(200, ['Content-Type' => 'application/json'], '{}'));
+
+        (new ZapmizerApi($transport))->send('GET', rtrim($base, '/') . '/x');
+
+        $this->assertCount(1, $transport->calls);
+        $this->assertSame(rtrim($base, '/') . '/x', $transport->calls[0]['url']);
+    }
+
+    public static function validBaseUris(): array
+    {
+        return [
+            'with a port' => ['http://localhost:8001/api/'],
+            'underscore in the host' => ['http://zapbot_app/api/'],
+            'the default' => ['https://app.zapmizer.com/api/'],
+            'upper case' => ['HTTPS://APP.ZAPMIZER.COM/api/'],
+            'ipv6 with a port' => ['http://[::1]:8001/api/'],
+        ];
     }
 }

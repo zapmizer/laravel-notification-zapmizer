@@ -6,6 +6,7 @@ use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
+use Illuminate\Support\Facades\Log;
 use NotificationChannels\Zapmizer\Connect\EmbedSession;
 use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Connect\Transports\LaravelHttpTransport;
@@ -95,24 +96,80 @@ class InstanceClientEmbedTest extends TestCase
 
     /** @dataProvider users */
     #[DataProvider('users')]
-    public function testE11TheUserGoesWithWhatIsFilled(?string $userId, ?string $userName, ?array $user)
+    public function testE11TheUserGoesWithWhatIsFilled(?string $userId, ?string $userName, ?string $userEmail, ?array $user)
     {
-        $this->created()->conversationSession('5521988887777', 'https://app.test', [], $userId, $userName);
+        Log::spy();
+
+        $this->created()->conversationSession('5521988887777', 'https://app.test', [], $userId, $userName, $userEmail);
 
         $this->assertSame($user, $this->sentBody()['user'] ?? null);
+        Log::shouldNotHaveReceived('warning');
+        Log::shouldNotHaveReceived('info');
+        Log::shouldNotHaveReceived('debug');
     }
 
     public static function users(): array
     {
+        $e254 = self::emailOfBytes(254);
+        $e255 = self::emailOfBytes(255);
+        $e256 = self::emailOfBytes(256);
+
         return [
-            'E11 both null' => [null, null, null],
-            'E11 both blank' => ['', '   ', null],
-            'E11 only the id' => ['u-1', null, ['id' => 'u-1']],
-            'E11 only the name' => [null, 'Ana', ['name' => 'Ana']],
-            'E11 blank id' => [' ', 'Ana', ['name' => 'Ana']],
-            'both' => ['u-1', 'Ana', ['id' => 'u-1', 'name' => 'Ana']],
-            'zero as the id' => ['0', null, ['id' => '0']],
+            'E11 both null' => [null, null, null, null],
+            'E11 both blank' => ['', '   ', null, null],
+            'E11 only the id' => ['u-1', null, null, ['id' => 'u-1']],
+            'E11 only the name' => [null, 'Ana', null, ['name' => 'Ana']],
+            'E11 blank id' => [' ', 'Ana', null, ['name' => 'Ana']],
+            'both' => ['u-1', 'Ana', null, ['id' => 'u-1', 'name' => 'Ana']],
+            'zero as the id' => ['0', null, null, ['id' => '0']],
+            'U1 email empty' => [null, null, '', null],
+            'U1 email blank' => [null, null, '   ', null],
+            'U2 not an email' => ['u-1', null, 'nao-e-email', ['id' => 'u-1']],
+            'U2 256 bytes' => ['u-1', null, $e256, ['id' => 'u-1']],
+            'U2 unicode local part' => ['u-1', null, 'ação@b.com', ['id' => 'u-1']],
+            'U2 no dot in the domain' => ['u-1', null, 'a@localhost', ['id' => 'u-1']],
+            'U2b 254 bytes' => [null, null, $e254, ['email' => $e254]],
+            'U2c 255 bytes' => ['u-1', null, $e255, ['id' => 'u-1']],
+            'U3 spaces around' => [null, null, ' ana@ex.com ', ['email' => 'ana@ex.com']],
+            'U4 only the email' => [null, null, 'ana@ex.com', ['email' => 'ana@ex.com']],
+            'U5 all three' => ['u-1', 'Ana', 'ana@ex.com', ['id' => 'u-1', 'name' => 'Ana', 'email' => 'ana@ex.com']],
         ];
+    }
+
+    private static function emailOfBytes(int $bytes): string
+    {
+        $rest = $bytes - 69;
+        $labels = [];
+        while ($rest > 0) {
+            $labels[] = str_repeat('b', min(63, $rest));
+            $rest -= 64;
+        }
+
+        return str_repeat('a', 64) . '@' . implode('.', $labels) . '.com';
+    }
+
+    public function testTheEmailHelperHasTheBytesAsked()
+    {
+        foreach ([254, 255, 256] as $bytes) {
+            $this->assertSame($bytes, strlen(self::emailOfBytes($bytes)));
+        }
+    }
+
+    public function testU5TheUserOfTheContract()
+    {
+        $this->created()->conversationSession('5521988887777', 'https://app.test', [], 'u-1', 'Ana', 'ana@ex.com');
+
+        $this->assertMatchesSchema('#/components/schemas/SessaoDeEmbed', $this->sentBody());
+        $this->assertSame(['id', 'name', 'email'], array_keys($this->sentBody()['user']));
+    }
+
+    /** @dataProvider users */
+    #[DataProvider('users')]
+    public function testU6TheInboxSendsTheSameUser(?string $userId, ?string $userName, ?string $userEmail, ?array $user)
+    {
+        $this->created()->inboxSession('https://app.test', [], $userId, $userName, $userEmail);
+
+        $this->assertSame($user, $this->sentBody()['user'] ?? null);
     }
 
     public function testE12TheInboxSendsNoPhoneAndNoAppearanceWhenNoneIsGiven()

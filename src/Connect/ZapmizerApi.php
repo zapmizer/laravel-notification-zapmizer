@@ -10,6 +10,7 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
 use NotificationChannels\Zapmizer\Support\ApiError;
 use NotificationChannels\Zapmizer\Support\JsonResponse;
+use NotificationChannels\Zapmizer\Support\Payload;
 use Psr\Http\Message\ResponseInterface;
 
 class ZapmizerApi
@@ -24,6 +25,10 @@ class ZapmizerApi
 
     public function send(string $method, string $url, array $options = [], array $fixedHeaders = [], bool $expectsJson = true): ResponseInterface
     {
+        if (Payload::url($url, underscoreInHost: true) === null) {
+            throw ZapmizerConnectException::invalidBaseUri();
+        }
+
         $fixed = array_merge(['Accept' => 'application/json'], $fixedHeaders);
         $options['headers'] = array_merge($this->withoutHeaders($options['headers'] ?? [], array_keys($fixed)), $fixed);
 

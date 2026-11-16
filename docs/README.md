@@ -7,3 +7,4 @@ Esta pasta vai junto com o código. Ao abrir pela tag que o app fixou, você lê
 3. [Verificação de número do WhatsApp](verify-number.md): `MustVerifyWhatsapp`, a página hospedada, a confirmação do código e o webhook com o resultado (em inglês).
 4. [Transporte HTTP, timeouts e testes](transporte.md): o `Http` do Laravel como transporte, os timeouts, o download de mídia, o fake nos testes e o transporte próprio.
 5. [Erros](erros.md): a árvore de exceções, o que a `ZapmizerApiException` carrega e as falhas que não são embrulhadas.
+6. [Embutir a conversa e a caixa de entrada](embed.md): o `EmbedSessionResponse`, o `user` do atendente, a resposta ao `@zapmizer/embed` e os testes.

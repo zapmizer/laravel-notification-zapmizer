@@ -185,6 +185,7 @@ class ZapmizerServiceProvider extends ServiceProvider
         $this->commands([
             Console\SendMessage::class,
             Console\InstallCommand::class,
+            Console\CheckCommand::class,
         ]);
     }
 

@@ -36,7 +36,7 @@ php artisan migrate
 ```
 
 - Pass the base URI before anything else (`--base-uri`, or `ZAPMIZER_BASE_URI` already in `.env`): the embed brand comes from it. A value already in `.env` is never overwritten; a different `--base-uri` makes the command fail.
-- `zapmizer:install` is idempotent. It publishes `config/zapmizer.php` and the `zapmizer_connections` migration, adds only the missing `ZAPMIZER_*` keys to `.env` and `.env.example` (partner keys empty), makes the model `implements Connectable` + `use ConnectsZapmizer;`, and with `--inbox` sets `ZAPMIZER_INBOX_ENABLED=true` and copies the Vue components to `resources/js`.
+- `zapmizer:install` is idempotent. It publishes `config/zapmizer.php` and the `zapmizer_connections` migration, adds only the missing `ZAPMIZER_*` keys to `.env` and `.env.example` (partner keys empty), makes the model `implements Connectable` + `use ConnectsZapmizer;`, and with `--inbox` sets `ZAPMIZER_INBOX_ENABLED=true` and copies the Vue components to `resources/js/zapmizer/` (one folder of their own, relative imports between them).
 - Follow the "Próximos passos" it prints. If it says it did not recognize the model file, paste the snippet it printed.
 - Drop `--inbox` when the app has no Vue; the guide has the complete Blade path (connect + inbox + logout).
 - `@zapmizer/embed/vue` needs Vue >= 3.3.

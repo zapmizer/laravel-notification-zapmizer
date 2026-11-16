@@ -53,7 +53,7 @@ O comando é idempotente: rodar de novo só faz o que falta. Sem `--no-interacti
 | --- | --- |
 | config | `config/zapmizer.php`, se ainda não existe |
 | migration | `database/migrations/*_create_zapmizer_connections_table.php`, uma vez só |
-| `.env` e `.env.example` | acrescenta só as chaves ausentes (as presentes, inclusive as credenciais, ficam como estão): `ZAPMIZER_BASE_URI`, `ZAPMIZER_API_VERSION=2025-06-27`, `ZAPMIZER_PARTNER_ID=` e `ZAPMIZER_PARTNER_SECRET=` vazios, `VITE_ZAPMIZER_BRAND` (a [marca do embed](#a-marca-do-embed)) e `ZAPMIZER_INBOX_ENABLED=true` com `--inbox` |
+| `.env` e `.env.example` | acrescenta só as chaves ausentes (as presentes, inclusive as credenciais, ficam como estão): `ZAPMIZER_BASE_URI`, `ZAPMIZER_API_VERSION=2025-06-27`, `ZAPMIZER_PARTNER_ID=` e `ZAPMIZER_PARTNER_SECRET=` vazios, `VITE_ZAPMIZER_BRAND` (a [marca do embed](#a-marca-do-embed); num host fora dos deploys conhecidos, também `ZAPMIZER_EMBED_BRAND`, quando o deploy diz a marca) e `ZAPMIZER_INBOX_ENABLED=true` com `--inbox` |
 | `--model` | `implements Connectable` e `use ConnectsZapmizer;` no model, com os `use` no topo |
 | `--inbox` | os componentes em `resources/js/zapmizer/` (os mesmos de `vendor:publish --tag=zapmizer-wizard --tag=zapmizer-inbox`), se o `package.json` tem `vue`. Sem `vue`, nada é publicado e os próximos passos apontam para o [caminho Blade](#sem-inertiavue) |
 

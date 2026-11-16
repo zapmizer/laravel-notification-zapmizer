@@ -70,6 +70,40 @@ final class SentMessage
     }
 
     /**
+     * A send for tests: what `POST /messages` answers for a QR number (the
+     * shape of the contract, in the queue, trackable), with `$overrides` in
+     * that same shape over it (`id`, `wid_to`, `message_status`,
+     * `links.self`, `metadata`...). The `links.self` follows the `id`
+     * unless given; `['id' => null]` is an official send that went through
+     * a queue (nothing to track). Each call gets its own `id`.
+     *
+     * The class is final, so a mock of `Zapmizer::sendMessage()` (or
+     * `sendMessageWithFile()`) cannot make up its return by itself: give
+     * it this one with `->andReturn(SentMessage::fake())`.
+     *
+     * @param array<string, mixed> $overrides
+     */
+    public static function fake(array $overrides = []): self
+    {
+        $id = array_key_exists('id', $overrides) ? $overrides['id'] : 'fake-' . bin2hex(random_bytes(8));
+        $self = (is_string($id) && $id !== '') || is_int($id)
+            ? 'https://app.zapmizer.com/api/sent-messages/' . rawurlencode((string) $id)
+            : null;
+
+        return self::fromArray(array_replace([
+            'id' => $id,
+            'type' => 'chat',
+            'wid_from' => '5511900000000@c.us',
+            'wid_to' => '5511999999999@c.us',
+            'message_status' => MessageStatus::QUEUED,
+            'message_status_name' => 'Enviando',
+            'metadata' => ['text' => 'fake'],
+            'attachment_url' => null,
+            'links' => ['self' => $self],
+        ], $overrides));
+    }
+
+    /**
      * Whether `Zapmizer::track()` can follow this send: its `links.self` is
      * a `sent-messages` or `meta-messages` link. False for an official send
      * that went through a queue (no link) and for the legacy shape (a

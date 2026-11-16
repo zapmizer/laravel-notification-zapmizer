@@ -158,6 +158,7 @@ Subclasses de `ZapmizerApiException` ganham `context()`.
 | subclasse de `ZapmizerMessage` com `send()` sem tipo de retorno | `send(): SentMessage`, senão erro fatal de assinatura incompatível |
 
 - `Messages\SentMessage`: `id`, `selfUrl`, `widFrom`, `widTo`, `status`, `statusName`, `type`, `isTrackable()` e `raw()`. Todo campo pode vir `null`, porque o contrato não exige nenhum. No número oficial com fila, `id` e `selfUrl` vêm `null`. Sem `api-version` (formato antigo, número por QR), o corpo vem em `data` e é lido do mesmo jeito.
+- `SentMessage::fake(array $overrides = [])` (desde a 2.0.0-beta.4): um envio aceito para testes, com as chaves da resposta da API em `$overrides`. A classe é `final`, e um mock de `Zapmizer::sendMessage()` sem `andReturn()` quebra no envio: devolva `->andReturn(SentMessage::fake())`. Veja "Testes" em `docs/envio.md`.
 - Numa notificação cujo `toZapmizer()` chama `->send()`, o `NotificationSent` passa a ter o `SentMessage` em `$event->response['message']`. O canal não muda.
 - Acompanhamento:
   - `Zapmizer::track(SentMessage|string|null $sent)` segue o `links.self` pela `base_uri` configurada, nunca pelo host do link. Devolve `Messages\QrMessageStatus` (`GET /sent-messages/{id}`) ou `Messages\MetaMessageStatus` (`GET /meta-messages/{id}`). Devolve `null` quando não há o que seguir: `null`, envio oficial em fila ou `SentMessage` do formato antigo (`isTrackable()` é `false` nos dois últimos).

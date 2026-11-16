@@ -15,6 +15,7 @@ use NotificationChannels\Zapmizer\Connect\InstanceClient;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerApiException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnauthorizedException;
+use NotificationChannels\Zapmizer\Http\Controllers\Concerns\ResolvesTheConnectable;
 use NotificationChannels\Zapmizer\Http\Responses\InboxSessionResponse;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
 
@@ -38,6 +39,8 @@ use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
  */
 class InboxController extends Controller
 {
+    use ResolvesTheConnectable;
+
     public const NO_CONNECTABLE = 'no_connectable';
 
     public const NOT_CONNECTED = 'not_connected';
@@ -49,13 +52,11 @@ class InboxController extends Controller
     public function session(Request $request): Responsable
     {
         try {
-            $connectable = $this->resolver->resolve($request);
+            $connectable = $this->resolveConnectable($request);
         } catch (NoConnectableException) {
             return InboxSessionResponse::code(self::NO_CONNECTABLE, 403);
         } catch (ZapmizerConnectException $exception) {
-            // A resolver that returns a model without Connectable (the
-            // default one with a user model that is not): a setup defect,
-            // answered as nothing to open instead of a 500.
+            // Any other refusal of the resolver: nothing to open, not a 500.
             Log::warning('zapmizer: the inbox resolver has nothing to open.', ['reason' => $exception->getMessage()]);
 
             return InboxSessionResponse::code(self::NO_CONNECTABLE, 403);

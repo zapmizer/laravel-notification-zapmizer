@@ -16,8 +16,9 @@ use Illuminate\Http\Request;
  * When there is nothing to connect (no user, a user without a team), throw
  * `ZapmizerConnectException::noConnectable()`: the package's JSON endpoints
  * answer 403 with the code `no_connectable` and the popup callback a result
- * page. Returning null is not an option — the return type is the
- * contract, and a null would surface as a TypeError (500).
+ * page. Do not return null nor a model without Connectable: the package
+ * routes answer that return-type failure with `no_connectable` too, with a
+ * warning naming the resolver, but it is a setup defect, not an API.
  */
 interface ResolvesConnectable
 {

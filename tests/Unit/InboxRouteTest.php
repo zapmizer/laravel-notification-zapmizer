@@ -8,7 +8,9 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use NotificationChannels\Zapmizer\Test\Fixtures\CreatesConnectionTables;
+use NotificationChannels\Zapmizer\Test\Fixtures\PlainModel;
 use NotificationChannels\Zapmizer\Test\Fixtures\PlainUser;
+use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesPlainModel;
 use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesFirstTeam;
 use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesNothing;
 use NotificationChannels\Zapmizer\Test\Fixtures\Team;
@@ -248,6 +250,23 @@ class InboxRouteTest extends TestCase
             ->assertExactJson(['code' => 'no_connectable']);
 
         Http::assertNothingSent();
+    }
+
+    public function testACustomResolverReturningANonConnectableIsNoConnectableNotA500()
+    {
+        Log::spy();
+        $this->actingAs(User::create(['name' => 'Ana']));
+        config()->set('zapmizer.connect.resolver', ResolvesPlainModel::class);
+        Http::fake();
+
+        $this->postJson(route('zapmizer.inbox.session'))
+            ->assertStatus(403)
+            ->assertExactJson(['code' => 'no_connectable']);
+
+        Http::assertNothingSent();
+        Log::shouldHaveReceived('warning')
+            ->with('zapmizer: the connect resolver returned a model that is not Connectable.', \Mockery::on(fn (array $context) => $context['resolver'] === ResolvesPlainModel::class && $context['returned'] === PlainModel::class))
+            ->once();
     }
 
     public function testATokenThatNoLongerDecryptsAsksForANewConnect()

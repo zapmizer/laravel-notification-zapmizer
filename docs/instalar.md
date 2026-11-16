@@ -12,7 +12,7 @@ Leia a página inteira antes de começar. Ela diz o que perguntar ao humano e qu
 ## Prompt sugerido
 
 ```text
-Instale a lib zapmizer/laravel-notification-zapmizer (2.0 beta) neste app, com o connect e a caixa de entrada embutida. Siga o roteiro de docs/instalar.md da lib.
+Instale a lib zapmizer/laravel-notification-zapmizer neste app, com o connect e a caixa de entrada embutida. Siga o roteiro de docs/instalar.md da lib.
 ```
 
 ## O que só o humano tem
@@ -29,7 +29,7 @@ Pergunte uma coisa por vez, e só o que você não conseguir descobrir lendo o a
 ### 1. Instalar o pacote
 
 ```bash
-composer require "zapmizer/laravel-notification-zapmizer:^2.0.0-beta.6@beta"
+composer require "zapmizer/laravel-notification-zapmizer:^2.0"
 ```
 
 ### 2. Rodar o instalador

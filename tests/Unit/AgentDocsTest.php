@@ -16,7 +16,7 @@ class AgentDocsTest extends TestCase
         $this->assertMatchesRegularExpression('/\A# laravel-notification-zapmizer\n\n> \S/', $llms, 'H1 then the blockquote');
         $this->assertStringContainsString("\n## Instalação\n", $llms);
 
-        preg_match_all('#\(https://github\.com/zapmizer/laravel-notification-zapmizer/blob/2\.x/([^)]+)\)#', $llms, $links);
+        preg_match_all('#\(https://github\.com/zapmizer/laravel-notification-zapmizer/blob/main/([^)]+)\)#', $llms, $links);
 
         $this->assertNotEmpty($links[1]);
 
@@ -77,7 +77,7 @@ class AgentDocsTest extends TestCase
             $this->assertNotEmpty($constraints[1], $file);
 
             foreach ($constraints[1] as $constraint) {
-                $this->assertSame('^2.0.0-beta.6@beta', $constraint, $file);
+                $this->assertSame('^2.0', $constraint, $file);
             }
         }
     }

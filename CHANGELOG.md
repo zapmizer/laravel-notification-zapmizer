@@ -1,6 +1,6 @@
 # Changelog
 
-# Unreleased
+# 2.0.0
 
 **Quebra a 0.x.** Leia "Upgrade das versões 0.0, 0.1 e 0.2" ou "Upgrade da 0.3 e da 0.4" antes de atualizar; o resto desta seção traz o de/para por tema.
 

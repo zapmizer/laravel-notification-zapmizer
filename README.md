@@ -5,13 +5,13 @@
 Prompt for a coding agent (Claude Code, Cursor, Codex...):
 
 ```text
-Instale a lib zapmizer/laravel-notification-zapmizer (2.0 beta) neste app, com o connect e a caixa de entrada embutida. Siga o roteiro de docs/instalar.md da lib.
+Instale a lib zapmizer/laravel-notification-zapmizer neste app, com o connect e a caixa de entrada embutida. Siga o roteiro de docs/instalar.md da lib.
 ```
 
 The commands, in order (Inertia + Vue 3 app; the guide covers Blade):
 
 ```bash
-composer require "zapmizer/laravel-notification-zapmizer:^2.0.0-beta.6@beta"
+composer require "zapmizer/laravel-notification-zapmizer:^2.0"
 php artisan zapmizer:install --base-uri=https://app.zapmizer.com/api/ --model=App\\Models\\User --inbox --no-interaction   # or https://app.parlichat.com/api/
 php artisan migrate
 npm install github:zapmizer/embed#v0.1.3 axios lucide-vue-next   # or bun/pnpm/yarn add, as the install output says

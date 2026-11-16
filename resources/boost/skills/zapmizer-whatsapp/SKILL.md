@@ -30,7 +30,7 @@ Ask one thing at a time, and only what the app does not tell you:
 ## Install
 
 ```bash
-composer require "zapmizer/laravel-notification-zapmizer:^2.0.0-beta.6@beta"
+composer require "zapmizer/laravel-notification-zapmizer:^2.0"
 php artisan zapmizer:install --base-uri=https://app.parlichat.com/api/ --model=App\\Models\\User --inbox --no-interaction
 php artisan migrate
 ```

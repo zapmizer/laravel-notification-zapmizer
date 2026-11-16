@@ -41,10 +41,11 @@ final class EnvFile
             return [];
         }
 
-        $block = implode("\n", array_map(fn ($key, $value) => $key . '=' . $this->format($value), array_keys($missing), $missing));
-        $separator = $contents === '' ? '' : (str_ends_with($contents, "\n") ? "\n" : "\n\n");
+        $eol = $this->eol($contents);
+        $block = implode($eol, array_map(fn ($key, $value) => $key . '=' . $this->format($value), array_keys($missing), $missing));
+        $separator = $contents === '' ? '' : (str_ends_with($contents, "\n") ? $eol : $eol . $eol);
 
-        file_put_contents($this->path, $contents . $separator . $block . "\n");
+        file_put_contents($this->path, $contents . $separator . $block . $eol);
 
         return array_keys($missing);
     }
@@ -64,7 +65,7 @@ final class EnvFile
             return $this->addMissing([$key => $value]) !== [];
         }
 
-        $updated = preg_replace('/^[ \t]*(?:export[ \t]+)?' . preg_quote($key, '/') . '[ \t]*=.*$/m', $line, $contents, 1);
+        $updated = preg_replace('/^[ \t]*(?:export[ \t]+)?' . preg_quote($key, '/') . '[ \t]*=[^\r\n]*/m', $line, $contents, 1);
 
         if ($updated === null || $updated === $contents) {
             return false;
@@ -75,13 +76,33 @@ final class EnvFile
         return true;
     }
 
+    /**
+     * The value as phpdotenv reads it: a quoted value up to its closing
+     * quote; an unquoted one up to a ` #` comment, trimmed.
+     */
     public function value(string $key): ?string
     {
-        if (preg_match('/^[ \t]*(?:export[ \t]+)?' . preg_quote($key, '/') . '[ \t]*=[ \t]*(.*)$/m', $this->contents(), $match) !== 1) {
+        if (preg_match('/^[ \t]*(?:export[ \t]+)?' . preg_quote($key, '/') . '[ \t]*=[ \t]*([^\r\n]*)/m', $this->contents(), $match) !== 1) {
             return null;
         }
 
-        return trim(trim($match[1]), '"\'');
+        $raw = $match[1];
+
+        if ($raw !== '' && ($raw[0] === '"' || $raw[0] === "'")) {
+            $end = strpos($raw, $raw[0], 1);
+
+            return $end === false ? substr($raw, 1) : substr($raw, 1, $end - 1);
+        }
+
+        return trim((string) preg_replace('/(^|\s)#.*$/', '', $raw));
+    }
+
+    /**
+     * The file's line ending, so an appended block does not mix them.
+     */
+    private function eol(string $contents): string
+    {
+        return str_contains($contents, "\r\n") ? "\r\n" : "\n";
     }
 
     private function contents(): string

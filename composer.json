@@ -1,6 +1,15 @@
 {
     "name": "zapmizer/laravel-notification-zapmizer",
-    "description": "A Laravel package to send WhatsApp notifications using Zapmizer API",
+    "description": "WhatsApp through Zapmizer for Laravel: notification channel, a number per model through the hosted connect flow, signed webhooks, embedded inbox and number verification.",
+    "keywords": [
+        "laravel",
+        "notifications",
+        "notification-channel",
+        "whatsapp",
+        "zapmizer",
+        "webhook",
+        "multi-tenant"
+    ],
     "homepage": "https://github.com/zapmizer/laravel-notification-zapmizer",
     "license": "MIT",
     "authors": [

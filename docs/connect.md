@@ -861,7 +861,7 @@ The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceCli
 | Config key | Purpose |
 |---|---|
 | `zapmizer.partner.id` / `secret` | partner credentials for the connect flow |
-| `zapmizer.api_version` | `api-version` header, sent by every client when set. `syncMessages()` and `createWebhook()` always ask for `2026-10-20` on their own; sending and every other call follow this key |
+| `zapmizer.api_version` | `api-version` header, sent when set by the sending client (`Zapmizer`), `VerificationClient` and `InstanceClient`. `syncMessages()` and `createWebhook()` always ask for `2026-10-20` on their own; sending and every other instance call follow this key. `PartnerClient` never sends it: Zapmizer's partner routes do not read it, so there is no need to extend the class for it |
 | `zapmizer.default_country_code` | country code completed on national numbers (default `55`) |
 | `zapmizer.connect.resolver` | which model a request connects |
 | `zapmizer.connect.state_ttl_minutes` | how long the popup has to come back, also sent as `expires_in` (default 30) |

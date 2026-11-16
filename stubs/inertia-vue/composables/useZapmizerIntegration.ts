@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { computed, getCurrentScope, onScopeDispose, ref } from 'vue';
 import type { ZapmizerConnection, ZapmizerRelinkResult } from '@/types/zapmizer';
+import { zapmizerRoute } from '@/composables/zapmizerRoute';
 
 const JSON_HEADERS = { headers: { Accept: 'application/json' } };
 
@@ -29,7 +30,7 @@ const STOP_STATUSES = [401, 403, 419];
  * chama isto sem carregar um estado que não é dele.
  */
 export async function openZapmizerConnect(): Promise<Window | null> {
-  const { data } = await axios.post<{ url: string; expires_at: string }>(route('zapmizer.connect.start'), {}, JSON_HEADERS);
+  const { data } = await axios.post<{ url: string; expires_at: string }>(zapmizerRoute('zapmizer.connect.start'), {}, JSON_HEADERS);
 
   return window.open(data.url, 'zapmizer-connect', 'width=520,height=720');
 }
@@ -43,7 +44,7 @@ export async function openZapmizerConnect(): Promise<Window | null> {
  * com o código em `response.data.code`.
  */
 export async function relinkZapmizer(): Promise<ZapmizerRelinkResult> {
-  const { data } = await axios.post<ZapmizerRelinkResult>(route('zapmizer.connect.reconnect'), {}, JSON_HEADERS);
+  const { data } = await axios.post<ZapmizerRelinkResult>(zapmizerRoute('zapmizer.connect.reconnect'), {}, JSON_HEADERS);
 
   if (data.status === 'needs_client') {
     window.open(data.url, 'zapmizer-reconnect', 'width=520,height=720');
@@ -95,7 +96,7 @@ export function useZapmizerIntegration() {
 
   async function fetchConnection(live: boolean) {
     const { data } = await axios.get<{ connection: ZapmizerConnection | null }>(
-      route('zapmizer.connect.show', live ? { live: 1 } : {}),
+      zapmizerRoute('zapmizer.connect.show', live ? { live: 1 } : {}),
       JSON_HEADERS,
     );
 
@@ -236,7 +237,7 @@ export function useZapmizerIntegration() {
   const relink = relinkZapmizer;
 
   async function disconnect() {
-    await axios.delete(route('zapmizer.connect.destroy'), JSON_HEADERS);
+    await axios.delete(zapmizerRoute('zapmizer.connect.destroy'), JSON_HEADERS);
 
     stopPolling();
     integration.value = null;

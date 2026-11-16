@@ -1,5 +1,25 @@
 # Zapmizer WhatsApp notification channel for Laravel 8 to 13
 
+## Install with an agent
+
+Prompt for a coding agent (Claude Code, Cursor, Codex...):
+
+```text
+Instale a lib zapmizer/laravel-notification-zapmizer (2.0 beta) neste app, com o connect e a caixa de entrada embutida. Siga o roteiro de docs/instalar.md da lib.
+```
+
+The commands, in order (Inertia + Vue 3 app; the guide covers Blade):
+
+```bash
+composer require "zapmizer/laravel-notification-zapmizer:^2.0.0-beta.2@beta"
+php artisan zapmizer:install --base-uri=https://app.zapmizer.com/api/ --model=App\\Models\\User --inbox --no-interaction   # or https://app.parlichat.com/api/
+php artisan migrate
+npm install github:zapmizer/embed#v0.1.2 axios lucide-vue-next   # or bun/pnpm/yarn add, as the install output says
+php artisan zapmizer:check --json
+```
+
+Then mount `resources/js/components/zapmizer/InboxScreen.vue` on an authenticated page and rebuild the front: the embed brand (`VITE_ZAPMIZER_BRAND`, written by the installer) must be the one of the deploy `ZAPMIZER_BASE_URI` points at (`parli` for app.parlichat.com), or the inbox never loads. Only a human knows the partner account's API (`--base-uri`: app.zapmizer.com or app.parlichat.com), has the partner credentials (`ZAPMIZER_PARTNER_ID`, `ZAPMIZER_PARTNER_SECRET`) and can get the app's host allowed on the partner account: ask, never make them up. Step by step, with what to ask and when to stop: [docs/instalar.md](docs/instalar.md) (Portuguese).
+
 > Full guides live in [`docs/`](docs/README.md). The [wiki](https://github.com/zapmizer/laravel-notification-zapmizer/wiki) is a mirror of `docs/` on `main`; edit `docs/`, not the wiki.
 
 Send WhatsApp messages from Laravel through [Zapmizer](https://app.zapmizer.com): a `zapmizer` notification channel and a `ZapmizerMessage` builder for text and files. On top of that, optional pieces you turn on as you need them: each model (a `Team`, a `User`) connects its own WhatsApp number in a hosted popup and receives messages on a signed webhook (`Connectable`), the conversation or the inbox opens embedded in your app (`EmbedSessionResponse`), and users verify their number (`MustVerifyWhatsapp`). Every exception of the package extends `ZapmizerException`, and the sending, connect and embed calls go through Laravel's `Http`, so `Http::fake()` covers them in tests.

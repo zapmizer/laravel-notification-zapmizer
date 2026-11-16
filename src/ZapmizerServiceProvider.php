@@ -107,6 +107,16 @@ class ZapmizerServiceProvider extends ServiceProvider
             $this->loadRoutesFrom(__DIR__ . '/../routes/web.php');
         });
 
+        if (filter_var(config('zapmizer.inbox.enabled', false), FILTER_VALIDATE_BOOLEAN)) {
+            Route::group([
+                'prefix' => config('zapmizer.routes.prefix', 'zapmizer'),
+                'middleware' => config('zapmizer.inbox.middleware', ['web', 'auth']),
+                'as' => 'zapmizer.',
+            ], function () {
+                $this->loadRoutesFrom(__DIR__ . '/../routes/inbox.php');
+            });
+        }
+
         // The webhook is public and stateless — registered outside the
         // user-facing middleware on purpose. The signature check is on the
         // route itself (routes/webhook.php), not left to the config. The
@@ -162,6 +172,13 @@ class ZapmizerServiceProvider extends ServiceProvider
             $this->publishes([
                 __DIR__ . '/../stubs/inertia-vue' => resource_path('js'),
             ], 'zapmizer-wizard');
+
+            // The inbox screen (InboxScreen.vue + zapmizerEmbed.ts) on its
+            // own tag: it imports @zapmizer/embed, which an app with only
+            // the connect does not have. It builds on the wizard's files.
+            $this->publishes([
+                __DIR__ . '/../stubs/inertia-vue-inbox' => resource_path('js'),
+            ], 'zapmizer-inbox');
         }
     }
 
@@ -174,6 +191,8 @@ class ZapmizerServiceProvider extends ServiceProvider
     {
         $this->commands([
             Console\SendMessage::class,
+            Console\InstallCommand::class,
+            Console\CheckCommand::class,
         ]);
     }
 

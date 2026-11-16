@@ -23,15 +23,24 @@ final class EmbedBrand
 
     public static function resolve(): string
     {
+        $baseUri = config('zapmizer.base_uri');
+
+        return self::resolveFor(is_string($baseUri) ? $baseUri : null);
+    }
+
+    /**
+     * The brand for a base URI that may not be in the config yet (the one
+     * `zapmizer:install` is writing): `zapmizer.inbox.brand` still wins.
+     */
+    public static function resolveFor(?string $baseUri): string
+    {
         $configured = config('zapmizer.inbox.brand');
 
         if (is_string($configured) && trim($configured) !== '') {
             return trim($configured);
         }
 
-        $baseUri = config('zapmizer.base_uri');
-
-        return self::fromBaseUri(is_string($baseUri) ? $baseUri : null);
+        return self::fromBaseUri($baseUri);
     }
 
     public static function fromBaseUri(?string $baseUri): string

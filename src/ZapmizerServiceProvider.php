@@ -172,6 +172,13 @@ class ZapmizerServiceProvider extends ServiceProvider
             $this->publishes([
                 __DIR__ . '/../stubs/inertia-vue' => resource_path('js'),
             ], 'zapmizer-wizard');
+
+            // The inbox screen (InboxScreen.vue + zapmizerEmbed.ts) on its
+            // own tag: it imports @zapmizer/embed, which an app with only
+            // the connect does not have. It builds on the wizard's files.
+            $this->publishes([
+                __DIR__ . '/../stubs/inertia-vue-inbox' => resource_path('js'),
+            ], 'zapmizer-inbox');
         }
     }
 

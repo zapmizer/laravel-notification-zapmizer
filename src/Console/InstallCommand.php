@@ -6,6 +6,7 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Schema;
 use NotificationChannels\Zapmizer\Install\ConnectableModel;
 use NotificationChannels\Zapmizer\Install\EnvFile;
+use NotificationChannels\Zapmizer\Support\BaseUri;
 use NotificationChannels\Zapmizer\Support\EmbedBrand;
 use ReflectionClass;
 use Throwable;
@@ -33,6 +34,7 @@ class InstallCommand extends Command
      */
     protected $signature = 'zapmizer:install
         {--model= : O model dono do número de WhatsApp (ex.: App\\Models\\User ou Team)}
+        {--base-uri= : A URL da API da conta de parceiro (ZAPMIZER_BASE_URI), ex.: https://app.parlichat.com/api/}
         {--inbox : Liga a caixa de entrada embutida e publica os componentes Vue}
         {--migrate : Roda as migrations no fim}
         {--force : Sobrescreve a config, a migration e os componentes já publicados}';
@@ -47,11 +49,19 @@ class InstallCommand extends Command
 
     protected bool $failed = false;
 
+    protected bool $componentsPublished = false;
+
+    /** Where the base URI came from: `flag`, `env` or `default`. */
+    protected string $baseUriSource = 'default';
+
+    protected string $baseUri = BaseUri::DEFAULT;
+
     public function handle(): int
     {
         // Artisan::call() reuses the instance: start clean every run.
         $this->nextSteps = [];
         $this->failed = false;
+        $this->componentsPublished = false;
 
         $this->line('');
         $this->line('  <options=bold>Zapmizer</> · instalação');
@@ -131,14 +141,18 @@ class InstallCommand extends Command
      */
     protected function writeEnvironment(bool $inbox): void
     {
+        if (!$this->resolveBaseUri()) {
+            return;
+        }
+
         $variables = [
-            'ZAPMIZER_BASE_URI' => 'https://app.zapmizer.com/api/',
+            'ZAPMIZER_BASE_URI' => $this->baseUri,
             'ZAPMIZER_API_VERSION' => '2025-06-27',
             'ZAPMIZER_PARTNER_ID' => '',
             'ZAPMIZER_PARTNER_SECRET' => '',
             // The embed's brand for the front (read at build time): the one
             // of the deploy the base_uri points at.
-            'VITE_ZAPMIZER_BRAND' => EmbedBrand::resolve(),
+            'VITE_ZAPMIZER_BRAND' => EmbedBrand::resolveFor($this->baseUri),
         ];
 
         $environment = $this->laravel->environmentFilePath();
@@ -152,6 +166,11 @@ class InstallCommand extends Command
                 }
 
                 continue;
+            }
+
+            // A key left empty is filled; one with a value is never touched.
+            if ($file->has('ZAPMIZER_BASE_URI') && $file->value('ZAPMIZER_BASE_URI') === '') {
+                $file->set('ZAPMIZER_BASE_URI', $this->baseUri);
             }
 
             // --inbox is an explicit ask: a ZAPMIZER_INBOX_ENABLED already
@@ -171,6 +190,66 @@ class InstallCommand extends Command
     }
 
     /**
+     * The API of the partner account: `--base-uri`, else the `.env` value,
+     * else (interactive) asked, else the default. A value already in `.env`
+     * is never overwritten: a different `--base-uri` is refused.
+     */
+    protected function resolveBaseUri(): bool
+    {
+        $env = new EnvFile($this->laravel->environmentFilePath());
+        $existing = $env->exists() ? $env->value('ZAPMIZER_BASE_URI') : null;
+        $flag = $this->option('base-uri');
+
+        if (is_string($flag) && trim($flag) !== '') {
+            $flag = trim($flag);
+
+            if (($problem = BaseUri::problem($flag)) !== null) {
+                $this->failure("--base-uri {$flag} {$problem}.");
+                $this->failed = true;
+
+                return false;
+            }
+
+            if ($existing !== null && $existing !== '' && !BaseUri::same($existing, $flag)) {
+                $this->failure("o .env já tem ZAPMIZER_BASE_URI={$existing}: não sobrescrevi com {$flag}. Troque à mão se for o caso.");
+                $this->failed = true;
+                [$this->baseUri, $this->baseUriSource] = [$existing, 'env'];
+
+                return true;
+            }
+
+            [$this->baseUri, $this->baseUriSource] = [$flag, 'flag'];
+
+            return true;
+        }
+
+        if ($existing !== null && $existing !== '') {
+            [$this->baseUri, $this->baseUriSource] = [$existing, 'env'];
+
+            return true;
+        }
+
+        if ($this->input->isInteractive()) {
+            $answer = trim((string) $this->ask('URL da API da conta de parceiro (ZAPMIZER_BASE_URI): https://app.zapmizer.com/api/ ou https://app.parlichat.com/api/', BaseUri::DEFAULT));
+
+            if (($problem = BaseUri::problem($answer)) !== null) {
+                $this->failure("{$answer} {$problem}.");
+                $this->failed = true;
+
+                return false;
+            }
+
+            [$this->baseUri, $this->baseUriSource] = [$answer, 'flag'];
+
+            return true;
+        }
+
+        [$this->baseUri, $this->baseUriSource] = [BaseUri::DEFAULT, 'default'];
+
+        return true;
+    }
+
+    /**
      * @return string|null the model made Connectable (or already it)
      */
     protected function connectModel(): ?string
@@ -178,7 +257,11 @@ class InstallCommand extends Command
         $model = $this->option('model');
 
         if (($model === null || $model === '') && $this->input->isInteractive()) {
-            $model = $this->ask('Qual model é dono do número de WhatsApp? (vazio para pular)', $this->userModel());
+            $user = $this->userModel();
+
+            $model = $user !== null && $this->confirm("Adicionar Connectable ao {$user} (o usuário logado é o dono do número)?", true)
+                ? $user
+                : $this->ask('Outro model dono do número? (vazio para pular)');
         }
 
         if (!is_string($model) || trim($model) === '') {
@@ -230,7 +313,7 @@ class InstallCommand extends Command
 
     /**
      * The Inertia + Vue components (connect button, panel, inbox screen), the
-     * same set as `vendor:publish --tag=zapmizer-wizard`.
+     * same set as `vendor:publish --tag=zapmizer-wizard --tag=zapmizer-inbox`.
      */
     protected function publishComponents(): void
     {
@@ -242,23 +325,28 @@ class InstallCommand extends Command
             return;
         }
 
-        $source = $this->packagePath('stubs/inertia-vue');
         $copied = 0;
         $kept = 0;
 
-        foreach ($this->files($source) as $file) {
-            $target = resource_path('js/' . substr($file, strlen($source) + 1));
+        foreach (['stubs/inertia-vue', 'stubs/inertia-vue-inbox'] as $directory) {
+            $source = $this->packagePath($directory);
 
-            if (is_file($target) && !$this->option('force')) {
-                $kept++;
+            foreach ($this->files($source) as $file) {
+                $target = resource_path('js/' . substr($file, strlen($source) + 1));
 
-                continue;
+                if (is_file($target) && !$this->option('force')) {
+                    $kept++;
+
+                    continue;
+                }
+
+                $this->ensureDirectory(dirname($target));
+                copy($file, $target);
+                $copied++;
             }
-
-            $this->ensureDirectory(dirname($target));
-            copy($file, $target);
-            $copied++;
         }
+
+        $this->componentsPublished = true;
 
         $copied > 0
             ? $this->done("componentes Vue em resources/js ({$copied} copiados" . ($kept > 0 ? ", {$kept} mantidos" : '') . ')')
@@ -296,6 +384,10 @@ class InstallCommand extends Command
             $steps[] = 'Peça ao responsável pela conta Zapmizer as credenciais de parceiro e preencha ZAPMIZER_PARTNER_ID e ZAPMIZER_PARTNER_SECRET no .env (são emitidas pela Zapmizer; não invente valores).';
         }
 
+        if ($this->baseUriSource === 'default') {
+            $steps[] = 'Confirme com o humano em qual deploy está a conta de parceiro: gravei ZAPMIZER_BASE_URI=' . BaseUri::DEFAULT . ' (padrão). Se for a Parli, troque por https://app.parlichat.com/api/ (e VITE_ZAPMIZER_BRAND=parli) ou rode de novo com --base-uri num .env sem a chave.';
+        }
+
         $host = parse_url((string) config('app.url'), PHP_URL_HOST) ?: 'o host do APP_URL';
         $steps[] = "Peça à Zapmizer para liberar o host {$host} na conta de parceiro: é ele que vai no redirect_uri, no webhook_url" . ($inbox ? ' e no parent_origin da caixa' : '') . ' (https em produção). Confira se o APP_URL é a URL pública do app.';
 
@@ -311,10 +403,15 @@ class InstallCommand extends Command
             $steps[] = 'Rode as migrations: php artisan migrate';
         }
 
-        if ($inbox) {
-            $steps[] = 'Instale o front: ' . $this->frontendInstall();
+        $brand = EmbedBrand::resolveFor($this->baseUri);
+
+        if ($inbox && $this->componentsPublished) {
+            $steps[] = 'Instale o front: ' . $this->frontendInstall(true);
             $steps[] = 'Monte <InboxScreen :person="String($page.props.auth.user.id)" /> (resources/js/components/zapmizer/InboxScreen.vue) numa página autenticada, chame listenToZapmizerLogout() no boot do app e endZapmizerEmbeds() antes do logout (resources/js/composables/zapmizerEmbed.ts).';
-            $steps[] = 'Rebuilde o front (npm run build, ou o build do gerenciador do app) depois de instalar: o VITE_ZAPMIZER_BRAND=' . EmbedBrand::resolve() . ' do .env entra no bundle, e precisa ser a marca do deploy da ZAPMIZER_BASE_URI.';
+            $steps[] = "Rebuilde o front (npm run build, ou o build do gerenciador do app) depois de instalar: o VITE_ZAPMIZER_BRAND={$brand} do .env entra no bundle, e precisa ser a marca do deploy da ZAPMIZER_BASE_URI.";
+        } elseif ($inbox) {
+            $steps[] = 'Sem Vue, os componentes não foram publicados: monte o connect e a caixa pelo caminho Blade de docs/instalar.md ("Sem Inertia/Vue"). Instale só o embed: ' . $this->frontendInstall(false);
+            $steps[] = "No Blade, passe brand: '{$brand}' ao @zapmizer/embed (a marca do deploy da ZAPMIZER_BASE_URI) e rebuilde o front.";
         }
 
         if (method_exists($this->laravel, 'configurationIsCached') && $this->laravel->configurationIsCached()) {
@@ -336,13 +433,13 @@ class InstallCommand extends Command
     /**
      * The package manager the lockfile names, the way Breeze picks it.
      */
-    protected function frontendInstall(): string
+    protected function frontendInstall(bool $components): string
     {
         $packages = [self::EMBED_VERSION];
         $package = $this->packageJson() ?? [];
         $dependencies = $this->dependencies($package);
 
-        foreach (['axios', 'lucide-vue-next'] as $dependency) {
+        foreach ($components ? ['axios', 'lucide-vue-next'] : [] as $dependency) {
             if (!isset($dependencies[$dependency])) {
                 $packages[] = $dependency;
             }

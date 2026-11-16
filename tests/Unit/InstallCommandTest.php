@@ -124,14 +124,55 @@ PHP;
         $this->assertSame(1, substr_count($env, 'ZAPMIZER_BASE_URI'));
     }
 
-    public function testTheFrontBrandIsTheOneOfTheBaseUriDeploy()
+    public function testTheBaseUriFlagWritesTheKeyAndTheBrandOfItsDeploy()
     {
-        config()->set('zapmizer.base_uri', 'https://app.parlichat.com/api/');
+        $this->assertInstall(['--inbox' => true, '--base-uri' => 'https://app.parlichat.com/api/'], 0, ['VITE_ZAPMIZER_BRAND=parli do .env entra no bundle']);
 
-        $this->assertInstall(['--inbox' => true], 0, ['VITE_ZAPMIZER_BRAND=parli do .env entra no bundle']);
+        foreach (['.env', '.env.example'] as $file) {
+            $this->assertStringContainsString("ZAPMIZER_BASE_URI=https://app.parlichat.com/api/\n", $this->readAppFile($file));
+            $this->assertStringContainsString("VITE_ZAPMIZER_BRAND=parli\n", $this->readAppFile($file));
+        }
+    }
+
+    public function testTheBaseUriAlreadyInDotEnvDecidesTheBrand()
+    {
+        $this->appFile('.env', self::ENV . "ZAPMIZER_BASE_URI=https://app.parlichat.com/api/ # parli\n");
+
+        $output = $this->assertInstall();
 
         $this->assertStringContainsString("VITE_ZAPMIZER_BRAND=parli\n", $this->readAppFile('.env'));
-        $this->assertStringContainsString("VITE_ZAPMIZER_BRAND=parli\n", $this->readAppFile('.env.example'));
+        $this->assertStringNotContainsString('Confirme com o humano em qual deploy', $output);
+    }
+
+    public function testADifferentBaseUriFlagNeverOverwritesTheOneInDotEnv()
+    {
+        $this->appFile('.env', self::ENV . "ZAPMIZER_BASE_URI=https://app.zapmizer.com/api/\nZAPMIZER_PARTNER_ID=42\n");
+
+        $this->assertInstall(['--base-uri' => 'https://app.parlichat.com/api/'], 1, ['não sobrescrevi']);
+
+        $env = $this->readAppFile('.env');
+        $this->assertStringContainsString("ZAPMIZER_BASE_URI=https://app.zapmizer.com/api/\n", $env);
+        $this->assertStringNotContainsString('parlichat', $env);
+        $this->assertStringContainsString("ZAPMIZER_PARTNER_ID=42\n", $env);
+        $this->assertStringContainsString("VITE_ZAPMIZER_BRAND=zapmizer\n", $env);
+    }
+
+    public function testTheSameBaseUriFlagAgainIsFine()
+    {
+        $this->assertInstall(['--base-uri' => 'https://app.parlichat.com/api']);
+        $this->assertInstall(['--base-uri' => 'https://app.parlichat.com/api/']);
+    }
+
+    public function testABaseUriWithoutApiIsRefused()
+    {
+        $this->assertInstall(['--base-uri' => 'https://app.parlichat.com/'], 1, ['precisa terminar em /api']);
+
+        $this->assertStringNotContainsString('ZAPMIZER_BASE_URI', $this->readAppFile('.env'));
+    }
+
+    public function testWithoutTheFlagTheDefaultIsWrittenAndFlaggedForTheHuman()
+    {
+        $this->assertInstall([], 0, ['Confirme com o humano em qual deploy está a conta de parceiro']);
     }
 
     public function testAnExistingFrontBrandIsKept()
@@ -234,8 +275,12 @@ PHP;
         $this->assertStringNotContainsString('ZAPMIZER_INBOX_ENABLED=false', $this->readAppFile('.env'));
         $this->assertStringEndsWith("ZAPMIZER_PARTNER_SECRET=\nVITE_ZAPMIZER_BRAND=zapmizer\nZAPMIZER_INBOX_ENABLED=true\n", $this->readAppFile('.env.example'), 'one block, no blank line');
 
-        foreach (['components/zapmizer/InboxScreen.vue', 'components/zapmizer/ConnectButton.vue', 'components/zapmizer/ConnectionPanel.vue', 'composables/useZapmizerIntegration.ts', 'composables/zapmizerEmbed.ts', 'composables/zapmizerRoute.ts', 'types/zapmizer.ts'] as $file) {
+        foreach (['components/zapmizer/ConnectButton.vue', 'components/zapmizer/ConnectionPanel.vue', 'composables/useZapmizerIntegration.ts', 'composables/zapmizerRoute.ts', 'types/zapmizer.ts'] as $file) {
             $this->assertFileEquals(__DIR__ . '/../../stubs/inertia-vue/' . $file, $this->appFile('resources/js/' . $file));
+        }
+
+        foreach (['components/zapmizer/InboxScreen.vue', 'composables/zapmizerEmbed.ts'] as $file) {
+            $this->assertFileEquals(__DIR__ . '/../../stubs/inertia-vue-inbox/' . $file, $this->appFile('resources/js/' . $file));
         }
     }
 
@@ -261,16 +306,21 @@ PHP;
         $this->assertSame('<!-- mine -->', $this->readAppFile('resources/js/components/zapmizer/InboxScreen.vue'));
 
         $this->assertInstall(['--inbox' => true, '--force' => true], 0);
-        $this->assertFileEquals(__DIR__ . '/../../stubs/inertia-vue/components/zapmizer/InboxScreen.vue', $this->appFile('resources/js/components/zapmizer/InboxScreen.vue'));
+        $this->assertFileEquals(__DIR__ . '/../../stubs/inertia-vue-inbox/components/zapmizer/InboxScreen.vue', $this->appFile('resources/js/components/zapmizer/InboxScreen.vue'));
     }
 
     public function testWithoutVueTheComponentsAreNotPublished()
     {
         $this->appFile('package.json', json_encode(['private' => true, 'devDependencies' => ['vite' => '^6.0']]));
 
-        $this->assertInstall(['--inbox' => true], 0, [
+        $output = $this->assertInstall(['--inbox' => true], 0, [
             'o package.json não tem vue',
+            'caminho Blade de docs/instalar.md',
+            'Instale só o embed: npm install github:zapmizer/embed#v0.1.2',
         ]);
+
+        $this->assertStringNotContainsString('<InboxScreen', $output);
+        $this->assertStringNotContainsString('lucide-vue-next', $output);
 
         $this->assertFileDoesNotExist($this->appFile('resources/js/components/zapmizer/InboxScreen.vue'));
         $this->assertStringContainsString('ZAPMIZER_INBOX_ENABLED=true', $this->readAppFile('.env'));
@@ -285,20 +335,39 @@ PHP;
 
     public function testInteractiveAsksForWhatTheFlagsDidNotSay()
     {
+        config()->set('auth.providers.users.model', 'App\\Models\\User');
+
         $this->artisan('zapmizer:install')
             ->expectsConfirmation('Ligar a caixa de entrada embutida (rotas da lib + componente Vue)?', 'yes')
-            ->expectsQuestion('Qual model é dono do número de WhatsApp? (vazio para pular)', 'App\\Models\\User')
+            ->expectsQuestion('URL da API da conta de parceiro (ZAPMIZER_BASE_URI): https://app.zapmizer.com/api/ ou https://app.parlichat.com/api/', 'https://app.parlichat.com/api/')
+            ->expectsConfirmation('Adicionar Connectable ao App\\Models\\User (o usuário logado é o dono do número)?', 'yes')
             ->expectsConfirmation('Rodar as migrations agora?', 'no')
             ->assertExitCode(0);
 
         $this->assertStringContainsString('implements Connectable', $this->readAppFile('app/Models/User.php'));
         $this->assertStringContainsString('ZAPMIZER_INBOX_ENABLED=true', $this->readAppFile('.env'));
+        $this->assertStringContainsString('VITE_ZAPMIZER_BRAND=parli', $this->readAppFile('.env'));
         $this->assertFalse(Schema::hasTable('zapmizer_connections'));
+    }
+
+    public function testInteractiveEmptyAnswerSkipsTheModel()
+    {
+        config()->set('auth.providers.users.model', 'App\\Models\\User');
+        $this->appFile('.env', self::ENV . "ZAPMIZER_BASE_URI=https://app.zapmizer.com/api/\n");
+
+        $this->artisan('zapmizer:install')
+            ->expectsConfirmation('Ligar a caixa de entrada embutida (rotas da lib + componente Vue)?', 'no')
+            ->expectsConfirmation('Adicionar Connectable ao App\\Models\\User (o usuário logado é o dono do número)?', 'no')
+            ->expectsQuestion('Outro model dono do número? (vazio para pular)', '')
+            ->expectsConfirmation('Rodar as migrations agora?', 'no')
+            ->assertExitCode(0);
+
+        $this->assertSame(self::USER_MODEL, $this->readAppFile('app/Models/User.php'));
     }
 
     public function testFlagsSkipTheQuestions()
     {
-        $this->artisan('zapmizer:install', ['--model' => 'App\\Models\\User', '--inbox' => true, '--migrate' => true])
+        $this->artisan('zapmizer:install', ['--model' => 'App\\Models\\User', '--inbox' => true, '--migrate' => true, '--base-uri' => 'https://app.zapmizer.com/api/'])
             ->assertExitCode(0);
 
         $this->assertTrue(Schema::hasTable('zapmizer_connections'));

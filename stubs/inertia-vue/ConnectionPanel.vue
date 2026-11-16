@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { AlertCircleIcon, Loader2Icon, RefreshCwIcon, RotateCcwIcon, SmartphoneIcon, Trash2Icon } from 'lucide-vue-next';
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { relinkZapmizer } from '@/composables/useZapmizerIntegration';
-import type { ZapmizerConnection, ZapmizerReconnectMessage } from '@/types/zapmizer';
+import { relinkZapmizer } from './useZapmizerIntegration';
+import type { ZapmizerConnection, ZapmizerReconnectMessage } from './types';
 
 /**
  * O número conectado e o estado dele. `integration` é o que `show?live=1`

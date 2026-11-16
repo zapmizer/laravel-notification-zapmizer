@@ -374,7 +374,7 @@ class InstallCommand extends Command
             $source = $this->packagePath($directory);
 
             foreach ($this->files($source) as $file) {
-                $target = resource_path('js/' . substr($file, strlen($source) + 1));
+                $target = resource_path('js/zapmizer/' . substr($file, strlen($source) + 1));
 
                 if (is_file($target) && !$this->option('force')) {
                     $kept++;
@@ -391,7 +391,7 @@ class InstallCommand extends Command
         $this->componentsPublished = true;
 
         $copied > 0
-            ? $this->done("componentes Vue em resources/js ({$copied} copiados" . ($kept > 0 ? ", {$kept} mantidos" : '') . ')')
+            ? $this->done("componentes Vue em resources/js/zapmizer ({$copied} copiados" . ($kept > 0 ? ", {$kept} mantidos" : '') . ')')
             : $this->skipped('componentes Vue já publicados (--force sobrescreve)');
     }
 
@@ -453,7 +453,7 @@ class InstallCommand extends Command
 
         if ($inbox && $this->componentsPublished) {
             $steps[] = 'Instale o front: ' . $this->frontendInstall(true);
-            $steps[] = 'Monte <InboxScreen :person="String($page.props.auth.user.id)" /> (resources/js/components/zapmizer/InboxScreen.vue) numa página autenticada, chame listenToZapmizerLogout() no boot do app e endZapmizerEmbeds() antes do logout (resources/js/composables/zapmizerEmbed.ts).';
+            $steps[] = 'Monte <InboxScreen :person="String($page.props.auth.user.id)" /> (resources/js/zapmizer/InboxScreen.vue) numa página autenticada, chame listenToZapmizerLogout() no boot do app e endZapmizerEmbeds() antes do logout (resources/js/zapmizer/zapmizerEmbed.ts). Importe de resources/js/zapmizer pelo alias que o app já usa para resources/js (ou por caminho relativo); os arquivos de lá se importam entre si por caminho relativo, sem depender de alias.';
             $steps[] = "Rebuilde o front (npm run build, ou o build do gerenciador do app) depois de instalar: o VITE_ZAPMIZER_BRAND={$brand} do .env entra no bundle, e precisa ser a marca do deploy da ZAPMIZER_BASE_URI.";
         } elseif ($inbox) {
             $steps[] = 'Sem Vue, os componentes não foram publicados: monte o connect e a caixa pelo caminho Blade de docs/instalar.md ("Sem Inertia/Vue"). Instale só o embed: ' . $this->frontendInstall(false);

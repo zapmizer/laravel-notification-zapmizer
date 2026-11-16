@@ -34,12 +34,13 @@ class PublishTagsTest extends TestCase
         $files = $this->filesOf('zapmizer-wizard');
 
         $this->assertSame([
-            'components/zapmizer/ConnectButton.vue',
-            'components/zapmizer/ConnectionPanel.vue',
-            'composables/useZapmizerIntegration.ts',
-            'composables/zapmizerRoute.ts',
-            'types/zapmizer.ts',
+            'ConnectButton.vue',
+            'ConnectionPanel.vue',
+            'types.ts',
+            'useZapmizerIntegration.ts',
+            'zapmizerRoute.ts',
         ], $files);
+        $this->assertSame([resource_path('js/zapmizer')], array_values(ServiceProvider::pathsToPublish(ZapmizerServiceProvider::class, 'zapmizer-wizard')));
 
         foreach (array_keys(ServiceProvider::pathsToPublish(ZapmizerServiceProvider::class, 'zapmizer-wizard')) as $source) {
             foreach ($files as $file) {
@@ -50,7 +51,34 @@ class PublishTagsTest extends TestCase
 
     public function testTheInboxTagHasTheScreenAndTheEmbedGlue()
     {
-        $this->assertSame(['components/zapmizer/InboxScreen.vue', 'composables/zapmizerEmbed.ts'], $this->filesOf('zapmizer-inbox'));
-        $this->assertSame([resource_path('js')], array_values(ServiceProvider::pathsToPublish(ZapmizerServiceProvider::class, 'zapmizer-inbox')));
+        $this->assertSame(['InboxScreen.vue', 'zapmizerEmbed.ts'], $this->filesOf('zapmizer-inbox'));
+        $this->assertSame([resource_path('js/zapmizer')], array_values(ServiceProvider::pathsToPublish(ZapmizerServiceProvider::class, 'zapmizer-inbox')));
+    }
+
+    public function testTheStubsImportEachOtherByRelativePaths()
+    {
+        $files = [];
+
+        foreach (['zapmizer-wizard', 'zapmizer-inbox'] as $tag) {
+            foreach (array_keys(ServiceProvider::pathsToPublish(ZapmizerServiceProvider::class, $tag)) as $source) {
+                foreach (glob($source . '/*') as $file) {
+                    $files[basename($file)] = (string) file_get_contents($file);
+                }
+            }
+        }
+
+        foreach ($files as $name => $code) {
+            preg_match_all("/^import .*? from '([^']+)';$/m", $code, $imports);
+
+            foreach ($imports[1] as $module) {
+                $this->assertDoesNotMatchRegularExpression('#^[@~]/#', $module, "{$name}: no app alias");
+
+                if (str_starts_with($module, '.')) {
+                    $this->assertStringStartsWith('./', $module, $name);
+                    $target = substr($module, 2);
+                    $this->assertTrue(isset($files[$target]) || isset($files[$target . '.ts']), "{$name} imports {$module}, which is published next to it");
+                }
+            }
+        }
     }
 }

@@ -2,10 +2,10 @@
 import { defaultMessages } from '@zapmizer/embed/errors';
 import { useInboxHost, useInboxSlot } from '@zapmizer/embed/vue';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import ConnectButton from '@/components/zapmizer/ConnectButton.vue';
-import { useZapmizerIntegration } from '@/composables/useZapmizerIntegration';
-import { listenToZapmizerLogout, ZAPMIZER_BRAND, zapmizerKeepAlive, zapmizerOpenSession } from '@/composables/zapmizerEmbed';
-import { zapmizerRoute } from '@/composables/zapmizerRoute';
+import ConnectButton from './ConnectButton.vue';
+import { useZapmizerIntegration } from './useZapmizerIntegration';
+import { listenToZapmizerLogout, ZAPMIZER_BRAND, zapmizerKeepAlive, zapmizerOpenSession } from './zapmizerEmbed';
+import { zapmizerRoute } from './zapmizerRoute';
 
 /**
  * A caixa de entrada do WhatsApp embutida, contra as rotas da lib

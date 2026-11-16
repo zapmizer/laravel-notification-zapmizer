@@ -55,7 +55,7 @@ O comando é idempotente: rodar de novo só faz o que falta. Sem `--no-interacti
 | migration | `database/migrations/*_create_zapmizer_connections_table.php`, uma vez só |
 | `.env` e `.env.example` | acrescenta só as chaves ausentes (as presentes, inclusive as credenciais, ficam como estão): `ZAPMIZER_BASE_URI`, `ZAPMIZER_API_VERSION=2025-06-27`, `ZAPMIZER_PARTNER_ID=` e `ZAPMIZER_PARTNER_SECRET=` vazios, `VITE_ZAPMIZER_BRAND` (a [marca do embed](#a-marca-do-embed)) e `ZAPMIZER_INBOX_ENABLED=true` com `--inbox` |
 | `--model` | `implements Connectable` e `use ConnectsZapmizer;` no model, com os `use` no topo |
-| `--inbox` | os componentes em `resources/js` (os mesmos de `vendor:publish --tag=zapmizer-wizard --tag=zapmizer-inbox`), se o `package.json` tem `vue`. Sem `vue`, nada é publicado e os próximos passos apontam para o [caminho Blade](#sem-inertiavue) |
+| `--inbox` | os componentes em `resources/js/zapmizer/` (os mesmos de `vendor:publish --tag=zapmizer-wizard --tag=zapmizer-inbox`), se o `package.json` tem `vue`. Sem `vue`, nada é publicado e os próximos passos apontam para o [caminho Blade](#sem-inertiavue) |
 
 No fim ele imprime os **próximos passos** do app: siga-os.
 
@@ -134,7 +134,7 @@ Route::get('/atendimento', fn () => Inertia::render('Atendimento'))
 <!-- resources/js/Pages/Atendimento.vue -->
 <script setup lang="ts">
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout.vue';
-import InboxScreen from '@/components/zapmizer/InboxScreen.vue';
+import InboxScreen from '@/zapmizer/InboxScreen.vue';
 </script>
 
 <template>
@@ -150,14 +150,15 @@ import InboxScreen from '@/components/zapmizer/InboxScreen.vue';
 - `person` é quem atende, estável e por pessoa: `String(user.id)`, ou `` `${user.id}:${team.id}` `` quando a conexão é do time (a troca de time não reabre a caixa do outro).
 - A caixa ocupa a altura do pai (no mínimo 560 px): dê altura ao contêiner.
 - Sem conexão, o componente mostra o botão de conectar. Conectou, a caixa abre. Uma conexão revogada, ou anterior à caixa (`missing_ability`), volta ao botão.
-- Com o Ziggy no app, as URLs saem do `route()`. Sem ele, de `resources/js/composables/zapmizerRoute.ts`, com o prefixo padrão `/zapmizer`.
+- Os componentes ficam todos em `resources/js/zapmizer/`, uma pasta só deles, e se importam entre si por caminho relativo: funcionam com qualquer alias (ou nenhum) e não colidem com as pastas `components/`/`Components/` do app. A página os importa como o app já importa de `resources/js`: `@/zapmizer/...` com o alias `@` (o do `laravel-vite-plugin` e dos starter kits), `~/zapmizer/...` num app com `~`, ou o caminho relativo. Não mova os arquivos nem crie alias por causa deles.
+- Com o Ziggy no app, as URLs saem do `route()`. Sem ele, de `resources/js/zapmizer/zapmizerRoute.ts`, com o prefixo padrão `/zapmizer`.
 
 Logout, nas duas pontas ([logout-e-multiaba.md](https://github.com/zapmizer/embed/blob/v0.1.3/docs/logout-e-multiaba.md) do embed):
 
 ```ts
 // resources/js/app.ts (ou app.js), uma vez por aba
 import { router } from '@inertiajs/vue3';
-import { endZapmizerEmbeds, listenToZapmizerLogout } from '@/composables/zapmizerEmbed';
+import { endZapmizerEmbeds, listenToZapmizerLogout } from '@/zapmizer/zapmizerEmbed';
 
 // O logout feito em outra aba fecha a caixa desta.
 listenToZapmizerLogout();
@@ -174,7 +175,7 @@ Com o Inertia 0.x (comum no Laravel 8 e 9: `@inertiajs/inertia` e `@inertiajs/in
 
 ```js
 import { Inertia } from '@inertiajs/inertia';
-import { endZapmizerEmbeds, listenToZapmizerLogout } from '@/composables/zapmizerEmbed';
+import { endZapmizerEmbeds, listenToZapmizerLogout } from '@/zapmizer/zapmizerEmbed';
 
 listenToZapmizerLogout();
 

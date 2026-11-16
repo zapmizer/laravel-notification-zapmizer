@@ -67,11 +67,11 @@ Then `'connect' => ['resolver' => App\Zapmizer\ResolvesCurrentTeam::class, ...]`
 ## Front: connect + inbox (Inertia + Vue 3)
 
 1. Install the embed with the app's package manager (the install output prints the exact command): `npm install github:zapmizer/embed#v0.1.3 axios lucide-vue-next` (or `bun add` / `pnpm add` / `yarn add`). Always pin the tag.
-2. Mount the screen on an authenticated page, inside the app's own layout, with a height:
+2. Mount the screen on an authenticated page, inside the app's own layout, with a height. The components live in `resources/js/zapmizer/`, a folder of their own whose files import each other by relative paths: import them the way the app already imports from `resources/js` (`@/zapmizer/...`, `~/zapmizer/...` or a relative path), and do not move them or add an alias for them.
 
 ```vue
 <script setup lang="ts">
-import InboxScreen from '@/components/zapmizer/InboxScreen.vue';
+import InboxScreen from '@/zapmizer/InboxScreen.vue';
 </script>
 
 <template>
@@ -82,11 +82,11 @@ import InboxScreen from '@/components/zapmizer/InboxScreen.vue';
 ```
 
    Without a connection it shows the connect button; once connected, the inbox opens. `person` is the stable id of who attends (`${user.id}:${team.id}` when the connection is the team's).
-3. Logout (Inertia 1+/2; with Inertia 0.x use `import { Inertia } from '@inertiajs/inertia'` and `Inertia.on('before', ...)`): call `listenToZapmizerLogout()` once at app boot and `endZapmizerEmbeds()` before the logout request (both in `resources/js/composables/zapmizerEmbed.ts`). With Inertia:
+3. Logout (Inertia 1+/2; with Inertia 0.x use `import { Inertia } from '@inertiajs/inertia'` and `Inertia.on('before', ...)`): call `listenToZapmizerLogout()` once at app boot and `endZapmizerEmbeds()` before the logout request (both in `resources/js/zapmizer/zapmizerEmbed.ts`). With Inertia:
 
 ```ts
 import { router } from '@inertiajs/vue3';
-import { endZapmizerEmbeds, listenToZapmizerLogout } from '@/composables/zapmizerEmbed';
+import { endZapmizerEmbeds, listenToZapmizerLogout } from '@/zapmizer/zapmizerEmbed';
 
 listenToZapmizerLogout();
 router.on('before', (event) => {

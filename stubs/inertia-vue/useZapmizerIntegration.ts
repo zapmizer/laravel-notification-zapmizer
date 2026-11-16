@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { computed, getCurrentScope, onScopeDispose, ref } from 'vue';
-import type { ZapmizerConnection, ZapmizerRelinkResult } from '@/types/zapmizer';
-import { zapmizerRoute } from '@/composables/zapmizerRoute';
+import type { ZapmizerConnection, ZapmizerRelinkResult } from './types';
+import { zapmizerRoute } from './zapmizerRoute';
 
 const JSON_HEADERS = { headers: { Accept: 'application/json' } };
 

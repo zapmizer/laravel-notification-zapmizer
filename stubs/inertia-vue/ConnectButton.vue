@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { AlertCircleIcon, ArrowRightIcon, MessageCircleIcon } from 'lucide-vue-next';
 import { onBeforeUnmount, onMounted, ref } from 'vue';
-import { openZapmizerConnect } from '@/composables/useZapmizerIntegration';
-import type { ZapmizerConnectMessage } from '@/types/zapmizer';
+import { openZapmizerConnect } from './useZapmizerIntegration';
+import type { ZapmizerConnectMessage } from './types';
 
 withDefaults(defineProps<{ reauthRequired?: boolean }>(), { reauthRequired: false });
 

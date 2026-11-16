@@ -126,5 +126,11 @@ return [
         // http:// or the internal host, and Zapmizer answers
         // `origin_not_allowed`.
         'parent_origin' => env('ZAPMIZER_INBOX_PARENT_ORIGIN'),
+        // The `brand` of @zapmizer/embed: the iframe tags its events with
+        // `source: "{brand}-embed"` and each Zapmizer deploy has its own
+        // (`parli` on app.parlichat.com). Empty: derived from the base_uri
+        // host (Support\EmbedBrand). The front reads it at build time from
+        // VITE_ZAPMIZER_BRAND, which must match; zapmizer:check compares.
+        'brand' => env('ZAPMIZER_EMBED_BRAND'),
     ],
 ];

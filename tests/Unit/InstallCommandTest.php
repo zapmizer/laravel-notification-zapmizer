@@ -87,7 +87,7 @@ PHP;
         $this->assertFileDoesNotExist($this->appFile('resources/js/components/zapmizer/InboxScreen.vue'));
         $this->assertFalse(Schema::hasTable('zapmizer_connections'), 'no migrate without --migrate');
 
-        $expected = self::ENV . "\nZAPMIZER_BASE_URI=https://app.zapmizer.com/api/\nZAPMIZER_API_VERSION=2025-06-27\nZAPMIZER_PARTNER_ID=\nZAPMIZER_PARTNER_SECRET=\n";
+        $expected = self::ENV . "\nZAPMIZER_BASE_URI=https://app.zapmizer.com/api/\nZAPMIZER_API_VERSION=2025-06-27\nZAPMIZER_PARTNER_ID=\nZAPMIZER_PARTNER_SECRET=\nVITE_ZAPMIZER_BRAND=zapmizer\n";
 
         $this->assertSame($expected, $this->readAppFile('.env'));
         $this->assertSame($expected, $this->readAppFile('.env.example'));
@@ -122,6 +122,26 @@ PHP;
         $this->assertStringContainsString("export ZAPMIZER_PARTNER_ID=42\nZAPMIZER_BASE_URI = http://localhost:8001/api/\n\nZAPMIZER_API_VERSION=2025-06-27\nZAPMIZER_PARTNER_SECRET=\n", $env);
         $this->assertSame(1, substr_count($env, 'ZAPMIZER_PARTNER_ID'));
         $this->assertSame(1, substr_count($env, 'ZAPMIZER_BASE_URI'));
+    }
+
+    public function testTheFrontBrandIsTheOneOfTheBaseUriDeploy()
+    {
+        config()->set('zapmizer.base_uri', 'https://app.parlichat.com/api/');
+
+        $this->assertInstall(['--inbox' => true], 0, ['VITE_ZAPMIZER_BRAND=parli do .env entra no bundle']);
+
+        $this->assertStringContainsString("VITE_ZAPMIZER_BRAND=parli\n", $this->readAppFile('.env'));
+        $this->assertStringContainsString("VITE_ZAPMIZER_BRAND=parli\n", $this->readAppFile('.env.example'));
+    }
+
+    public function testAnExistingFrontBrandIsKept()
+    {
+        $this->appFile('.env', self::ENV . "VITE_ZAPMIZER_BRAND=acme\n");
+
+        $this->assertInstall();
+
+        $this->assertSame(1, substr_count($this->readAppFile('.env'), 'VITE_ZAPMIZER_BRAND'));
+        $this->assertStringContainsString("VITE_ZAPMIZER_BRAND=acme\n", $this->readAppFile('.env'));
     }
 
     public function testWithoutDotEnvItWarnsAndStillWritesTheExample()
@@ -207,11 +227,12 @@ PHP;
             'componentes Vue em resources/js',
             'Instale o front: npm install github:zapmizer/embed#v0.1.2 lucide-vue-next',
             'endZapmizerEmbeds() antes do logout',
+            'Rebuilde o front',
         ]);
 
         $this->assertStringContainsString("ZAPMIZER_INBOX_ENABLED=true\n", $this->readAppFile('.env'));
         $this->assertStringNotContainsString('ZAPMIZER_INBOX_ENABLED=false', $this->readAppFile('.env'));
-        $this->assertStringEndsWith("ZAPMIZER_PARTNER_SECRET=\nZAPMIZER_INBOX_ENABLED=true\n", $this->readAppFile('.env.example'), 'one block, no blank line');
+        $this->assertStringEndsWith("ZAPMIZER_PARTNER_SECRET=\nVITE_ZAPMIZER_BRAND=zapmizer\nZAPMIZER_INBOX_ENABLED=true\n", $this->readAppFile('.env.example'), 'one block, no blank line');
 
         foreach (['components/zapmizer/InboxScreen.vue', 'components/zapmizer/ConnectButton.vue', 'components/zapmizer/ConnectionPanel.vue', 'composables/useZapmizerIntegration.ts', 'composables/zapmizerEmbed.ts', 'composables/zapmizerRoute.ts', 'types/zapmizer.ts'] as $file) {
             $this->assertFileEquals(__DIR__ . '/../../stubs/inertia-vue/' . $file, $this->appFile('resources/js/' . $file));

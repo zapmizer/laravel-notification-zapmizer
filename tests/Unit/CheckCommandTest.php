@@ -37,6 +37,7 @@ class CheckCommandTest extends TestCase
 
         $this->setUpTemporaryApp();
         $this->appFile('config/zapmizer.php', '<?php return [];');
+        $this->appFile('.env', "VITE_ZAPMIZER_BRAND=zapmizer\n");
     }
 
     protected function tearDown(): void
@@ -113,12 +114,13 @@ class CheckCommandTest extends TestCase
         $this->assertSame(0, $result['exit']);
         $this->assertTrue($result['ok']);
         $this->assertSame(
-            ['app_key', 'config', 'base_uri', 'partner_credentials', 'partner_api', 'migration', 'connectable', 'connect_routes', 'inbox_routes', 'embed_package', 'app_url'],
+            ['app_key', 'config', 'base_uri', 'partner_credentials', 'partner_api', 'migration', 'connectable', 'connect_routes', 'inbox_routes', 'embed_package', 'embed_brand', 'app_url'],
             array_keys($result['checks']),
         );
         $this->assertSame('ok', $result['checks']['partner_api']['status']);
         $this->assertSame('skip', $result['checks']['inbox_routes']['status']);
         $this->assertSame('skip', $result['checks']['embed_package']['status']);
+        $this->assertSame('skip', $result['checks']['embed_brand']['status']);
     }
 
     public function testARefusedKeyFails()
@@ -262,6 +264,35 @@ class CheckCommandTest extends TestCase
         $this->assertSame(0, $pinned['exit']);
         $this->assertSame('ok', $pinned['checks']['embed_package']['status']);
         $this->assertStringContainsString('v0.1.2', $pinned['checks']['embed_package']['message']);
+    }
+
+    public function testTheFrontBrandMustMatchTheDeployOfTheBaseUri()
+    {
+        $this->partnerAnswers(404);
+        config()->set('zapmizer.inbox.enabled', true);
+        $this->reloadPackageRoutes();
+        $this->appFile('package.json', json_encode(['dependencies' => ['@zapmizer/embed' => 'github:zapmizer/embed#v0.1.2']]));
+
+        $match = $this->checkJson();
+        $this->assertSame(0, $match['exit']);
+        $this->assertSame('ok', $match['checks']['embed_brand']['status']);
+
+        config()->set('zapmizer.base_uri', 'https://app.parlichat.com/api/');
+        $mismatch = $this->checkJson(['--offline' => true]);
+        $this->assertSame(1, $mismatch['exit']);
+        $this->assertSame('fail', $mismatch['checks']['embed_brand']['status']);
+        $this->assertStringContainsString('VITE_ZAPMIZER_BRAND=zapmizer, mas a marca do embed é parli', $mismatch['checks']['embed_brand']['message']);
+        $this->assertStringContainsString('VITE_ZAPMIZER_BRAND=parli', $mismatch['checks']['embed_brand']['hint']);
+
+        config()->set('zapmizer.inbox.brand', 'zapmizer');
+        $this->assertSame('ok', $this->checkJson(['--offline' => true])['checks']['embed_brand']['status'], 'ZAPMIZER_EMBED_BRAND overrides the derived brand');
+
+        config()->set('zapmizer.inbox.brand', null);
+        $this->appFile('.env', "APP_NAME=Laravel\n");
+        $missing = $this->checkJson(['--offline' => true]);
+        $this->assertSame(1, $missing['exit']);
+        $this->assertSame('fail', $missing['checks']['embed_brand']['status']);
+        $this->assertStringContainsString('ausente', $missing['checks']['embed_brand']['message']);
     }
 
     public function testInboxRoutesThatAreNotRegisteredFail()

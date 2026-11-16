@@ -6,6 +6,7 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Schema;
 use NotificationChannels\Zapmizer\Install\ConnectableModel;
 use NotificationChannels\Zapmizer\Install\EnvFile;
+use NotificationChannels\Zapmizer\Support\EmbedBrand;
 use ReflectionClass;
 use Throwable;
 
@@ -135,6 +136,9 @@ class InstallCommand extends Command
             'ZAPMIZER_API_VERSION' => '2025-06-27',
             'ZAPMIZER_PARTNER_ID' => '',
             'ZAPMIZER_PARTNER_SECRET' => '',
+            // The embed's brand for the front (read at build time): the one
+            // of the deploy the base_uri points at.
+            'VITE_ZAPMIZER_BRAND' => EmbedBrand::resolve(),
         ];
 
         $environment = $this->laravel->environmentFilePath();
@@ -310,6 +314,7 @@ class InstallCommand extends Command
         if ($inbox) {
             $steps[] = 'Instale o front: ' . $this->frontendInstall();
             $steps[] = 'Monte <InboxScreen :person="String($page.props.auth.user.id)" /> (resources/js/components/zapmizer/InboxScreen.vue) numa página autenticada, chame listenToZapmizerLogout() no boot do app e endZapmizerEmbeds() antes do logout (resources/js/composables/zapmizerEmbed.ts).';
+            $steps[] = 'Rebuilde o front (npm run build, ou o build do gerenciador do app) depois de instalar: o VITE_ZAPMIZER_BRAND=' . EmbedBrand::resolve() . ' do .env entra no bundle, e precisa ser a marca do deploy da ZAPMIZER_BASE_URI.';
         }
 
         if (method_exists($this->laravel, 'configurationIsCached') && $this->laravel->configurationIsCached()) {

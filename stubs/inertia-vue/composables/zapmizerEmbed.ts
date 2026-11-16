@@ -1,8 +1,21 @@
 import { endEmbeds, listenToLogout } from '@zapmizer/embed/logout';
 import type { KeepAlive, OpenSession } from '@zapmizer/embed/state';
 
-/** A marca do embed: a mesma em `useInboxHost`, `endEmbeds` e `listenToLogout`. */
-export const ZAPMIZER_BRAND = 'zapmizer';
+declare global {
+  interface ImportMetaEnv {
+    readonly VITE_ZAPMIZER_BRAND?: string;
+  }
+}
+
+/**
+ * A marca do embed: a mesma em `useInboxHost`, `endEmbeds` e `listenToLogout`.
+ * O iframe marca cada evento com `source: "<marca>-embed"`, e cada deploy da
+ * Zapmizer tem a sua (`parli` em app.parlichat.com): com a marca errada a
+ * caixa nunca recebe o `ready`. Vem do `VITE_ZAPMIZER_BRAND` do `.env`, que o
+ * `zapmizer:install` grava a partir da `ZAPMIZER_BASE_URI`; mudou, rebuilde o
+ * front. O `zapmizer:check` confere se bate com a config.
+ */
+export const ZAPMIZER_BRAND: string = import.meta.env.VITE_ZAPMIZER_BRAND || 'zapmizer';
 
 /**
  * O CSRF de uma rota web do Laravel: o `<meta name="csrf-token">` quando a
@@ -78,7 +91,7 @@ export function listenToZapmizerLogout(): () => void {
 
 /**
  * Chame ANTES do request de logout do app: fecha a caixa nesta aba, apaga a
- * retomada (`zapmizer-inbox:*`) e avisa as outras abas.
+ * retomada (`<marca>-inbox:*`) e avisa as outras abas.
  */
 export function endZapmizerEmbeds(): void {
   endEmbeds({ brand: ZAPMIZER_BRAND });

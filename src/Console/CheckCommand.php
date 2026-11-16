@@ -12,6 +12,8 @@ use NotificationChannels\Zapmizer\Exceptions\ZapmizerConnectException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerRateLimitedException;
 use NotificationChannels\Zapmizer\Exceptions\ZapmizerUnavailableException;
 use NotificationChannels\Zapmizer\Install\ConnectableModel;
+use NotificationChannels\Zapmizer\Install\EnvFile;
+use NotificationChannels\Zapmizer\Support\EmbedBrand;
 use NotificationChannels\Zapmizer\Support\Payload;
 use Symfony\Component\Console\Formatter\OutputFormatter;
 use Throwable;
@@ -76,6 +78,7 @@ class CheckCommand extends Command
         $inbox = $this->inboxEnabled();
         $this->checkInboxRoutes($inbox);
         $this->checkEmbedPackage($inbox);
+        $this->checkEmbedBrand($inbox);
         $this->checkAppUrl($inbox);
 
         $failed = count(array_filter($this->checks, fn (array $check) => $check['status'] === self::FAIL));
@@ -271,6 +274,49 @@ class CheckCommand extends Command
         preg_match('/#(v\d+\.\d+\.\d+)$/', $version, $tag) === 1
             ? $this->record('embed_package', self::OK, InstallCommand::EMBED_PACKAGE . " {$tag[1]} no package.json")
             : $this->record('embed_package', self::WARN, InstallCommand::EMBED_PACKAGE . " sem tag fixa ({$version})", 'Fixe a tag: ' . InstallCommand::EMBED_VERSION);
+    }
+
+    /**
+     * The front's brand (VITE_ZAPMIZER_BRAND, baked in at build time) must be
+     * the one of the deploy the base_uri points at: @zapmizer/embed drops
+     * every event whose `source` is not `{brand}-embed`, so a mismatch is an
+     * inbox that never gets its `ready`.
+     */
+    protected function checkEmbedBrand(bool $inbox): void
+    {
+        if (!$inbox) {
+            $this->record('embed_brand', self::SKIP, 'marca do embed: não precisa sem a caixa de entrada');
+
+            return;
+        }
+
+        $expected = EmbedBrand::resolve();
+        $front = $this->frontBrand();
+        $hint = "VITE_ZAPMIZER_BRAND={$expected} no .env (é a marca do deploy da ZAPMIZER_BASE_URI; ZAPMIZER_EMBED_BRAND sobrescreve) e rebuilde o front.";
+
+        if ($front === null || $front === '') {
+            $this->record('embed_brand', self::FAIL, 'VITE_ZAPMIZER_BRAND ausente: o front não sabe a marca do embed', $hint);
+        } elseif ($front !== $expected) {
+            $this->record('embed_brand', self::FAIL, "VITE_ZAPMIZER_BRAND={$front}, mas a marca do embed é {$expected}: a caixa não receberia o ready", $hint);
+        } else {
+            $this->record('embed_brand', self::OK, "marca do embed {$expected} no front e na config");
+        }
+    }
+
+    /**
+     * From the app's .env; without the file, from the environment.
+     */
+    protected function frontBrand(): ?string
+    {
+        $file = new EnvFile($this->laravel->environmentFilePath());
+
+        if ($file->exists()) {
+            return $file->value('VITE_ZAPMIZER_BRAND');
+        }
+
+        $value = $_ENV['VITE_ZAPMIZER_BRAND'] ?? $_SERVER['VITE_ZAPMIZER_BRAND'] ?? getenv('VITE_ZAPMIZER_BRAND');
+
+        return is_string($value) ? trim($value) : null;
     }
 
     /**

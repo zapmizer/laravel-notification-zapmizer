@@ -42,7 +42,7 @@ This creates `zapmizer_connections` (one row per connected model, polymorphic). 
 
 ```env
 ZAPMIZER_BASE_URI=https://app.zapmizer.com/api/
-ZAPMIZER_API_VERSION=2025-06-27          # contract version sent as `api-version` (when set)
+ZAPMIZER_API_VERSION=2025-06-27          # contract version sent as `api-version` (when set); never 2026-10-20 with this version
 ZAPMIZER_PARTNER_ID=...
 ZAPMIZER_PARTNER_SECRET=...
 ZAPMIZER_DEFAULT_COUNTRY_CODE=55         # completes numbers typed in national format
@@ -745,7 +745,7 @@ The clients behind the controller (`Connect\PartnerClient`, `Connect\InstanceCli
 | Config key | Purpose |
 |---|---|
 | `zapmizer.partner.id` / `secret` | partner credentials for the connect flow |
-| `zapmizer.api_version` | `api-version` header, sent by every client when set |
+| `zapmizer.api_version` | `api-version` header, sent by every client when set. Not `2026-10-20` with this version: `syncMessages()` and `createWebhook()` pin `2025-06-27`, but sending and every other call follow this key |
 | `zapmizer.default_country_code` | country code completed on national numbers (default `55`) |
 | `zapmizer.connect.resolver` | which model a request connects |
 | `zapmizer.connect.state_ttl_minutes` | how long the popup has to come back, also sent as `expires_in` (default 30) |

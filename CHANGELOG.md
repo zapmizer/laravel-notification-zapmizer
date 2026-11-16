@@ -19,6 +19,8 @@ A 0.4 só acrescentou o `syncMessages()` à 0.3, que segue igual aqui: a lista v
 9. **Handler de exceções:** `ZapmizerUnavailableException`, `PartnerCredentialsException` e `NoConnectableException` não renderizam mais 503/403 fora das rotas da lib; use `renderable()`.
 10. **`base_uri` sem esquema** (`localhost:8001/api/`): ponha o esquema (`http://localhost:8001/api/`), senão nada sai.
 11. **Código que usa `PartnerClient`, `ConnectToken`, `ConnectSession` ou `InstanceClient` direto, ou estende classes da lib:** confira as seções "Parceiro", "Instância", "Connect" e "Embed", e as notas de subclasses em cada uma.
+12. **Não use `ZAPMIZER_API_VERSION=2026-10-20` com esta versão.** A lib fixa a versão legada só onde o formato das mensagens muda (`syncMessages()` e `createWebhook()` mandam `api-version: 2025-06-27`; o webhook nasce em `2024-02-27`, veja a 0.4.2), mas o envio e as demais chamadas seguem `zapmizer.api_version`. Deixe a chave vazia ou em `2025-06-27`. Uma versão que o Zapmizer não conhece responde 400 `unknown_api_version` em `POST /webhooks` e `GET /whatsapp-messages`.
+13. **Single-tenant com webhook cadastrado à mão:** crie o webhook na tela de Webhooks do Zapmizer na versão `2024-02-27` (a tela sugere `2026-10-20`). Em `2026-10-20` as mensagens chegam como `message_received`/`message_sent`, o `MessageReceived` não dispara e a lib só loga um warning.
 
 ## Transporte
 

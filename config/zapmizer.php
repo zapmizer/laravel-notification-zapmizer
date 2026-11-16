@@ -9,7 +9,8 @@ return [
     'from_number' => env('ZAPMIZER_FROM_NUMBER'),
     // Zapmizer versions its contract by header. Sent as `api-version` by
     // every client (single-tenant and connected models) when set; leave
-    // null for the legacy shape.
+    // null for the legacy shape. Not 2026-10-20 with this version: only
+    // syncMessages() and createWebhook() pin 2025-06-27 on their own.
     'api_version' => env('ZAPMIZER_API_VERSION'),
     // Country code prepended to numbers typed in national format (10 or 11
     // digits). The Brazilian ninth-digit tolerance only applies to 55.

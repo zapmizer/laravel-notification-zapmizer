@@ -109,11 +109,12 @@ The iframe tags its events with `source: "<brand>-embed"` and `@zapmizer/embed` 
 php artisan zapmizer:check --json
 ```
 
-Each check has `id`, `status` (`ok`, `fail`, `warn`, `skip`), `message` and `hint`; the exit code is non-zero when something critical fails. The only remote call is a read-only `GET /api/partner/users/zapmizer-check` with the partner key (401 = key refused). `--offline` skips it.
+It checks only what is on: the send always (`api_token`, `send_api`, `from_number`, `base_uri`), and the connect, webhook, inbox and verify-number checks only with their route group on. A group that is off shows as `off`, with the hint to switch it on, and is neither a failure nor a warning: an app that only sends passes with every group `off`. Each check has `id`, `status` (`ok`, `fail`, `warn`, `skip`, `off`), `message` and `hint`; the exit code is non-zero only when something is `fail`. The remote calls are read-only: `GET /api/bot-instances` with `ZAPMIZER_API_TOKEN` when it is set (401 = token refused) and, with the connect on, `GET /api/partner/users/zapmizer-check` with the partner key (401 = key refused). `--offline` skips them.
 
 ## When to stop and ask the human
 
 - `partner_credentials` fails: ask for the credentials. Never invent them.
+- `api_token` or `send_api` fails: ask the human for the team's API token (`ZAPMIZER_API_TOKEN`). Never invent it.
 - `partner_api` fails with "a rota de parceiro não existe": `ZAPMIZER_BASE_URI` is not the API (missing `/api`?). Confirm the deploy with the human.
 - `partner_api` fails (401) or the connect answers `partner_unauthorized`: the credentials are wrong or from another environment.
 - The inbox says the address is not allowed (`origin_not_allowed`), or the connect fails on the host: the host is not on the partner allowlist.

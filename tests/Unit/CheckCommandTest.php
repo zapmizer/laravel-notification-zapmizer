@@ -30,8 +30,9 @@ class CheckCommandTest extends TestCase
         $app['config']->set('zapmizer.partner.id', '12');
         $app['config']->set('zapmizer.partner.secret', 'partner-secret');
         // Connect and webhook on (what `zapmizer:install --model --webhook`
-        // writes); the inbox off, as by default.
+        // writes); the inbox and the verify-number off, as by default.
         $app['config']->set('zapmizer.routes.inbox', false);
+        $app['config']->set('zapmizer.routes.verify_number', false);
     }
 
     protected function setUp(): void
@@ -107,7 +108,7 @@ class CheckCommandTest extends TestCase
         $this->assertStringContainsString('a Zapmizer aceitou as credenciais de parceiro', $output);
         $this->assertStringContainsString('tabela zapmizer_connections criada', $output);
         $this->assertStringContainsString('NotificationChannels\Zapmizer\Test\Fixtures\User é Connectable', $output);
-        $this->assertStringContainsString('Tudo certo para o connect.', $output);
+        $this->assertStringContainsString('Tudo certo para o envio, o connect e o webhook.', $output);
 
         Http::assertSentCount(1);
         Http::assertSent(fn (Request $request) => $request->method() === 'GET'
@@ -193,13 +194,19 @@ class CheckCommandTest extends TestCase
         $this->assertSame(0, $result['exit']);
         $this->assertTrue($result['ok']);
         $this->assertSame(
-            ['app_key', 'config', 'base_uri', 'partner_credentials', 'partner_api', 'migration', 'connectable', 'connect_routes', 'webhook_routes', 'inbox_routes', 'embed_package', 'embed_brand', 'app_url'],
+            ['app_key', 'config', 'base_uri', 'api_token', 'send_api', 'from_number', 'partner_credentials', 'partner_api', 'migration', 'connectable', 'connect_routes', 'webhook_routes', 'inbox_routes', 'verify_number_routes', 'embed_package', 'embed_brand', 'app_url'],
             array_keys($result['checks']),
         );
         $this->assertSame('ok', $result['checks']['partner_api']['status']);
-        $this->assertSame('skip', $result['checks']['inbox_routes']['status']);
-        $this->assertSame('skip', $result['checks']['embed_package']['status']);
-        $this->assertSame('skip', $result['checks']['embed_brand']['status']);
+        // With the connect, the app's own token is optional: each
+        // connection sends with its own.
+        $this->assertSame('skip', $result['checks']['api_token']['status']);
+        $this->assertSame('skip', $result['checks']['send_api']['status']);
+        $this->assertSame('skip', $result['checks']['from_number']['status']);
+        $this->assertSame('off', $result['checks']['inbox_routes']['status']);
+        $this->assertSame('off', $result['checks']['verify_number_routes']['status']);
+        $this->assertSame('off', $result['checks']['embed_package']['status']);
+        $this->assertSame('off', $result['checks']['embed_brand']['status']);
     }
 
     public function testARefusedKeyFails()
@@ -526,18 +533,268 @@ class CheckCommandTest extends TestCase
         $this->assertStringContainsString('2 problemas críticos.', $output);
     }
 
-    public function testTheConnectGroupSwitchedOffFails()
+    /**
+     * An app that only sends: every group off, the app's own token.
+     */
+    protected function sendOnly(): void
+    {
+        foreach (['connect', 'webhook', 'inbox', 'verify_number'] as $group) {
+            config()->set("zapmizer.routes.{$group}", false);
+        }
+
+        $this->reloadPackageRoutes();
+        config()->set('zapmizer.api_token', 'send-token');
+        config()->set('zapmizer.api_version', '2025-06-27');
+        config()->set('zapmizer.from_number', '5511900000000');
+        config()->set('zapmizer.partner.id', null);
+        config()->set('zapmizer.partner.secret', null);
+    }
+
+    protected function instancesAnswer(int $status, array $body = ['data' => [['id' => 7, 'state' => 'CONNECTED']]]): void
+    {
+        Http::fake(['zap.test/api/bot-instances*' => Http::response($body, $status)]);
+    }
+
+    public function testASendOnlyAppPassesWithEveryGroupOff()
+    {
+        $this->sendOnly();
+        $this->instancesAnswer(200);
+        Schema::drop('zapmizer_connections');
+
+        $result = $this->checkJson();
+
+        $this->assertSame(0, $result['exit']);
+        $this->assertTrue($result['ok']);
+        $this->assertSame('ok', $result['checks']['api_token']['status']);
+        $this->assertSame('ok', $result['checks']['send_api']['status']);
+        $this->assertSame('ok', $result['checks']['from_number']['status']);
+        $this->assertSame([], array_keys(array_filter($result['checks'], fn (array $check) => $check['status'] === 'warn')), 'a send-only app has nothing to warn about');
+
+        foreach (['app_key', 'partner_credentials', 'partner_api', 'migration', 'connectable', 'connect_routes', 'webhook_routes', 'inbox_routes', 'verify_number_routes', 'embed_package', 'embed_brand', 'app_url'] as $id) {
+            $this->assertSame('off', $result['checks'][$id]['status'], $id);
+        }
+
+        $this->assertStringContainsString('ZAPMIZER_ROUTES_CONNECT=true', $result['checks']['connect_routes']['hint']);
+        $this->assertStringContainsString('ZAPMIZER_ROUTES_WEBHOOK=true', $result['checks']['webhook_routes']['hint']);
+
+        // One read-only call, with the app's token: nothing about the partner.
+        Http::assertSentCount(1);
+        Http::assertSent(fn (Request $request) => $request->method() === 'GET'
+            && str_starts_with($request->url(), 'http://zap.test/api/bot-instances')
+            && $request->hasHeader('Authorization', 'Bearer send-token')
+            && $request->hasHeader('Accept', 'application/json'));
+    }
+
+    public function testTheHumanOutputOfASendOnlyApp()
+    {
+        $this->sendOnly();
+        $this->instancesAnswer(200);
+        unlink(config_path('zapmizer.php'));
+
+        $output = $this->checkHuman(0);
+
+        $this->assertStringContainsString('○ connect desligado', $output);
+        $this->assertStringContainsString('Tudo certo para o envio.', $output);
+    }
+
+    public function testASendOnlyAppWithoutTokenFails()
+    {
+        $this->sendOnly();
+        config()->set('zapmizer.api_token', null);
+        Http::fake();
+
+        $result = $this->checkJson();
+
+        $this->assertSame(1, $result['exit']);
+        $this->assertSame('fail', $result['checks']['api_token']['status']);
+        $this->assertStringContainsString('ZAPMIZER_API_TOKEN', $result['checks']['api_token']['message']);
+        $this->assertSame('skip', $result['checks']['send_api']['status']);
+        Http::assertNothingSent();
+    }
+
+    public function testARefusedSendTokenFails()
+    {
+        $this->sendOnly();
+        $this->instancesAnswer(401, ['message' => 'Unauthenticated.']);
+
+        $result = $this->checkJson();
+
+        $this->assertSame(1, $result['exit']);
+        $this->assertSame('fail', $result['checks']['send_api']['status']);
+        $this->assertStringContainsString('ZAPMIZER_API_TOKEN', $result['checks']['send_api']['hint']);
+    }
+
+    public function testASendTokenThatSeesNoNumberIsAWarning()
+    {
+        $this->sendOnly();
+        $this->instancesAnswer(200, ['data' => []]);
+
+        $result = $this->checkJson();
+
+        $this->assertSame(0, $result['exit']);
+        $this->assertSame('warn', $result['checks']['send_api']['status']);
+    }
+
+    public function testTheSendTokenIsCheckedWithTheConnectOnToo()
+    {
+        config()->set('zapmizer.api_token', 'send-token');
+        Http::fake([
+            'zap.test/api/partner/users/*' => Http::response(self::UNKNOWN_CUSTOMER, 404),
+            'zap.test/api/bot-instances*' => Http::response(['data' => [['id' => 7]]]),
+        ]);
+
+        $result = $this->checkJson();
+
+        $this->assertSame(0, $result['exit']);
+        $this->assertSame('ok', $result['checks']['api_token']['status']);
+        $this->assertSame('ok', $result['checks']['send_api']['status']);
+        Http::assertSentCount(2);
+    }
+
+    public function testZapmizerDownOnTheSendCheckIsAWarning()
+    {
+        $this->sendOnly();
+        Http::fake(['zap.test/api/bot-instances*' => fn () => throw new ConnectionException('down')]);
+
+        $result = $this->checkJson();
+
+        $this->assertSame(0, $result['exit']);
+        $this->assertSame('warn', $result['checks']['send_api']['status']);
+    }
+
+    public function testOfflineSkipsTheSendCheck()
+    {
+        $this->sendOnly();
+        Http::fake();
+
+        $result = $this->checkJson(['--offline' => true]);
+
+        $this->assertSame(0, $result['exit']);
+        $this->assertSame('skip', $result['checks']['send_api']['status']);
+        Http::assertNothingSent();
+    }
+
+    public function testAFromNumberThatIsNotANumberFails()
+    {
+        $this->sendOnly();
+        $this->instancesAnswer(200);
+        config()->set('zapmizer.from_number', 'meu-numero');
+
+        $result = $this->checkJson();
+
+        $this->assertSame(1, $result['exit']);
+        $this->assertSame('fail', $result['checks']['from_number']['status']);
+        $this->assertStringContainsString('ZAPMIZER_FROM_NUMBER', $result['checks']['from_number']['message']);
+    }
+
+    public function testAFromNumberWithMaskAndSuffixIsANumber()
+    {
+        $this->sendOnly();
+        $this->instancesAnswer(200);
+        config()->set('zapmizer.from_number', '+55 (11) 90000-0000');
+
+        $this->assertSame('ok', $this->checkJson()['checks']['from_number']['status']);
+
+        config()->set('zapmizer.from_number', '5511900000000@c.us');
+
+        $this->assertSame('ok', $this->checkJson()['checks']['from_number']['status']);
+    }
+
+    public function testABaseUriWithoutSchemeFailsASendOnlyApp()
+    {
+        $this->sendOnly();
+        config()->set('zapmizer.base_uri', 'zap.test/api/');
+        Http::fake();
+
+        $result = $this->checkJson();
+
+        $this->assertSame(1, $result['exit']);
+        $this->assertSame('fail', $result['checks']['base_uri']['status']);
+        $this->assertSame('skip', $result['checks']['send_api']['status']);
+        Http::assertNothingSent();
+    }
+
+    public function testTheWebhookAloneIsASingleTenantApp()
+    {
+        $this->sendOnly();
+        config()->set('zapmizer.routes.webhook', true);
+        $this->reloadPackageRoutes();
+        $this->instancesAnswer(200);
+
+        $result = $this->checkJson();
+
+        $this->assertSame(0, $result['exit']);
+        $this->assertSame('ok', $result['checks']['webhook_routes']['status']);
+        $this->assertSame('off', $result['checks']['connect_routes']['status']);
+        $this->assertSame('ok', $result['checks']['app_url']['status']);
+    }
+
+    public function testTheVerifyNumberIsCheckedWhenOn()
+    {
+        $this->sendOnly();
+        config()->set('zapmizer.routes.verify_number', true);
+        $this->reloadPackageRoutes();
+        $this->instancesAnswer(200);
+
+        $result = $this->checkJson();
+
+        $this->assertSame(0, $result['exit']);
+        $this->assertSame('ok', $result['checks']['verify_number_routes']['status']);
+
+        config()->set('auth.providers.users.model', PlainUser::class);
+
+        $result = $this->checkJson();
+
+        $this->assertSame(1, $result['exit']);
+        $this->assertSame('fail', $result['checks']['verify_number_routes']['status']);
+        $this->assertStringContainsString('MustVerifyWhatsapp', $result['checks']['verify_number_routes']['message']);
+    }
+
+    public function testTheVerifyNumberNeedsItsTable()
+    {
+        $this->sendOnly();
+        config()->set('zapmizer.routes.verify_number', true);
+        $this->reloadPackageRoutes();
+        $this->instancesAnswer(200);
+        Schema::drop('whatsapp_verifieds');
+
+        $result = $this->checkJson();
+
+        $this->assertSame(1, $result['exit']);
+        $this->assertSame('fail', $result['checks']['verify_number_routes']['status']);
+        $this->assertStringContainsString('whatsapp_verifieds', $result['checks']['verify_number_routes']['message']);
+    }
+
+    public function testTheVerifyNumberNeedsTheTokenEvenWithTheConnect()
     {
         $this->partnerAnswers(404);
-        config()->set('zapmizer.routes.connect', false);
+        config()->set('zapmizer.routes.verify_number', true);
         $this->reloadPackageRoutes();
 
         $result = $this->checkJson();
 
         $this->assertSame(1, $result['exit']);
-        $this->assertSame('fail', $result['checks']['connect_routes']['status']);
+        $this->assertSame('fail', $result['checks']['api_token']['status']);
+    }
+
+    public function testTheConnectGroupSwitchedOffIsOffNotAFailure()
+    {
+        $this->partnerAnswers(404);
+        config()->set('zapmizer.api_token', 'send-token');
+        config()->set('zapmizer.routes.connect', false);
+        config()->set('zapmizer.routes.webhook', false);
+        $this->reloadPackageRoutes();
+        Http::fake(['zap.test/api/bot-instances*' => Http::response(['data' => [['id' => 7]]])]);
+
+        $result = $this->checkJson();
+
+        $this->assertSame(0, $result['exit']);
+        $this->assertSame('off', $result['checks']['connect_routes']['status']);
         $this->assertStringContainsString('ZAPMIZER_ROUTES_CONNECT', $result['checks']['connect_routes']['message']);
         $this->assertStringContainsString('ZAPMIZER_ROUTES_CONNECT=true', $result['checks']['connect_routes']['hint']);
+        // Without the connect nothing of the partner is checked, nor called.
+        $this->assertSame('off', $result['checks']['partner_api']['status']);
+        Http::assertNotSent(fn (Request $request) => str_contains($request->url(), '/partner/'));
     }
 
     public function testTheConnectWithoutTheWebhookIsAWarning()

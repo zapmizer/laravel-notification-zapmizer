@@ -1,6 +1,6 @@
 # Eventos do webhook
 
-A rota do webhook (`POST /zapmizer/webhook`, e a rota por conexão quando ligada) só existe com o grupo webhook ligado (`ZAPMIZER_ROUTES_WEBHOOK=true`; veja [instalar.md](instalar.md#as-rotas-da-lib)). Ela valida a assinatura e transforma cada evento do catálogo da Zapmizer num evento do Laravel. A lib não guarda nada: o app escuta e decide. A assinatura, os segredos e a rota por conexão estão em [connect.md §6](connect.md#6-receiving-messages-the-signed-webhook).
+A rota do webhook (`POST /zapmizer/webhook`, e a rota por conexão quando ligada) só existe com o grupo webhook ligado (`ZAPMIZER_ROUTES_WEBHOOK=true`; veja [instalar.md](instalar.md#as-rotas-da-lib)) e é onde chegam as entregas: o webhook do time do app, cadastrado à mão, e o das conexões dos usuários. Se o connect pede webhook para as conexões é outra chave, `ZAPMIZER_CONNECT_WEBHOOK` (sem ela, segue a rota); com `false`, a rota segue recebendo as entregas do app, e as conexões só enviam. Ela valida a assinatura e transforma cada evento do catálogo da Zapmizer num evento do Laravel. A lib não guarda nada: o app escuta e decide. A assinatura, os segredos e a rota por conexão estão em [connect.md §6](connect.md#6-receiving-messages-the-signed-webhook).
 
 ## Ordem dos eventos numa entrega
 

@@ -347,7 +347,7 @@ PHP;
         config()->set('zapmizer.connect.webhook', false);
 
         $output = $this->assertInstall(['--model' => 'App\\Models\\User'], 0, [
-            'A rota do webhook está ligada para receber entregas (o webhook do time do app, os verify_number.*), mas o connect não pede webhook para as conexões dos usuários (ZAPMIZER_CONNECT_WEBHOOK=false): elas enviam, mas não recebem mensagens nem eventos.',
+            'A rota do webhook está ligada para receber entregas (o webhook do time do app, os verify_number.*), mas o connect não pede webhook para as conexões dos usuários (ZAPMIZER_CONNECT_WEBHOOK=false): as conexões feitas a partir daí enviam, mas não recebem mensagens nem eventos.',
         ]);
 
         $this->assertStringNotContainsString('no webhook_url', $output);
@@ -360,7 +360,7 @@ PHP;
         config()->set('zapmizer.connect.webhook', false);
 
         $output = $this->assertInstall(['--model' => 'App\\Models\\User'], 0, [
-            'O connect não pede webhook (ZAPMIZER_CONNECT_WEBHOOK=false): as conexões enviam, mas não recebem mensagens nem eventos.',
+            'O connect não pede webhook (ZAPMIZER_CONNECT_WEBHOOK=false): as conexões feitas a partir daí enviam, mas não recebem mensagens nem eventos.',
         ]);
 
         $this->assertStringNotContainsString('no webhook_url', $output);
@@ -375,6 +375,18 @@ PHP;
         $output = $this->assertInstall(['--model' => 'App\\Models\\User'], 0, ['no webhook_url']);
 
         $this->assertStringNotContainsString('as conexões enviam, mas não recebem', $output);
+    }
+
+    public function testThePackageRoutesOffWithTheConnectUnsetAsksForTheWebhook()
+    {
+        config()->set('zapmizer.routes.enabled', false);
+        config()->set('zapmizer.routes.webhook', false);
+        config()->set('zapmizer.connect.webhook', null);
+
+        $output = $this->assertInstall(['--model' => 'App\\Models\\User'], 0, ['no webhook_url']);
+
+        $this->assertStringNotContainsString('as conexões enviam, mas não recebem', $output);
+        $this->assertStringNotContainsString('--webhook', $output);
     }
 
     public function testWebhookTurnsTheWebhookRouteOn()

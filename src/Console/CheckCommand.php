@@ -446,6 +446,10 @@ class CheckCommand extends Command
         $connect = RouteGroups::switchedOn(RouteGroups::CONNECT);
         $configured = ConnectWebhook::configured();
 
+        if (ConnectWebhook::invalid()) {
+            $this->record('connect_webhook', self::WARN, 'ZAPMIZER_CONNECT_WEBHOOK com valor que não é booleano: o connect segue a rota do webhook', 'Use true ou false, ou tire a chave.');
+        }
+
         if (!RouteGroups::switchedOn(RouteGroups::WEBHOOK)) {
             $this->checkWebhookGroupOff($connect, $configured);
 
@@ -461,7 +465,7 @@ class CheckCommand extends Command
         }
 
         $connect && $configured === false
-            ? $this->record('webhook_routes', self::OK, 'rota do webhook registrada para receber entregas (o webhook do time, verify_number.*); o connect não pede webhook para as conexões (ZAPMIZER_CONNECT_WEBHOOK=false): elas enviam, mas não recebem')
+            ? $this->record('webhook_routes', self::OK, 'rota do webhook registrada para receber entregas (o webhook do time, verify_number.*); o connect não pede webhook para as conexões (ZAPMIZER_CONNECT_WEBHOOK=false): as conexões feitas a partir daí enviam, mas não recebem')
             : $this->record('webhook_routes', self::OK, 'rota do webhook registrada');
     }
 
@@ -484,12 +488,22 @@ class CheckCommand extends Command
             return;
         }
 
-        if ($configured === true) {
+        // Asks: the app said so, or the package routes are off and the app
+        // mounts them itself (the connect then sends route('zapmizer.webhook')).
+        $why = match (true) {
+            $configured === true => 'ZAPMIZER_CONNECT_WEBHOOK=true',
+            $configured === null && !RouteGroups::routesEnabled() => 'ZAPMIZER_ROUTES_ENABLED=false: o app monta as rotas',
+            default => null,
+        };
+
+        if ($why !== null) {
             $missing = $this->missingRoutes(array_merge(['zapmizer.webhook'], ConnectionWebhook::enabled() ? ['zapmizer.webhook.connection'] : []));
 
             $missing === []
-                ? $this->record('webhook_routes', self::OK, 'o connect pede webhook (ZAPMIZER_CONNECT_WEBHOOK=true) na rota zapmizer.webhook montada pelo app')
-                : $this->record('webhook_routes', self::FAIL, 'o connect pede webhook (ZAPMIZER_CONNECT_WEBHOOK=true), mas a rota do webhook não existe: ' . implode(', ', $missing), 'Ligue ZAPMIZER_ROUTES_WEBHOOK=true, monte a rota zapmizer.webhook no app ou tire ZAPMIZER_CONNECT_WEBHOOK.');
+                ? $this->record('webhook_routes', self::OK, "o connect pede webhook ({$why}) na rota zapmizer.webhook montada pelo app")
+                : $this->record('webhook_routes', self::FAIL, "o connect pede webhook ({$why}), mas a rota do webhook não existe: " . implode(', ', $missing), $configured === true
+                    ? 'Ligue ZAPMIZER_ROUTES_WEBHOOK=true, monte a rota zapmizer.webhook no app ou tire ZAPMIZER_CONNECT_WEBHOOK.'
+                    : 'Monte a rota zapmizer.webhook no app, ou ZAPMIZER_CONNECT_WEBHOOK=false se as conexões só enviam.');
 
             return;
         }

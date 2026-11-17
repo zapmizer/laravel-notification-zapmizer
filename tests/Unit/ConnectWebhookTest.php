@@ -26,7 +26,7 @@ class ConnectWebhookTest extends TestCase
             'one' => ['1', true],
             'false word' => ['false', false],
             'zero' => ['0', false],
-            'abc' => ['abc', false],
+            'abc' => ['abc', null],
             'true' => [true, true],
             'false' => [false, false],
         ];
@@ -50,6 +50,15 @@ class ConnectWebhookTest extends TestCase
         $this->apply($value);
 
         $this->assertSame($configured, ConnectWebhook::configured());
+    }
+
+    /** @dataProvider values */
+    #[DataProvider('values')]
+    public function testInvalidIsASetValueThatIsNotABoolean(mixed $value, ?bool $configured)
+    {
+        $this->apply($value);
+
+        $this->assertSame($value === 'abc', ConnectWebhook::invalid());
     }
 
     /** @dataProvider values */

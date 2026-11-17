@@ -315,8 +315,10 @@ class ConnectController extends Controller
      *
      * When the session asked for no webhook (`zapmizer.connect.webhook` off,
      * decided at the start, not now), the token counts as having none: the
-     * webhook id and secrets are stored `null` and the status is `ok`, even
-     * if Zapmizer answered with a webhook id.
+     * status is `ok`, even if Zapmizer answered with a webhook id, and
+     * `webhook_id`, `webhook_secret` and `webhook_previous_secret` are not
+     * written, so a webhook the connection already had keeps working (a team
+     * switch still clears it through forgetPairing(); a new row has none).
      */
     protected function storeToken(Model&Connectable $connectable, ConnectToken $token): View
     {
@@ -362,13 +364,13 @@ class ConnectController extends Controller
             'phone_number' => $token->phoneNumber,
             'bot_instance_id' => $token->botInstanceId,
             'connected_at' => now(),
-            'webhook_id' => $webhookAsked ? $token->webhookId : null,
             'is_active' => true,
-        ] + ($this->pendingWebhookKey === null ? [] : ['webhook_key' => $this->pendingWebhookKey]));
+        ] + ($webhookAsked ? ['webhook_id' => $token->webhookId] : [])
+            + ($this->pendingWebhookKey === null ? [] : ['webhook_key' => $this->pendingWebhookKey]));
 
-        if (!$reusedWebhook) {
+        if ($webhookAsked && !$reusedWebhook) {
             $connection->forceFill([
-                'webhook_secret' => $webhookAsked ? $token->webhookSecret : null,
+                'webhook_secret' => $token->webhookSecret,
                 'webhook_previous_secret' => null,
             ]);
         }
@@ -723,7 +725,7 @@ class ConnectController extends Controller
 
     /**
      * Whether the session asks Zapmizer for a webhook: `zapmizer.connect.webhook`
-     * when set (false: the connections send and receive nothing, even with
+     * when set (false: the connections send, but receive nothing, even with
      * the webhook route on to receive the app's own deliveries). Unset, not
      * when the package routes are on and the webhook group off
      * (`zapmizer.routes.webhook`): a connect-only app. With the package

@@ -418,4 +418,57 @@ class ConnectionWebhookRouteTest extends TestCase
 
         $this->assertSame(42, $this->team()->zapmizerConnection->webhook_id);
     }
+
+    public function testASameTeamReconnectWithTheConnectNotAskingKeepsTheStoredWebhook()
+    {
+        config()->set('zapmizer.connect.webhook', false);
+        $this->connectedTeam('whsec_old', '5581911110000', ['webhook_id' => 42, 'zapmizer_team_id' => 7, 'webhook_previous_secret' => 'whsec_prev'])->update(['name' => 'Acme']);
+        $this->actingAsUser();
+        $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer(['webhook_id' => null, 'webhook_secret' => null]));
+
+        $this->connect()->assertSee('status: "ok"', false);
+
+        $connection = Team::first()->zapmizerConnection;
+        $this->assertSame(42, $connection->webhook_id);
+        $this->assertSame('whsec_old', $connection->webhook_secret);
+        $this->assertSame('whsec_prev', $connection->webhook_previous_secret);
+        $this->deliverSigned($this->messageEnvelope(wid: '5581911110000@c.us'), 'whsec_old')->assertOk();
+    }
+
+    public function testATeamSwitchWithTheConnectNotAskingClearsTheStoredWebhook()
+    {
+        config()->set('zapmizer.connect.webhook', false);
+        $this->connectedTeam('whsec_old', '5581911110000', ['webhook_id' => 42, 'zapmizer_team_id' => 99])->update(['name' => 'Acme']);
+        $this->actingAsUser();
+        $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer(['webhook_id' => null, 'webhook_secret' => null]));
+
+        $this->connect()->assertSee('status: "ok"', false);
+
+        $connection = Team::first()->zapmizerConnection;
+        $this->assertSame(7, $connection->zapmizer_team_id);
+        $this->assertNull($connection->webhook_id);
+        $this->assertNull($connection->webhook_secret);
+        $this->assertNull($connection->webhook_previous_secret);
+    }
+
+    public function testTheRetryAfterA429KeepsTheMarkOfNoWebhookAsked()
+    {
+        config()->set('zapmizer.connect.webhook', false);
+        $this->actingAsUser();
+        $this->fakeHttp(
+            $this->sessionCreated(),
+            new \GuzzleHttp\Psr7\Response(429, ['Content-Type' => 'application/json', 'Retry-After' => '5'], '{"message":"Too Many Attempts."}'),
+            $this->tokenAnswer(['webhook_id' => 42, 'webhook_secret' => null]),
+        );
+
+        $this->startConnect()->assertOk();
+        $url = route('zapmizer.connect.callback', ['code' => 'c', 'state' => session(ConnectController::SESSION_KEY)['state']]);
+
+        $this->get($url)->assertOk()->assertSee('content="6"', false);
+        $this->assertFalse(session(ConnectController::SESSION_KEY)['webhook']);
+
+        $this->travel(6)->seconds();
+        $this->get($url)->assertOk()->assertSee('status: "ok"', false);
+        $this->assertNull(Team::first()->zapmizerConnection->webhook_id);
+    }
 }

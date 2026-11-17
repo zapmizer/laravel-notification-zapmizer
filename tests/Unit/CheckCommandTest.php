@@ -835,7 +835,7 @@ class CheckCommandTest extends TestCase
 
         $this->assertSame(0, $result['exit']);
         $this->assertSame('ok', $result['checks']['webhook_routes']['status']);
-        $this->assertSame('rota do webhook registrada para receber entregas (o webhook do time, verify_number.*); o connect não pede webhook para as conexões (ZAPMIZER_CONNECT_WEBHOOK=false): elas enviam, mas não recebem', $result['checks']['webhook_routes']['message']);
+        $this->assertSame('rota do webhook registrada para receber entregas (o webhook do time, verify_number.*); o connect não pede webhook para as conexões (ZAPMIZER_CONNECT_WEBHOOK=false): as conexões feitas a partir daí enviam, mas não recebem', $result['checks']['webhook_routes']['message']);
     }
 
     public function testTheRouteOnWithTheConnectNotAskingStillFailsWhenTheRoutesAreMissing()
@@ -909,6 +909,54 @@ class CheckCommandTest extends TestCase
         $this->assertSame('fail', $result['checks']['webhook_routes']['status']);
         $this->assertSame('o connect pede webhook (ZAPMIZER_CONNECT_WEBHOOK=true), mas a rota do webhook não existe: zapmizer.webhook', $result['checks']['webhook_routes']['message']);
         $this->assertSame('Ligue ZAPMIZER_ROUTES_WEBHOOK=true, monte a rota zapmizer.webhook no app ou tire ZAPMIZER_CONNECT_WEBHOOK.', $result['checks']['webhook_routes']['hint']);
+    }
+
+    public function testThePackageRoutesOffWithTheConnectUnsetAsksForTheAppsOwnWebhookRoute()
+    {
+        $this->partnerAnswers(404);
+        config()->set('zapmizer.routes.enabled', false);
+        config()->set('zapmizer.routes.webhook', false);
+        config()->set('zapmizer.connect.webhook', null);
+        $this->reloadPackageRoutes();
+
+        $result = $this->checkJson();
+
+        $this->assertSame('fail', $result['checks']['webhook_routes']['status']);
+        $this->assertSame('o connect pede webhook (ZAPMIZER_ROUTES_ENABLED=false: o app monta as rotas), mas a rota do webhook não existe: zapmizer.webhook', $result['checks']['webhook_routes']['message']);
+        $this->assertStringContainsString('ZAPMIZER_CONNECT_WEBHOOK=false', $result['checks']['webhook_routes']['hint']);
+
+        Route::post('zapmizer/webhook', [WebhookController::class, 'handleWebhook'])->name('zapmizer.webhook');
+        Route::getRoutes()->refreshNameLookups();
+
+        $result = $this->checkJson();
+
+        $this->assertSame('ok', $result['checks']['webhook_routes']['status']);
+        $this->assertSame('o connect pede webhook (ZAPMIZER_ROUTES_ENABLED=false: o app monta as rotas) na rota zapmizer.webhook montada pelo app', $result['checks']['webhook_routes']['message']);
+    }
+
+    public function testAValueThatIsNotABooleanIsAWarningAndFollowsTheRoute()
+    {
+        $this->partnerAnswers(404);
+        config()->set('zapmizer.connect.webhook', 'abc');
+
+        $result = $this->checkJson();
+
+        $this->assertSame(0, $result['exit']);
+        $this->assertSame('warn', $result['checks']['connect_webhook']['status']);
+        $this->assertSame('ZAPMIZER_CONNECT_WEBHOOK com valor que não é booleano: o connect segue a rota do webhook', $result['checks']['connect_webhook']['message']);
+        $this->assertSame('Use true ou false, ou tire a chave.', $result['checks']['connect_webhook']['hint']);
+        $this->assertSame('ok', $result['checks']['webhook_routes']['status']);
+    }
+
+    public function testNoConnectWebhookCheckWhenTheValueIsValid()
+    {
+        $this->partnerAnswers(404);
+
+        foreach ([null, '', true, false, 'false', '1'] as $value) {
+            config()->set('zapmizer.connect.webhook', $value);
+
+            $this->assertArrayNotHasKey('connect_webhook', $this->checkJson()['checks']);
+        }
     }
 
     public function testTheConnectNeitherAskingNorReceivingKeepsTheOffOfTheConnectOff()

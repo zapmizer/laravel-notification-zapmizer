@@ -14,9 +14,9 @@ namespace NotificationChannels\Zapmizer\Support;
 final class ConnectWebhook
 {
     /**
-     * What the app configured: `null` when absent, `null` or empty (follow
-     * the route group); otherwise a boolean, where anything that is not a
-     * boolean word is `false`, as in ConnectionWebhook.
+     * What the app configured: `null` when absent, `null`, empty or not a
+     * boolean word (a typo follows the route group, see invalid()); otherwise
+     * the boolean.
      */
     public static function configured(): ?bool
     {
@@ -26,7 +26,18 @@ final class ConnectWebhook
             return null;
         }
 
-        return filter_var($value, FILTER_VALIDATE_BOOLEAN);
+        return filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+    }
+
+    /**
+     * Whether the key is set to something that is not a boolean word, which
+     * configured() reads as unset.
+     */
+    public static function invalid(): bool
+    {
+        $value = config('zapmizer.connect.webhook');
+
+        return $value !== null && $value !== '' && self::configured() === null;
     }
 
     /**

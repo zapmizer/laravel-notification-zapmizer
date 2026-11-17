@@ -1,5 +1,9 @@
 # Changelog
 
+# Unreleased
+
+- **`zapmizer:install` não leva mais um host de desenvolvimento ao `.env.example`.** Com a `ZAPMIZER_BASE_URI` fora dos deploys conhecidos (um `http://localhost:8001/api/` no `.env`, ou passado em `--base-uri`), o `.env.example` recebia o mesmo host e, quando o deploy dizia a marca em `/brand/manifest.json`, também o `ZAPMIZER_EMBED_BRAND`. Agora ele recebe a API pública do deploy da mesma marca (`https://app.parlichat.com/api/` para `parli`; `https://app.zapmizer.com/api/` para `zapmizer` e para marca desconhecida) e não recebe `ZAPMIZER_EMBED_BRAND`. Um host conhecido (app.zapmizer.com, *.parlichat.com) vai igual nos dois arquivos, e o `.env` não muda. Uma chave já presente no `.env.example` continua intocada: um app que já commitou o host local precisa trocá-lo à mão.
+
 # 2.0.0
 
 **Quebra a 0.x.** Leia "Upgrade das versões 0.0, 0.1 e 0.2" ou "Upgrade da 0.3 e da 0.4" antes de atualizar; o resto desta seção traz o de/para por tema.

@@ -156,12 +156,69 @@ PHP;
             'VITE_ZAPMIZER_BRAND=parli do .env entra no bundle',
         ]);
 
-        foreach (['.env', '.env.example'] as $file) {
-            $this->assertStringContainsString("VITE_ZAPMIZER_BRAND=parli\n", $this->readAppFile($file));
-            $this->assertStringContainsString("ZAPMIZER_EMBED_BRAND=parli\n", $this->readAppFile($file), 'the backend would derive zapmizer from the host');
-        }
+        $env = $this->readAppFile('.env');
+        $this->assertStringContainsString("ZAPMIZER_BASE_URI=http://localhost:8001/api/\n", $env);
+        $this->assertStringContainsString("VITE_ZAPMIZER_BRAND=parli\n", $env);
+        $this->assertStringContainsString("ZAPMIZER_EMBED_BRAND=parli\n", $env, 'the backend would derive zapmizer from the host');
+
+        $example = $this->readAppFile('.env.example');
+        $this->assertStringContainsString("ZAPMIZER_BASE_URI=https://app.parlichat.com/api/\n", $example, 'the public deploy of the brand, never the dev host');
+        $this->assertStringNotContainsString('localhost', $example);
+        $this->assertStringContainsString("VITE_ZAPMIZER_BRAND=parli\n", $example);
+        $this->assertStringNotContainsString('ZAPMIZER_EMBED_BRAND', $example, 'the public host already says the brand');
 
         $this->assertStringNotContainsString('Confirme com o humano a marca do deploy', $output);
+    }
+
+    public function testADevHostAlreadyInDotEnvNeverLeaksToTheExample()
+    {
+        Http::fake(['localhost:8001/brand/manifest.json' => Http::response(['name' => 'Parli'])]);
+        $this->appFile('.env', self::ENV . "ZAPMIZER_BASE_URI=http://localhost:8001/api/\n");
+
+        $this->assertInstall(['--inbox' => true]);
+
+        $this->assertStringContainsString("ZAPMIZER_BASE_URI=http://localhost:8001/api/\n", $this->readAppFile('.env'));
+        $this->assertStringEndsWith(
+            "\nZAPMIZER_BASE_URI=https://app.parlichat.com/api/\nZAPMIZER_API_VERSION=2025-06-27\nZAPMIZER_PARTNER_ID=\nZAPMIZER_PARTNER_SECRET=\nVITE_ZAPMIZER_BRAND=parli\nZAPMIZER_ROUTES_CONNECT=true\nZAPMIZER_ROUTES_INBOX=true\n",
+            $this->readAppFile('.env.example'),
+        );
+    }
+
+    public function testADevHostWhoseBrandIsUnknownGoesToTheDefaultDeployInTheExample()
+    {
+        Http::fake(['localhost:8001/*' => Http::response('', 404)]);
+
+        $this->assertInstall(['--base-uri' => 'http://localhost:8001/api/']);
+
+        $this->assertStringContainsString("ZAPMIZER_BASE_URI=http://localhost:8001/api/\n", $this->readAppFile('.env'));
+
+        $example = $this->readAppFile('.env.example');
+        $this->assertStringContainsString("ZAPMIZER_BASE_URI=https://app.zapmizer.com/api/\n", $example);
+        $this->assertStringContainsString("VITE_ZAPMIZER_BRAND=zapmizer\n", $example);
+        $this->assertStringNotContainsString('localhost', $example);
+    }
+
+    public function testADevHostWithTheBrandInTheConfigGoesToThatBrandsDeployInTheExample()
+    {
+        Http::fake();
+        config()->set('zapmizer.inbox.brand', 'parli');
+
+        $this->assertInstall(['--base-uri' => 'http://zapbot.test/api/']);
+
+        $this->assertStringContainsString("ZAPMIZER_BASE_URI=http://zapbot.test/api/\n", $this->readAppFile('.env'));
+        $this->assertStringContainsString("ZAPMIZER_BASE_URI=https://app.parlichat.com/api/\n", $this->readAppFile('.env.example'));
+        $this->assertStringContainsString("VITE_ZAPMIZER_BRAND=parli\n", $this->readAppFile('.env.example'));
+        Http::assertNothingSent();
+    }
+
+    public function testAnEmptyBaseUriInTheExampleIsFilledWithThePublicDeploy()
+    {
+        Http::fake(['localhost:8001/brand/manifest.json' => Http::response(['name' => 'Parli'])]);
+        $this->appFile('.env.example', self::ENV . "ZAPMIZER_BASE_URI=\n");
+
+        $this->assertInstall(['--base-uri' => 'http://localhost:8001/api/']);
+
+        $this->assertStringContainsString("ZAPMIZER_BASE_URI=https://app.parlichat.com/api/\n", $this->readAppFile('.env.example'));
     }
 
     public function testADeployThatDoesNotTellItsBrandGoesToTheHuman()

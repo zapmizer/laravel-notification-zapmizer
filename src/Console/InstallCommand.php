@@ -192,32 +192,23 @@ class InstallCommand extends Command
      * The keys the connect reads, added only where missing, in `.env` and
      * `.env.example`. The partner keys go in empty: they are issued by
      * Zapmizer, never made up here. The route switches asked for are
-     * switched on even when the file has them with another value.
+     * switched on even when the file has them with another value. The
+     * `.env.example` is committed: it never gets a host outside the known
+     * deploys (a local server, a staging), but the public deploy of the
+     * same brand, whose host already says the brand (so no
+     * `ZAPMIZER_EMBED_BRAND` there).
      *
      * @param array<string, string> $routes
      */
     protected function writeEnvironment(array $routes): void
     {
-        $variables = [
-            'ZAPMIZER_BASE_URI' => $this->baseUri,
-            'ZAPMIZER_API_VERSION' => '2025-06-27',
-            'ZAPMIZER_PARTNER_ID' => '',
-            'ZAPMIZER_PARTNER_SECRET' => '',
-            // The embed's brand for the front (read at build time): the one
-            // of the deploy the base_uri points at.
-            'VITE_ZAPMIZER_BRAND' => $this->resolveBrand(),
+        $brand = $this->resolveBrand();
+        $files = [
+            '.env' => [$this->laravel->environmentFilePath(), $this->baseUri],
+            '.env.example' => [base_path('.env.example'), BaseUri::shareable($this->baseUri, $brand)],
         ];
 
-        // A brand read from a deploy outside the known hosts also goes to
-        // the backend (the Blade path reads EmbedBrand::resolve()), which
-        // would otherwise derive `zapmizer` from the host.
-        if ($this->brandSource === 'manifest' && $this->brand !== EmbedBrand::fromBaseUri($this->baseUri)) {
-            $variables['ZAPMIZER_EMBED_BRAND'] = $this->brand;
-        }
-
-        $environment = $this->laravel->environmentFilePath();
-
-        foreach ([$environment => '.env', base_path('.env.example') => '.env.example'] as $path => $label) {
+        foreach ($files as $label => [$path, $baseUri]) {
             $file = new EnvFile($path);
 
             if (!$file->exists()) {
@@ -230,7 +221,7 @@ class InstallCommand extends Command
 
             // A key left empty is filled; one with a value is never touched.
             if ($file->has('ZAPMIZER_BASE_URI') && $file->value('ZAPMIZER_BASE_URI') === '') {
-                $file->set('ZAPMIZER_BASE_URI', $this->baseUri);
+                $file->set('ZAPMIZER_BASE_URI', $baseUri);
             }
 
             // A flag is an explicit ask: a route switch already there with
@@ -243,12 +234,40 @@ class InstallCommand extends Command
                 }
             }
 
-            $added = array_merge($file->addMissing($variables + $routes), $switched);
+            $added = array_merge($file->addMissing($this->variables($baseUri, $brand) + $routes), $switched);
 
             $added === []
                 ? $this->skipped("{$label} já tem as chaves da Zapmizer")
                 : $this->done("{$label}: " . implode(', ', $added));
         }
+    }
+
+    /**
+     * The keys for a file whose `ZAPMIZER_BASE_URI` is `$baseUri`.
+     *
+     * @return array<string, string>
+     */
+    protected function variables(string $baseUri, string $brand): array
+    {
+        $variables = [
+            'ZAPMIZER_BASE_URI' => $baseUri,
+            'ZAPMIZER_API_VERSION' => '2025-06-27',
+            'ZAPMIZER_PARTNER_ID' => '',
+            'ZAPMIZER_PARTNER_SECRET' => '',
+            // The embed's brand for the front (read at build time): the one
+            // of the deploy the base_uri points at.
+            'VITE_ZAPMIZER_BRAND' => $brand,
+        ];
+
+        // A brand read from a deploy outside the known hosts also goes to
+        // the backend (the Blade path reads EmbedBrand::resolve()), which
+        // would otherwise derive `zapmizer` from the host. A known host
+        // (the `.env.example` always has one) already says it.
+        if ($this->brandSource === 'manifest' && $brand !== EmbedBrand::fromBaseUri($baseUri)) {
+            $variables['ZAPMIZER_EMBED_BRAND'] = $brand;
+        }
+
+        return $variables;
     }
 
     /**

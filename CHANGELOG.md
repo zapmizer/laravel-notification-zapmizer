@@ -1,6 +1,6 @@
 # Changelog
 
-# Unreleased
+# 2.0.2
 
 - **Os componentes Vue publicados vêm sem estilo: o visual é do app.** `ConnectButton.vue`, `ConnectionPanel.vue` e `InboxScreen.vue` (`zapmizer:install --inbox`, tags `zapmizer-wizard` e `zapmizer-inbox`) usavam classes de um design system que nem a lib nem o app tinham (`bg-gp-panel`, `text-gp-muted`, `gp-tag-mint`, `gp-eyebrow`...) e utilitárias de cor e tipografia do Tailwind; instalados, saíam sem estilo e nada dizia que o app precisava estilizá-los. Agora só trazem classes de gancho `zapmizer-*` no padrão BEM (`zapmizer-connect__button`, `zapmizer-panel__status--connected`...), sem CSS; o layout que a caixa precisa segue em `style` inline. Estrutura, textos, ícones, props, eventos e `role`/`aria-*` são os mesmos, e os ícones ganham `:size` no lugar das classes de tamanho. O `docs/instalar.md` (passo 4, com a lista das classes), o README, o `llms.txt`, a skill e as diretrizes do Boost e os próximos passos do `zapmizer:install --inbox` dizem que o app adapta os componentes ao próprio design system ou UI kit e que o `--force` sobrescreve os arquivos editados.
 - Os arquivos publicados em `resources/js/zapmizer/` (`.vue` e `.ts`) passam a seguir um lint comum de app: indentação de 4 espaços e linhas de até 120 colunas (prettier com `tabWidth: 4`, `printWidth: 120` e `vue/max-len` 120).

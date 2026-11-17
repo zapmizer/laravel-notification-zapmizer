@@ -341,7 +341,7 @@ onMounted(startPolling);
 
 The lasting warning of a `webhook_failed` is the panel's: the button emits `connected`, the screen switches to the panel, and the button's warning goes with it.
 
-They expect `axios` and `lucide-vue-next` (and `@zapmizer/embed` for the inbox screen); Ziggy's `route()` is used when present, not required; the markup uses utility classes from the app they came from (`gp-*`) — restyle them as yours. The popup pages are Blade views you can publish with `--tag=views` (`resources/views/vendor/zapmizer/connect-result.blade.php`, `connect-wait.blade.php` and `reconnect-result.blade.php`).
+They expect `axios` and `lucide-vue-next` (and `@zapmizer/embed` for the inbox screen); Ziggy's `route()` is used when present, not required; the components are unstyled: no design-system class and no CSS, only `zapmizer-*` hook classes (BEM-style, such as `zapmizer-connect__button` or `zapmizer-panel__status--connected`; the full list is in [instalar.md](instalar.md#4-o-front)). The app styles them: adapt the templates to its own design system or UI kit, or style the hook classes. They are the app's files once published; `zapmizer:install --force` (or `vendor:publish --force`) overwrites them. The popup pages are Blade views you can publish with `--tag=views` (`resources/views/vendor/zapmizer/connect-result.blade.php`, `connect-wait.blade.php` and `reconnect-result.blade.php`).
 
 ## 6. Receiving messages: the signed webhook
 

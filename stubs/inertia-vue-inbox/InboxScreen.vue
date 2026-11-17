@@ -23,14 +23,14 @@ import { zapmizerRoute } from './zapmizerRoute';
  * `useInboxHost` para o layout (veja docs/vue.md do @zapmizer/embed).
  */
 const props = withDefaults(
-  defineProps<{
-    person?: string | null;
-    theme?: 'light' | 'dark';
-    sessionUrl?: string;
-    keepaliveUrl?: string;
-    minHeight?: string;
-  }>(),
-  { person: undefined, theme: undefined, sessionUrl: undefined, keepaliveUrl: undefined, minHeight: '560px' },
+    defineProps<{
+        person?: string | null;
+        theme?: 'light' | 'dark';
+        sessionUrl?: string;
+        keepaliveUrl?: string;
+        minHeight?: string;
+    }>(),
+    { person: undefined, theme: undefined, sessionUrl: undefined, keepaliveUrl: undefined, minHeight: '560px' }
 );
 
 const { integration, person: servedPerson, loading, errorMessage, reload } = useZapmizerIntegration();
@@ -43,17 +43,23 @@ const person = computed(() => (props.person === undefined ? servedPerson.value :
 const enabled = computed(() => !loading.value && integration.value !== null && !needsConnect.value);
 
 const inbox = useInboxHost({
-  brand: ZAPMIZER_BRAND,
-  openSession: zapmizerOpenSession(props.sessionUrl ?? zapmizerRoute('zapmizer.inbox.session'), () =>
-    props.theme ? { theme: props.theme } : {},
-  ),
-  keepAlive: zapmizerKeepAlive(props.keepaliveUrl ?? zapmizerRoute('zapmizer.inbox.keepalive')),
-  person,
-  enabled,
-  frame: {
-    configure: (iframe) =>
-      Object.assign(iframe.style, { position: 'absolute', inset: '0', width: '100%', height: '100%', border: '0' }),
-  },
+    brand: ZAPMIZER_BRAND,
+    openSession: zapmizerOpenSession(props.sessionUrl ?? zapmizerRoute('zapmizer.inbox.session'), () =>
+        props.theme ? { theme: props.theme } : {}
+    ),
+    keepAlive: zapmizerKeepAlive(props.keepaliveUrl ?? zapmizerRoute('zapmizer.inbox.keepalive')),
+    person,
+    enabled,
+    frame: {
+        configure: (iframe) =>
+            Object.assign(iframe.style, {
+                position: 'absolute',
+                inset: '0',
+                width: '100%',
+                height: '100%',
+                border: '0',
+            }),
+    },
 });
 
 Object.assign(inbox.host.overlay.style, { position: 'absolute', inset: '0', pointerEvents: 'none' });
@@ -66,74 +72,99 @@ const slot = useInboxSlot(inbox.host, { person, enabled });
 const state = computed(() => inbox.state.value);
 const error = computed(() => (state.value.status === 'error' ? state.value : null));
 const message = computed(() =>
-  error.value ? (defaultMessages[error.value.code] ?? 'Não foi possível abrir a caixa de entrada. Avise o suporte.') : '',
+    error.value
+        ? defaultMessages[error.value.code] ?? 'Não foi possível abrir a caixa de entrada. Avise o suporte.'
+        : ''
 );
 
 watch(error, (current) => {
-  if (current && (current.code === 'not_connected' || current.action === 'reconnect')) {
-    reauthRequired.value = current.code !== 'not_connected';
-    needsConnect.value = true;
-  }
+    if (current && (current.code === 'not_connected' || current.action === 'reconnect')) {
+        reauthRequired.value = current.code !== 'not_connected';
+        needsConnect.value = true;
+    }
 });
 
 /** O popup do connect respondeu `ok` (ou `webhook_failed`, que também conecta). */
 async function onConnected() {
-  await reload();
-  reauthRequired.value = false;
-  needsConnect.value = false;
+    await reload();
+    reauthRequired.value = false;
+    needsConnect.value = false;
 }
 
 function reloadPage() {
-  window.location.reload();
+    window.location.reload();
 }
 
 let stopListening: (() => void) | null = null;
 
 onMounted(() => {
-  // O ideal é chamar listenToZapmizerLogout() uma vez no boot do app; aqui
-  // cobre ao menos o tempo em que a tela está aberta.
-  stopListening = listenToZapmizerLogout();
-  reload();
+    // O ideal é chamar listenToZapmizerLogout() uma vez no boot do app; aqui
+    // cobre ao menos o tempo em que a tela está aberta.
+    stopListening = listenToZapmizerLogout();
+    reload();
 });
 
 onBeforeUnmount(() => stopListening?.());
 </script>
 
 <template>
-  <div :style="{ position: 'relative', height: '100%', minHeight }">
-    <p v-if="loading" role="status">Carregando…</p>
+    <div class="zapmizer-inbox" :style="{ position: 'relative', height: '100%', minHeight }">
+        <p v-if="loading" class="zapmizer-inbox__status" role="status">Carregando…</p>
 
-    <p v-else-if="errorMessage" role="alert">
-      {{ errorMessage }}
-      <button type="button" @click="reload()">Tentar de novo</button>
-    </p>
+        <p v-else-if="errorMessage" class="zapmizer-inbox__error" role="alert">
+            {{ errorMessage }}
+            <button type="button" class="zapmizer-inbox__button" @click="reload()">Tentar de novo</button>
+        </p>
 
-    <ConnectButton
-      v-else-if="integration === null || needsConnect"
-      :reauth-required="reauthRequired"
-      @connected="onConnected"
-      @recheck="onConnected"
-    />
+        <ConnectButton
+            v-else-if="integration === null || needsConnect"
+            :reauth-required="reauthRequired"
+            @connected="onConnected"
+            @recheck="onConnected"
+        />
 
-    <section v-else ref="slot" :style="{ position: 'relative', height: '100%', minHeight }" />
+        <section
+            v-else
+            ref="slot"
+            class="zapmizer-inbox__frame"
+            :style="{ position: 'relative', height: '100%', minHeight }"
+        />
 
-    <Teleport :to="inbox.host.overlay">
-      <p
-        v-if="state.status === 'opening' || state.status === 'loading'"
-        role="status"
-        style="pointer-events: auto; margin: 1rem"
-      >
-        Abrindo a caixa de entrada…
-      </p>
-      <div v-else-if="error && !needsConnect" role="alert" style="pointer-events: auto; margin: 1rem">
-        <p>{{ message }}</p>
-        <button v-if="error.action === 'retry'" type="button" @click="inbox.retry()">Tentar de novo</button>
-        <button v-else-if="error.action === 'reload'" type="button" @click="reloadPage">
-          Recarregar a página
-        </button>
-        <!-- `checkout` (assinatura inativa): leve o cliente ao checkout do seu produto
-             (PartnerClient::checkout(), docs/connect.md seção 8) e, quando voltar, chame inbox.retry(). -->
-      </div>
-    </Teleport>
-  </div>
+        <Teleport :to="inbox.host.overlay">
+            <p
+                v-if="state.status === 'opening' || state.status === 'loading'"
+                class="zapmizer-inbox__status"
+                role="status"
+                style="pointer-events: auto; margin: 1rem"
+            >
+                Abrindo a caixa de entrada…
+            </p>
+            <div
+                v-else-if="error && !needsConnect"
+                class="zapmizer-inbox__error"
+                role="alert"
+                style="pointer-events: auto; margin: 1rem"
+            >
+                <p class="zapmizer-inbox__message">{{ message }}</p>
+                <button
+                    v-if="error.action === 'retry'"
+                    type="button"
+                    class="zapmizer-inbox__button"
+                    @click="inbox.retry()"
+                >
+                    Tentar de novo
+                </button>
+                <button
+                    v-else-if="error.action === 'reload'"
+                    type="button"
+                    class="zapmizer-inbox__button"
+                    @click="reloadPage"
+                >
+                    Recarregar a página
+                </button>
+                <!-- `checkout` (assinatura inativa): leve o cliente ao checkout do seu produto
+                    (PartnerClient::checkout(), docs/connect.md seção 8) e, quando voltar, chame inbox.retry(). -->
+            </div>
+        </Teleport>
+    </div>
 </template>

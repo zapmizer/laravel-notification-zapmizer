@@ -30,9 +30,13 @@ const STOP_STATUSES = [401, 403, 419];
  * chama isto sem carregar um estado que não é dele.
  */
 export async function openZapmizerConnect(): Promise<Window | null> {
-  const { data } = await axios.post<{ url: string; expires_at: string }>(zapmizerRoute('zapmizer.connect.start'), {}, JSON_HEADERS);
+    const { data } = await axios.post<{ url: string; expires_at: string }>(
+        zapmizerRoute('zapmizer.connect.start'),
+        {},
+        JSON_HEADERS
+    );
 
-  return window.open(data.url, 'zapmizer-connect', 'width=520,height=720');
+    return window.open(data.url, 'zapmizer-connect', 'width=520,height=720');
 }
 
 /**
@@ -44,13 +48,17 @@ export async function openZapmizerConnect(): Promise<Window | null> {
  * com o código em `response.data.code`.
  */
 export async function relinkZapmizer(): Promise<ZapmizerRelinkResult> {
-  const { data } = await axios.post<ZapmizerRelinkResult>(zapmizerRoute('zapmizer.connect.reconnect'), {}, JSON_HEADERS);
+    const { data } = await axios.post<ZapmizerRelinkResult>(
+        zapmizerRoute('zapmizer.connect.reconnect'),
+        {},
+        JSON_HEADERS
+    );
 
-  if (data.status === 'needs_client') {
-    window.open(data.url, 'zapmizer-reconnect', 'width=520,height=720');
-  }
+    if (data.status === 'needs_client') {
+        window.open(data.url, 'zapmizer-reconnect', 'width=520,height=720');
+    }
 
-  return data;
+    return data;
 }
 
 /**
@@ -63,205 +71,205 @@ export async function relinkZapmizer(): Promise<ZapmizerRelinkResult> {
  * `has_webhook_secret === false`.
  */
 export function useZapmizerIntegration() {
-  const integration = ref<ZapmizerConnection | null>(null);
-  /**
-   * Quem atende, como o servidor diz (`person` do `show`): a chave da
-   * retomada da caixa embutida. `null` até a primeira resposta.
-   */
-  const person = ref<string | null>(null);
-  const loading = ref(true);
-  const errorMessage = ref('');
+    const integration = ref<ZapmizerConnection | null>(null);
+    /**
+     * Quem atende, como o servidor diz (`person` do `show`): a chave da
+     * retomada da caixa embutida. `null` até a primeira resposta.
+     */
+    const person = ref<string | null>(null);
+    const loading = ref(true);
+    const errorMessage = ref('');
 
-  // Uma resposta atrasada (do reload ou do polling) não pode sobrescrever um
-  // estado mais novo: cada pedido leva o número da vez e só aplica a resposta
-  // se ainda for o último. `stopPolling()` também avança o número.
-  let request = 0;
+    // Uma resposta atrasada (do reload ou do polling) não pode sobrescrever um
+    // estado mais novo: cada pedido leva o número da vez e só aplica a resposta
+    // se ainda for o último. `stopPolling()` também avança o número.
+    let request = 0;
 
-  // Geração do loop de polling: decide se um poll que voltou agenda o
-  // próximo. Só o `stopPolling()` a avança; `request` decide só se a
-  // resposta é aplicada.
-  let pollGeneration = 0;
+    // Geração do loop de polling: decide se um poll que voltou agenda o
+    // próximo. Só o `stopPolling()` a avança; `request` decide só se a
+    // resposta é aplicada.
+    let pollGeneration = 0;
 
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  let polling = false;
-  let fastUntil = 0;
-  let maskOffUntil = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let polling = false;
+    let fastUntil = 0;
+    let maskOffUntil = 0;
 
-  const isConnected = computed(() => Boolean(integration.value?.is_active && integration.value?.phone_number));
+    const isConnected = computed(() => Boolean(integration.value?.is_active && integration.value?.phone_number));
 
-  /**
-   * Aplica o que o `show` respondeu. Na janela depois de religar, um `off`
-   * fica de fora: o número ainda está subindo.
-   */
-  function apply(connection: ZapmizerConnection | null) {
-    if (connection?.state === 'off' && Date.now() < maskOffUntil) return;
+    /**
+     * Aplica o que o `show` respondeu. Na janela depois de religar, um `off`
+     * fica de fora: o número ainda está subindo.
+     */
+    function apply(connection: ZapmizerConnection | null) {
+        if (connection?.state === 'off' && Date.now() < maskOffUntil) return;
 
-    integration.value = connection;
-  }
-
-  async function fetchConnection(live: boolean) {
-    const { data } = await axios.get<ZapmizerShowResponse>(
-      zapmizerRoute('zapmizer.connect.show', live ? { live: 1 } : {}),
-      JSON_HEADERS,
-    );
-
-    if (typeof data.person === 'string' && data.person !== '') person.value = data.person;
-
-    return data.connection ?? null;
-  }
-
-  /** `live` consulta o Zapmizer e traz `state` / `is_online` na conexão. */
-  async function reload(options: { live?: boolean } = {}) {
-    const current = ++request;
-    errorMessage.value = '';
-
-    try {
-      const connection = await fetchConnection(Boolean(options.live));
-
-      if (current !== request) return;
-
-      apply(connection);
-    } catch {
-      if (current !== request) return;
-
-      errorMessage.value = 'Não foi possível carregar o estado da integração.';
-    } finally {
-      if (current === request) loading.value = false;
+        integration.value = connection;
     }
-  }
 
-  function clearTimer() {
-    if (timer) {
-      clearTimeout(timer);
-      timer = null;
+    async function fetchConnection(live: boolean) {
+        const { data } = await axios.get<ZapmizerShowResponse>(
+            zapmizerRoute('zapmizer.connect.show', live ? { live: 1 } : {}),
+            JSON_HEADERS
+        );
+
+        if (typeof data.person === 'string' && data.person !== '') person.value = data.person;
+
+        return data.connection ?? null;
     }
-  }
 
-  function schedule() {
-    clearTimer();
+    /** `live` consulta o Zapmizer e traz `state` / `is_online` na conexão. */
+    async function reload(options: { live?: boolean } = {}) {
+        const current = ++request;
+        errorMessage.value = '';
 
-    if (!polling) return;
+        try {
+            const connection = await fetchConnection(Boolean(options.live));
 
-    const fast = Date.now() < fastUntil && integration.value?.state !== 'connected';
+            if (current !== request) return;
 
-    timer = setTimeout(poll, fast ? FAST_POLL_INTERVAL_MS : POLL_INTERVAL_MS);
-  }
+            apply(connection);
+        } catch {
+            if (current !== request) return;
 
-  async function poll() {
-    timer = null;
+            errorMessage.value = 'Não foi possível carregar o estado da integração.';
+        } finally {
+            if (current === request) loading.value = false;
+        }
+    }
 
-    const gen = pollGeneration;
-    const current = ++request;
-    let connection: ZapmizerConnection | null;
+    function clearTimer() {
+        if (timer) {
+            clearTimeout(timer);
+            timer = null;
+        }
+    }
 
-    try {
-      connection = await fetchConnection(true);
-    } catch (e) {
-      // Um `reload()` mais novo tomou o lugar desta resposta: ela não é
-      // aplicada, mas o loop segue se ninguém o parou.
-      if (current !== request) {
-        if (gen === pollGeneration) schedule();
+    function schedule() {
+        clearTimer();
 
-        return;
-      }
+        if (!polling) return;
 
-      loading.value = false;
+        const fast = Date.now() < fastUntil && integration.value?.state !== 'connected';
 
-      // 401/419 (sessão do app caída) e 403 `no_connectable`: nada a
-      // consultar sem o usuário agir. Rede, 429 e 503 são passageiros.
-      const status = (e as { response?: { status?: number } }).response?.status ?? 0;
+        timer = setTimeout(poll, fast ? FAST_POLL_INTERVAL_MS : POLL_INTERVAL_MS);
+    }
 
-      if (STOP_STATUSES.includes(status)) {
+    async function poll() {
+        timer = null;
+
+        const gen = pollGeneration;
+        const current = ++request;
+        let connection: ZapmizerConnection | null;
+
+        try {
+            connection = await fetchConnection(true);
+        } catch (e) {
+            // Um `reload()` mais novo tomou o lugar desta resposta: ela não é
+            // aplicada, mas o loop segue se ninguém o parou.
+            if (current !== request) {
+                if (gen === pollGeneration) schedule();
+
+                return;
+            }
+
+            loading.value = false;
+
+            // 401/419 (sessão do app caída) e 403 `no_connectable`: nada a
+            // consultar sem o usuário agir. Rede, 429 e 503 são passageiros.
+            const status = (e as { response?: { status?: number } }).response?.status ?? 0;
+
+            if (STOP_STATUSES.includes(status)) {
+                stopPolling();
+
+                return;
+            }
+
+            schedule();
+
+            return;
+        }
+
+        if (current !== request) {
+            if (gen === pollGeneration) schedule();
+
+            return;
+        }
+
+        loading.value = false;
+        errorMessage.value = '';
+        apply(connection);
+
+        // Desconectado, token revogado ou instância apagada: só uma ação do
+        // usuário (conectar de novo) muda isso.
+        if (connection === null || FINAL_STATES.includes(connection.state ?? '')) {
+            stopPolling();
+
+            return;
+        }
+
+        schedule();
+    }
+
+    /** Consulta `show?live=1` agora e depois a cada 15 s (5 s depois de religar). */
+    function startPolling() {
         stopPolling();
-
-        return;
-      }
-
-      schedule();
-
-      return;
+        polling = true;
+        poll();
     }
 
-    if (current !== request) {
-      if (gen === pollGeneration) schedule();
-
-      return;
+    /**
+     * Para o polling e descarta a resposta que estiver a caminho. Só aqui a
+     * geração do loop avança: um poll em voo de um loop parado não agenda o
+     * próximo.
+     */
+    function stopPolling() {
+        polling = false;
+        pollGeneration++;
+        request++;
+        clearTimer();
     }
 
-    loading.value = false;
-    errorMessage.value = '';
-    apply(connection);
+    /**
+     * Depois de religar (`online`/`starting` ou o popup com `reconnected`):
+     * mostra "Conectando", ignora o `off` por 30 s e acelera o polling por 2
+     * minutos, até o número voltar a `connected`.
+     */
+    function beginTurnOn() {
+        if (integration.value) {
+            integration.value = { ...integration.value, state: 'connecting', is_online: false };
+        }
 
-    // Desconectado, token revogado ou instância apagada: só uma ação do
-    // usuário (conectar de novo) muda isso.
-    if (connection === null || FINAL_STATES.includes(connection.state ?? '')) {
-      stopPolling();
-
-      return;
+        maskOffUntil = Date.now() + TURN_ON_GRACE_MS;
+        fastUntil = Date.now() + FAST_POLL_WINDOW_MS;
+        startPolling();
     }
 
-    schedule();
-  }
+    // Desmontou o componente (ou o escopo): o polling para junto.
+    if (getCurrentScope()) onScopeDispose(stopPolling);
 
-  /** Consulta `show?live=1` agora e depois a cada 15 s (5 s depois de religar). */
-  function startPolling() {
-    stopPolling();
-    polling = true;
-    poll();
-  }
+    const start = openZapmizerConnect;
+    const relink = relinkZapmizer;
 
-  /**
-   * Para o polling e descarta a resposta que estiver a caminho. Só aqui a
-   * geração do loop avança: um poll em voo de um loop parado não agenda o
-   * próximo.
-   */
-  function stopPolling() {
-    polling = false;
-    pollGeneration++;
-    request++;
-    clearTimer();
-  }
+    async function disconnect() {
+        await axios.delete(zapmizerRoute('zapmizer.connect.destroy'), JSON_HEADERS);
 
-  /**
-   * Depois de religar (`online`/`starting` ou o popup com `reconnected`):
-   * mostra "Conectando", ignora o `off` por 30 s e acelera o polling por 2
-   * minutos, até o número voltar a `connected`.
-   */
-  function beginTurnOn() {
-    if (integration.value) {
-      integration.value = { ...integration.value, state: 'connecting', is_online: false };
+        stopPolling();
+        integration.value = null;
     }
 
-    maskOffUntil = Date.now() + TURN_ON_GRACE_MS;
-    fastUntil = Date.now() + FAST_POLL_WINDOW_MS;
-    startPolling();
-  }
-
-  // Desmontou o componente (ou o escopo): o polling para junto.
-  if (getCurrentScope()) onScopeDispose(stopPolling);
-
-  const start = openZapmizerConnect;
-  const relink = relinkZapmizer;
-
-  async function disconnect() {
-    await axios.delete(zapmizerRoute('zapmizer.connect.destroy'), JSON_HEADERS);
-
-    stopPolling();
-    integration.value = null;
-  }
-
-  return {
-    integration,
-    person,
-    loading,
-    errorMessage,
-    isConnected,
-    reload,
-    start,
-    relink,
-    disconnect,
-    startPolling,
-    stopPolling,
-    beginTurnOn,
-  };
+    return {
+        integration,
+        person,
+        loading,
+        errorMessage,
+        isConnected,
+        reload,
+        start,
+        relink,
+        disconnect,
+        startPolling,
+        stopPolling,
+        beginTurnOn,
+    };
 }

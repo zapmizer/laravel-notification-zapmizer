@@ -526,6 +526,7 @@ class InstallCommand extends Command
         if ($inbox && $this->componentsPublished) {
             $steps[] = 'Instale o front: ' . $this->frontendInstall(true);
             $steps[] = 'Monte <InboxScreen /> (resources/js/zapmizer/InboxScreen.vue; o person vem do servidor, não passe) numa página autenticada, chame listenToZapmizerLogout() no boot do app e endZapmizerEmbeds() antes do logout (resources/js/zapmizer/zapmizerEmbed.ts). Importe de resources/js/zapmizer pelo alias que o app já usa para resources/js (ou por caminho relativo); os arquivos de lá se importam entre si por caminho relativo, sem depender de alias.';
+            $steps[] = 'Os componentes em resources/js/zapmizer vêm sem estilo: adapte-os ao visual do app, com o design system ou UI kit dele (as classes zapmizer-* são só ganchos; docs/instalar.md, passo 4). Edite os arquivos à vontade, mas zapmizer:install --force os sobrescreve.';
             $steps[] = "Rebuilde o front (npm run build, ou o build do gerenciador do app) depois de instalar: o VITE_ZAPMIZER_BRAND={$brand} do .env entra no bundle, e precisa ser a marca do deploy da ZAPMIZER_BASE_URI.";
         } elseif ($inbox) {
             $steps[] = 'Sem Vue, os componentes não foram publicados: monte o connect e a caixa pelo caminho Blade de docs/instalar.md ("Sem Inertia/Vue"). Instale só o embed: ' . $this->frontendInstall(false);

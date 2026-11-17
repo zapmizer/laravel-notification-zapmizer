@@ -19,15 +19,15 @@ export { ZAPMIZER_BRAND };
  * ele, o POST dá 419 e a lib pede para recarregar a página.
  */
 function csrfHeaders(): Record<string, string> {
-  const meta = document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content;
+    const meta = document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content;
 
-  if (meta) {
-    return { 'X-CSRF-TOKEN': meta };
-  }
+    if (meta) {
+        return { 'X-CSRF-TOKEN': meta };
+    }
 
-  const cookie = document.cookie.split('; ').find((entry) => entry.startsWith('XSRF-TOKEN='));
+    const cookie = document.cookie.split('; ').find((entry) => entry.startsWith('XSRF-TOKEN='));
 
-  return cookie ? { 'X-XSRF-TOKEN': decodeURIComponent(cookie.slice('XSRF-TOKEN='.length)) } : {};
+    return cookie ? { 'X-XSRF-TOKEN': decodeURIComponent(cookie.slice('XSRF-TOKEN='.length)) } : {};
 }
 
 const JSON_HEADERS = { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' };
@@ -39,25 +39,25 @@ const JSON_HEADERS = { Accept: 'application/json', 'X-Requested-With': 'XMLHttpR
  * abertura: um tema trocado vai na sessão seguinte.
  */
 export function zapmizerOpenSession(url: string, payload: () => object = () => ({})): OpenSession {
-  return async () => {
-    const response = await fetch(url, {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { ...JSON_HEADERS, 'Content-Type': 'application/json', ...csrfHeaders() },
-      body: JSON.stringify(payload()),
-    });
-    const body = await response.json().catch(() => ({}));
+    return async () => {
+        const response = await fetch(url, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { ...JSON_HEADERS, 'Content-Type': 'application/json', ...csrfHeaders() },
+            body: JSON.stringify(payload()),
+        });
+        const body = await response.json().catch(() => ({}));
 
-    if (!response.ok) {
-      throw {
-        status: response.status,
-        code: typeof body.code === 'string' ? body.code : null,
-        retryAfter: Number(response.headers.get('Retry-After')) || undefined,
-      };
-    }
+        if (!response.ok) {
+            throw {
+                status: response.status,
+                code: typeof body.code === 'string' ? body.code : null,
+                retryAfter: Number(response.headers.get('Retry-After')) || undefined,
+            };
+        }
 
-    return body;
-  };
+        return body;
+    };
 }
 
 /**
@@ -66,13 +66,13 @@ export function zapmizerOpenSession(url: string, payload: () => object = () => (
  * fetch segue o redirect e responde 200, e a caixa ficaria aberta.
  */
 export function zapmizerKeepAlive(url: string): KeepAlive {
-  return async () => {
-    const response = await fetch(url, { credentials: 'same-origin', headers: JSON_HEADERS });
+    return async () => {
+        const response = await fetch(url, { credentials: 'same-origin', headers: JSON_HEADERS });
 
-    if (!response.ok) {
-      throw { status: response.status };
-    }
-  };
+        if (!response.ok) {
+            throw { status: response.status };
+        }
+    };
 }
 
 /**
@@ -81,7 +81,7 @@ export function zapmizerKeepAlive(url: string): KeepAlive {
  * para de ouvir.
  */
 export function listenToZapmizerLogout(): () => void {
-  return listenToLogout({ brand: ZAPMIZER_BRAND });
+    return listenToLogout({ brand: ZAPMIZER_BRAND });
 }
 
 /**
@@ -89,5 +89,5 @@ export function listenToZapmizerLogout(): () => void {
  * retomada (`<marca>-inbox:*`) e avisa as outras abas.
  */
 export function endZapmizerEmbeds(): void {
-  endEmbeds({ brand: ZAPMIZER_BRAND });
+    endEmbeds({ brand: ZAPMIZER_BRAND });
 }

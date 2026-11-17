@@ -397,6 +397,7 @@ PHP;
             'endZapmizerEmbeds() antes do logout',
             'Monte <InboxScreen /> (resources/js/zapmizer/InboxScreen.vue; o person vem do servidor, não passe)',
             'Rebuilde o front',
+            'Os componentes em resources/js/zapmizer vêm sem estilo: adapte-os ao visual do app',
         ]);
 
         $this->assertStringContainsString("ZAPMIZER_ROUTES_INBOX=true\n", $this->readAppFile('.env'));
@@ -466,6 +467,7 @@ PHP;
 
         $this->assertStringNotContainsString('<InboxScreen', $output);
         $this->assertStringNotContainsString('lucide-vue-next', $output);
+        $this->assertStringNotContainsString('vêm sem estilo', $output, 'nothing was published to style');
 
         $this->assertFileDoesNotExist($this->appFile('resources/js/zapmizer/InboxScreen.vue'));
         $this->assertStringContainsString('ZAPMIZER_ROUTES_INBOX=true', $this->readAppFile('.env'));

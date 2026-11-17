@@ -18,6 +18,7 @@ use NotificationChannels\Zapmizer\Install\ConnectableModel;
 use NotificationChannels\Zapmizer\Install\EnvFile;
 use NotificationChannels\Zapmizer\Support\BaseUri;
 use NotificationChannels\Zapmizer\Support\ConnectionWebhook;
+use NotificationChannels\Zapmizer\Support\ConnectWebhook;
 use NotificationChannels\Zapmizer\Support\EmbedBrand;
 use NotificationChannels\Zapmizer\Support\PhoneNumber;
 use NotificationChannels\Zapmizer\Support\RouteGroups;
@@ -434,24 +435,80 @@ class CheckCommand extends Command
     }
 
     /**
-     * The webhook is what the connections receive through. Off, the connect
-     * still works (connections that only send): a warning, not a failure.
+     * The webhook route is where deliveries arrive; the connect asking for a
+     * webhook (`zapmizer.connect.webhook`, by default what the route group
+     * says) is what makes the connections receive through it. Off, the
+     * connect still works (connections that only send): a warning, not a
+     * failure, unless the app said so (`ZAPMIZER_CONNECT_WEBHOOK=false`).
      */
     protected function checkWebhookRoutes(): void
     {
+        $connect = RouteGroups::switchedOn(RouteGroups::CONNECT);
+        $configured = ConnectWebhook::configured();
+
+        if (ConnectWebhook::invalid()) {
+            $this->record('connect_webhook', self::WARN, 'ZAPMIZER_CONNECT_WEBHOOK com valor que não é booleano: o connect segue a rota do webhook', 'Use true ou false, ou tire a chave.');
+        }
+
         if (!RouteGroups::switchedOn(RouteGroups::WEBHOOK)) {
-            RouteGroups::switchedOn(RouteGroups::CONNECT)
-                ? $this->record('webhook_routes', self::WARN, 'webhook da lib desligado (ZAPMIZER_ROUTES_WEBHOOK): as conexões novas nascem sem webhook e não recebem mensagens nem eventos', 'Se o app recebe mensagens pela lib, ZAPMIZER_ROUTES_WEBHOOK=true (o zapmizer:install --webhook liga); as conexões feitas sem ele precisam conectar de novo.')
-                : $this->off('webhook_routes', 'webhook da lib desligado (ZAPMIZER_ROUTES_WEBHOOK)', RouteGroups::WEBHOOK);
+            $this->checkWebhookGroupOff($connect, $configured);
 
             return;
         }
 
         $missing = $this->missingRoutes(array_merge(['zapmizer.webhook'], ConnectionWebhook::enabled() ? ['zapmizer.webhook.connection'] : []));
 
-        $missing === []
-            ? $this->record('webhook_routes', self::OK, 'rota do webhook registrada')
-            : $this->record('webhook_routes', self::FAIL, 'rotas ausentes: ' . implode(', ', $missing), $this->missingRoutesHint());
+        if ($missing !== []) {
+            $this->record('webhook_routes', self::FAIL, 'rotas ausentes: ' . implode(', ', $missing), $this->missingRoutesHint());
+
+            return;
+        }
+
+        $connect && $configured === false
+            ? $this->record('webhook_routes', self::OK, 'rota do webhook registrada para receber entregas (o webhook do time, verify_number.*); o connect não pede webhook para as conexões (ZAPMIZER_CONNECT_WEBHOOK=false): as conexões feitas a partir daí enviam, mas não recebem')
+            : $this->record('webhook_routes', self::OK, 'rota do webhook registrada');
+    }
+
+    /**
+     * The webhook group is off: with the connect on, the app either said the
+     * connections need no webhook, mounted the route itself for the connect
+     * to ask for, or left the connections without one (a warning).
+     */
+    private function checkWebhookGroupOff(bool $connect, ?bool $configured): void
+    {
+        if (!$connect) {
+            $this->off('webhook_routes', 'webhook da lib desligado (ZAPMIZER_ROUTES_WEBHOOK)', RouteGroups::WEBHOOK);
+
+            return;
+        }
+
+        if ($configured === false) {
+            $this->off('webhook_routes', 'o connect não pede webhook (ZAPMIZER_CONNECT_WEBHOOK=false) e o webhook da lib está desligado (ZAPMIZER_ROUTES_WEBHOOK)', RouteGroups::WEBHOOK);
+
+            return;
+        }
+
+        // Asks: the app said so, or the package routes are off and the app
+        // mounts them itself (the connect then sends route('zapmizer.webhook')).
+        $why = match (true) {
+            $configured === true => 'ZAPMIZER_CONNECT_WEBHOOK=true',
+            $configured === null && !RouteGroups::routesEnabled() => 'ZAPMIZER_ROUTES_ENABLED=false: o app monta as rotas',
+            default => null,
+        };
+
+        if ($why !== null) {
+            $missing = $this->missingRoutes(array_merge(['zapmizer.webhook'], ConnectionWebhook::enabled() ? ['zapmizer.webhook.connection'] : []));
+
+            $missing === []
+                ? $this->record('webhook_routes', self::OK, "o connect pede webhook ({$why}) na rota zapmizer.webhook montada pelo app")
+                : $this->record('webhook_routes', self::FAIL, "o connect pede webhook ({$why}), mas a rota do webhook não existe: " . implode(', ', $missing), $configured === true
+                    ? 'Ligue ZAPMIZER_ROUTES_WEBHOOK=true, monte a rota zapmizer.webhook no app ou tire ZAPMIZER_CONNECT_WEBHOOK.'
+                    : 'Monte a rota zapmizer.webhook no app, ou ZAPMIZER_CONNECT_WEBHOOK=false se as conexões só enviam.');
+
+            return;
+        }
+
+        $this->record('webhook_routes', self::WARN, 'webhook da lib desligado (ZAPMIZER_ROUTES_WEBHOOK): as conexões novas nascem sem webhook e não recebem mensagens nem eventos', 'Se o app recebe mensagens pela lib, ZAPMIZER_ROUTES_WEBHOOK=true (o zapmizer:install --webhook liga); as conexões feitas sem ele precisam conectar de novo. Se o app só envia pelas conexões, ZAPMIZER_CONNECT_WEBHOOK=false deixa isso explícito.');
     }
 
     protected function checkInboxRoutes(bool $inbox): void

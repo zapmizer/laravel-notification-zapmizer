@@ -44,7 +44,7 @@ php artisan zapmizer:install --base-uri=https://app.parlichat.com/api/ --model=A
 
 - `--model`: o model dono do número. Aceita o nome curto (`--model=Team` procura `App\Models\Team` e depois `App\Team`). Liga as [rotas do connect](#as-rotas-da-lib) (`ZAPMIZER_ROUTES_CONNECT=true`).
 - `--inbox`: liga a caixa de entrada (`ZAPMIZER_ROUTES_INBOX=true`, e o connect junto, de que ela depende) e publica os componentes Vue. Tire-o se o app não usa Vue (veja [Sem Inertia/Vue](#sem-inertiavue)).
-- `--webhook`: liga o webhook da lib (`ZAPMIZER_ROUTES_WEBHOOK=true`), a rota pública assinada por onde as conexões recebem mensagens e eventos. Sem ele o connect funciona, mas as conexões só enviam. Veja [Webhook](#webhook-opcional).
+- `--webhook`: liga o webhook da lib (`ZAPMIZER_ROUTES_WEBHOOK=true`), a rota pública assinada por onde as conexões recebem mensagens e eventos. Sem ele o connect funciona, mas as conexões só enviam. A rota só recebe entregas; se o connect pede webhook para as conexões é a `ZAPMIZER_CONNECT_WEBHOOK`, que o instalador não grava (sem ela, segue a rota). Veja [Webhook](#webhook-opcional).
 - `--migrate`: roda as migrations no fim. Sem ele, rode `php artisan migrate` depois.
 - `--force`: sobrescreve a config, a migration e os componentes já publicados. Sem ele, o que já existe fica como está.
 
@@ -251,7 +251,8 @@ Sem rede, ou com `--offline`, as checagens remotas são puladas (`skip`, ou avis
 | `migration` | a tabela `zapmizer_connections` existe | connect | sim |
 | `connectable` | o model que o resolver usa implementa `Connectable` | connect | sim |
 | `connect_routes` | as rotas do connect e do reconnect registradas | connect | sim |
-| `webhook_routes` | a rota do webhook registrada (e a por conexão, com `ZAPMIZER_WEBHOOK_PER_CONNECTION`) | webhook | sim com a rota ausente; aviso com o connect ligado e o webhook não (as conexões não recebem mensagens) |
+| `webhook_routes` | a rota do webhook registrada (e a por conexão, com `ZAPMIZER_WEBHOOK_PER_CONNECTION`) | webhook | sim com a rota ausente; aviso com o connect ligado e o webhook não (as conexões não recebem mensagens), a menos que `ZAPMIZER_CONNECT_WEBHOOK=false` diga que é de propósito (`off`); com `ZAPMIZER_CONNECT_WEBHOOK=true` (ou ausente, com `ZAPMIZER_ROUTES_ENABLED=false`) e a rota desligada, sim se o app não montou `zapmizer.webhook` |
+| `connect_webhook` | só aparece com `ZAPMIZER_CONNECT_WEBHOOK` num valor que não é booleano (o connect segue a rota do webhook) | sempre | não; aviso |
 | `inbox_routes` | o connect ligado e as rotas da caixa registradas | caixa | sim; aviso quando o app ainda tem a `ZAPMIZER_INBOX_ENABLED`, que não liga mais nada |
 | `verify_number_routes` | a rota `zapmizer.verify_number` registrada, o model de usuário com `MustVerifyWhatsapp` e a tabela `whatsapp_verifieds` | verify-number | sim |
 | `embed_package` | `@zapmizer/embed` no `package.json`, com tag fixa a partir da v0.1.3 | caixa | sim sem o pacote; aviso sem tag ou com tag anterior à v0.1.3 |
@@ -528,6 +529,7 @@ A lib registra as rotas em grupos, e **cada grupo só existe se for ligado**. To
 - `zapmizer.routes.enabled` (`ZAPMIZER_ROUTES_ENABLED`, padrão `true`) continua sendo a chave mestra: com `false`, nenhuma rota da lib, com os grupos ligados ou não, e o app monta as suas.
 - Os valores aceitam `true`/`false`, `1`/`0`, `on`/`off`.
 - A caixa abre para a conexão que o connect fez: com a caixa ligada e o connect não, o `zapmizer:check` falha.
+- **A rota do webhook e o pedido do connect são duas chaves.** `zapmizer.routes.webhook` registra a rota que recebe entregas (o webhook do time do app, cadastrado à mão, com os `verify_number.*`); `zapmizer.connect.webhook` (`ZAPMIZER_CONNECT_WEBHOOK`) diz se o connect pede um webhook à Zapmizer para a conexão de cada usuário. Sem ela (`null`), o connect segue a rota, como antes da 2.1. `false` com a rota ligada: o app recebe as próprias entregas e as conexões dos usuários feitas a partir daí só enviam. A chave só vale para conexões feitas (ou reautorizadas) depois dela: uma conexão que já tem webhook o mantém, e segue recebendo, até desconectar ou ter o token revogado (`revoke_previous_token` num reconnect, ou a revogação). Um valor que não é booleano (`abc`) é lido como ausente, e o `zapmizer:check` avisa. `true` com a rota desligada: o connect pede webhook e o app monta a rota `zapmizer.webhook` por conta própria. Uma `config/zapmizer.php` publicada antes da 2.1 não tem a chave dentro de `connect` (o merge é raso) e lê `null`: para usá-la, acrescente `'webhook' => env('ZAPMIZER_CONNECT_WEBHOOK'),` ali.
 - **Connect sem webhook** é uma configuração válida: o connect não pede webhook à Zapmizer (a sessão sai sem `webhook_url`), e as conexões enviam, mas não recebem mensagens nem eventos. O `zapmizer:check` avisa. Ligar o webhook depois não dá webhook às conexões já feitas: elas precisam conectar de novo.
 - Uma `config/zapmizer.php` publicada antes dos grupos não tem as chaves deles em `routes`: o provider as completa com as da lib (e as envs), sem mexer nas que o app tem. Não é preciso republicar.
 - Com o grupo webhook ligado, `ZAPMIZER_WEBHOOK_SECRET` (`zapmizer.webhook.secret`) assina a rota `zapmizer.webhook`. Se o app já usa essa chave para outro fim, renomeie a dele antes de ligar.
@@ -535,7 +537,7 @@ A lib registra as rotas em grupos, e **cada grupo só existe se for ligado**. To
 
 ## Webhook (opcional)
 
-Com o grupo webhook ligado (`ZAPMIZER_ROUTES_WEBHOOK=true`, o `--webhook` do instalador), o connect manda `route('zapmizer.webhook')` como `webhook_url`, e a lib recebe e confere as entregas assinadas. Desligado, o connect não pede webhook e as conexões só enviam. Para o app reagir às mensagens, ouça os eventos `MessageReceived` e `MessageSent`. Nada disso é preciso para o connect e a caixa funcionarem. Veja [connect.md](connect.md), seção 6, e [webhook.md](webhook.md).
+Com o grupo webhook ligado (`ZAPMIZER_ROUTES_WEBHOOK=true`, o `--webhook` do instalador), o connect manda `route('zapmizer.webhook')` como `webhook_url`, e a lib recebe e confere as entregas assinadas. Desligado, o connect não pede webhook e as conexões só enviam. Um app que só quer a verificação de número (`verify_number.*`) liga a rota e põe `ZAPMIZER_CONNECT_WEBHOOK=false`: a rota recebe as entregas do webhook do time, e o connect não registra um webhook por conexão de usuário. Para o app reagir às mensagens, ouça os eventos `MessageReceived` e `MessageSent`. Nada disso é preciso para o connect e a caixa funcionarem. Veja [connect.md](connect.md), seção 6, e [webhook.md](webhook.md).
 
 ## Laravel Boost
 

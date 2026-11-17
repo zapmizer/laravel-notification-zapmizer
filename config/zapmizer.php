@@ -55,6 +55,15 @@ return [
         // (Zapmizer would refuse it with a 422). A published
         // config/zapmizer.php must get this key added by hand.
         'webhook_version' => env('ZAPMIZER_WEBHOOK_VERSION', '2026-10-20'),
+        // Whether the connect asks Zapmizer for a webhook on each user's
+        // connection (the session's webhook_url). null follows routes.webhook
+        // (the behaviour before 2.1). false: the connections made from then on
+        // send, but receive nothing, while routes.webhook can stay on to
+        // receive the app's own deliveries (verify_number.*). A value that is
+        // not a boolean word reads as null. true with routes.webhook off: the app
+        // mounts the zapmizer.webhook route itself. A published
+        // config/zapmizer.php must get this key added by hand.
+        'webhook' => env('ZAPMIZER_CONNECT_WEBHOOK'),
     ],
 
     'webhook' => [

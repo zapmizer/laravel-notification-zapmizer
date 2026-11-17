@@ -134,6 +134,7 @@ $result->attemptsLeft; // when invalid (5 attempts by default)
 
 Terminal states (`verified` / `failed`) are also delivered to the **team's registered webhooks** (the same webhooks resource bot notifications use — register your URL there once). The package's public `POST /zapmizer/webhook` route (the webhook group: `ZAPMIZER_ROUTES_WEBHOOK=true`) handles them Cashier-style:
 
+- an app that only wants the verification (it does not connect users' numbers through the package) sets `ZAPMIZER_ROUTES_WEBHOOK=true` and, if the connect is on too, `ZAPMIZER_CONNECT_WEBHOOK=false`: the route receives the team's webhook, and the connect registers no webhook on each user's connection (the route and the connect's ask are separate switches, see [connect.md](connect.md#routes));
 - each event name maps to a `handle{StudlyName}` method (`verify_number.verified` → `handleVerifyNumberVerified`) — extend the controller to customize;
 - the event is correlated to the state record by the **canonical phone number** (tolerant to the Brazilian extra-9);
 - effects are idempotent: redeliveries are no-ops and a late `failed` never downgrades an already-verified number;

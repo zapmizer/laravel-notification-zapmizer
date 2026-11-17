@@ -45,7 +45,7 @@ php artisan vendor:publish --provider="NotificationChannels\Zapmizer\ZapmizerSer
 
 Upgrading from 0.x? Read the upgrade lists at the top of the [CHANGELOG](CHANGELOG.md) first ("Upgrade das versões 0.0, 0.1 e 0.2" and "Upgrade da 0.3 e da 0.4"): this version breaks the 0.x API, and a published `config/zapmizer.php` does not get the new keys by itself.
 
-**Routes are opt-in.** The package registers no route until you switch a group on: `ZAPMIZER_ROUTES_CONNECT`, `ZAPMIZER_ROUTES_WEBHOOK`, `ZAPMIZER_ROUTES_INBOX`, `ZAPMIZER_ROUTES_VERIFY_NUMBER` (all `false` by default; `zapmizer:install` switches on what its flags ask for). An app that only sends needs none. See [the route groups](docs/instalar.md#as-rotas-da-lib).
+**Routes are opt-in.** The package registers no route until you switch a group on: `ZAPMIZER_ROUTES_CONNECT`, `ZAPMIZER_ROUTES_WEBHOOK`, `ZAPMIZER_ROUTES_INBOX`, `ZAPMIZER_ROUTES_VERIFY_NUMBER` (all `false` by default; `zapmizer:install` switches on what its flags ask for). An app that only sends needs none. The webhook route only receives deliveries; whether the connect asks Zapmizer for a webhook on each user's connection is `ZAPMIZER_CONNECT_WEBHOOK` (unset, it follows the route). See [the route groups](docs/instalar.md#as-rotas-da-lib).
 
 ## Setting up your Zapmizer account
 
@@ -61,7 +61,7 @@ That is the single-tenant setup: one token and one number for the whole applicat
 
 **API version.** Set `ZAPMIZER_API_VERSION=2025-06-27` to track what you send (`2026-10-20` works the same from Zapmizer 1.148.17 on; an older Zapmizer only knows `2025-06-27` for sending). The routes that read messages do not follow it: `syncMessages()` and `createWebhook()` always ask for the message contract, `2026-10-20`.
 
-**Receiving messages (single-tenant).** Create the webhook on Zapmizer's "Webhooks" screen in version **`2026-10-20`** (the message contract; `2024-02-27` also works, translated into the same `Message`), point it at `https://your-app/zapmizer/webhook`, put its secret in `ZAPMIZER_WEBHOOK_SECRET` and switch the route on with `ZAPMIZER_ROUTES_WEBHOOK=true`. Received messages fire `MessageReceived`, and what the number sends fires `MessageSent`. See [Receiving messages](docs/connect.md#6-receiving-messages-the-signed-webhook).
+**Receiving messages (single-tenant).** Create the webhook on Zapmizer's "Webhooks" screen in version **`2026-10-20`** (the message contract; `2024-02-27` also works, translated into the same `Message`), point it at `https://your-app/zapmizer/webhook`, put its secret in `ZAPMIZER_WEBHOOK_SECRET` and switch the route on with `ZAPMIZER_ROUTES_WEBHOOK=true` (add `ZAPMIZER_CONNECT_WEBHOOK=false` if the app also connects users' numbers and only wants this route for its own webhook, such as the `verify_number.*` events). Received messages fire `MessageReceived`, and what the number sends fires `MessageSent`. See [Receiving messages](docs/connect.md#6-receiving-messages-the-signed-webhook).
 
 ## Documentation
 

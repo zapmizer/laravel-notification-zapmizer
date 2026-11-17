@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Schema;
 use NotificationChannels\Zapmizer\Install\ConnectableModel;
 use NotificationChannels\Zapmizer\Install\EnvFile;
 use NotificationChannels\Zapmizer\Support\BaseUri;
+use NotificationChannels\Zapmizer\Support\ConnectWebhook;
 use NotificationChannels\Zapmizer\Support\EmbedBrand;
 use NotificationChannels\Zapmizer\Support\RouteGroups;
 use ReflectionClass;
@@ -499,10 +500,15 @@ class InstallCommand extends Command
 
         $host = parse_url((string) config('app.url'), PHP_URL_HOST) ?: 'o host do APP_URL';
         $webhookOn = $webhook || RouteGroups::switchedOn(RouteGroups::WEBHOOK);
-        $steps[] = "Peça à Zapmizer para liberar o host {$host} na conta de parceiro: é ele que vai no redirect_uri" . ($webhookOn ? ', no webhook_url' : '') . ($inbox ? ' e no parent_origin da caixa' : '') . ' (https em produção). Confira se o APP_URL é a URL pública do app.';
+        $connectAsks = ConnectWebhook::configured() ?? $webhookOn;
+        $steps[] = "Peça à Zapmizer para liberar o host {$host} na conta de parceiro: é ele que vai no redirect_uri" . ($connectAsks ? ', no webhook_url' : '') . ($inbox ? ' e no parent_origin da caixa' : '') . ' (https em produção). Confira se o APP_URL é a URL pública do app.';
 
-        if ($connect && !$webhookOn) {
-            $steps[] = 'O webhook da lib ficou desligado: as conexões enviam, mas não recebem mensagens nem eventos. Se o app precisa receber, rode de novo com --webhook (ZAPMIZER_ROUTES_WEBHOOK=true) antes de conectar os números.';
+        if ($connect && !$connectAsks) {
+            $steps[] = match (true) {
+                $webhookOn => 'A rota do webhook está ligada para receber entregas (o webhook do time do app, os verify_number.*), mas o connect não pede webhook para as conexões dos usuários (ZAPMIZER_CONNECT_WEBHOOK=false): elas enviam, mas não recebem mensagens nem eventos.',
+                ConnectWebhook::configured() === false => 'O connect não pede webhook (ZAPMIZER_CONNECT_WEBHOOK=false): as conexões enviam, mas não recebem mensagens nem eventos.',
+                default => 'O webhook da lib ficou desligado: as conexões enviam, mas não recebem mensagens nem eventos. Se o app precisa receber, rode de novo com --webhook (ZAPMIZER_ROUTES_WEBHOOK=true) antes de conectar os números.',
+            };
         }
 
         if ($model !== null && $model !== $this->userModel() && $this->usesDefaultResolver()) {

@@ -34,6 +34,7 @@ use NotificationChannels\Zapmizer\Http\Controllers\Concerns\HandlesPopupState;
 use NotificationChannels\Zapmizer\Models\ZapmizerConnection;
 use NotificationChannels\Zapmizer\Support\ColumnExists;
 use NotificationChannels\Zapmizer\Support\ConnectionWebhook;
+use NotificationChannels\Zapmizer\Support\ConnectWebhook;
 use NotificationChannels\Zapmizer\Support\RouteGroups;
 use Throwable;
 
@@ -88,6 +89,13 @@ class ConnectController extends Controller
      * The webhook key of the pending state, read on the callback.
      */
     protected ?string $pendingWebhookKey = null;
+
+    /**
+     * Whether the session of the pending state asked for a webhook, read on
+     * the callback: the start wrote `webhook => false` when it did not, and
+     * a state without the key (opened before 2.1) counts as asked.
+     */
+    protected bool $pendingAskedForWebhook = true;
 
     public function __construct(
         protected PartnerClient $partnerClient,
@@ -162,7 +170,7 @@ class ConnectController extends Controller
             $connectable = $this->connectable($request);
             $webhook = $this->asksForWebhook();
             $key = $webhook ? $this->webhookKeyFor($connectable) : null;
-            $pending = $this->issueState($request, self::SESSION_KEY, $connectable, $key === null ? [] : ['webhook_key' => $key]);
+            $pending = $this->issueState($request, self::SESSION_KEY, $connectable, ($key === null ? [] : ['webhook_key' => $key]) + ($webhook ? [] : ['webhook' => false]));
 
             $session = $this->partnerClient->createSession(
                 redirectUri: route('zapmizer.connect.callback'),
@@ -215,6 +223,7 @@ class ConnectController extends Controller
         }
 
         $this->pendingWebhookKey = is_string($pending['webhook_key'] ?? null) ? $pending['webhook_key'] : null;
+        $this->pendingAskedForWebhook = ($pending['webhook'] ?? true) !== false;
 
         if (($error = $this->errorParam($request)) !== null) {
             return $this->result($this->popupStatus($error));
@@ -303,6 +312,11 @@ class ConnectController extends Controller
      * `zapmizer.connect.revoke_previous_token` on, the token the row held
      * before is revoked once the new one is saved. Then NumberConnected
      * fires; a listener that throws is reported and the status stays.
+     *
+     * When the session asked for no webhook (`zapmizer.connect.webhook` off,
+     * decided at the start, not now), the token counts as having none: the
+     * webhook id and secrets are stored `null` and the status is `ok`, even
+     * if Zapmizer answered with a webhook id.
      */
     protected function storeToken(Model&Connectable $connectable, ConnectToken $token): View
     {
@@ -328,13 +342,16 @@ class ConnectController extends Controller
             $connection->forgetPairing();
         }
 
-        $reusedWebhook = $token->needsWebhookSecret()
+        $webhookAsked = $this->pendingAskedForWebhook;
+
+        $reusedWebhook = $webhookAsked
+            && $token->needsWebhookSecret()
             && $connection->webhook_id === $token->webhookId
             && filled($this->readEncrypted($connection, 'webhook_secret', 'zapmizer: unreadable webhook secret.'));
 
         $this->ensureWritable($connection, 'api_token');
 
-        if (!$reusedWebhook && $token->webhookSecret !== null) {
+        if (!$reusedWebhook && $webhookAsked && $token->webhookSecret !== null) {
             $this->ensureWritable($connection, 'webhook_secret');
         }
 
@@ -345,13 +362,13 @@ class ConnectController extends Controller
             'phone_number' => $token->phoneNumber,
             'bot_instance_id' => $token->botInstanceId,
             'connected_at' => now(),
-            'webhook_id' => $token->webhookId,
+            'webhook_id' => $webhookAsked ? $token->webhookId : null,
             'is_active' => true,
         ] + ($this->pendingWebhookKey === null ? [] : ['webhook_key' => $this->pendingWebhookKey]));
 
         if (!$reusedWebhook) {
             $connection->forceFill([
-                'webhook_secret' => $token->webhookSecret,
+                'webhook_secret' => $webhookAsked ? $token->webhookSecret : null,
                 'webhook_previous_secret' => null,
             ]);
         }
@@ -370,7 +387,7 @@ class ConnectController extends Controller
             return $this->result('team_already_connected');
         }
 
-        $status = $token->needsWebhookSecret() && !$reusedWebhook ? 'webhook_failed' : 'ok';
+        $status = $webhookAsked && $token->needsWebhookSecret() && !$reusedWebhook ? 'webhook_failed' : 'ok';
 
         if ($status === 'webhook_failed') {
             Log::warning('zapmizer: connected without a webhook secret.', [
@@ -379,7 +396,7 @@ class ConnectController extends Controller
             ]);
         }
 
-        if ($token->hasLegacyWebhookVersion()) {
+        if ($webhookAsked && $token->hasLegacyWebhookVersion()) {
             // A webhook_url the team already had keeps its version: the
             // session's `webhook_version` only applies to a new webhook.
             Log::info('zapmizer: the connection\'s webhook delivers in version ' . InstanceClient::LEGACY_WEBHOOK_VERSION . ', which Zapmizer deprecated. Messages still reach MessageReceived (translated); to move it to ' . InstanceClient::MESSAGE_CONTRACT_VERSION . ', connect with another webhook_url, or revoke and connect again.', [
@@ -705,14 +722,16 @@ class ConnectController extends Controller
     }
 
     /**
-     * Whether the session asks Zapmizer for a webhook. Not when the package
-     * routes are on and the webhook group off (`zapmizer.routes.webhook`):
-     * a connect-only app, whose connections send and receive nothing. With
-     * the package routes off, the app mounts the webhook route itself.
+     * Whether the session asks Zapmizer for a webhook: `zapmizer.connect.webhook`
+     * when set (false: the connections send and receive nothing, even with
+     * the webhook route on to receive the app's own deliveries). Unset, not
+     * when the package routes are on and the webhook group off
+     * (`zapmizer.routes.webhook`): a connect-only app. With the package
+     * routes off, the app mounts the webhook route itself. See ConnectWebhook.
      */
     protected function asksForWebhook(): bool
     {
-        return !RouteGroups::routesEnabled() || RouteGroups::switchedOn(RouteGroups::WEBHOOK);
+        return ConnectWebhook::asked();
     }
 
     /**

@@ -4,9 +4,12 @@ namespace NotificationChannels\Zapmizer\Test\Unit;
 
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
+use Illuminate\Routing\RouteCollection;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
+use NotificationChannels\Zapmizer\Http\Controllers\WebhookController;
 use NotificationChannels\Zapmizer\Test\Concerns\TogglesConnectionWebhook;
 use NotificationChannels\Zapmizer\Test\Concerns\UsesTemporaryApp;
 use NotificationChannels\Zapmizer\Test\Fixtures\CreatesConnectionTables;
@@ -809,6 +812,115 @@ class CheckCommandTest extends TestCase
         $this->assertSame('warn', $result['checks']['webhook_routes']['status']);
         $this->assertStringContainsString('não recebem mensagens', $result['checks']['webhook_routes']['message']);
         $this->assertStringContainsString('ZAPMIZER_ROUTES_WEBHOOK=true', $result['checks']['webhook_routes']['hint']);
+    }
+
+    public function testTheConnectWithoutTheWebhookSuggestsTheExplicitSwitch()
+    {
+        $this->partnerAnswers(404);
+        config()->set('zapmizer.routes.webhook', false);
+        $this->reloadPackageRoutes();
+
+        $result = $this->checkJson();
+
+        $this->assertSame('warn', $result['checks']['webhook_routes']['status']);
+        $this->assertStringContainsString('Se o app só envia pelas conexões, ZAPMIZER_CONNECT_WEBHOOK=false deixa isso explícito.', $result['checks']['webhook_routes']['hint']);
+    }
+
+    public function testTheRouteOnForDeliveriesWithTheConnectNotAskingIsOk()
+    {
+        $this->partnerAnswers(404);
+        config()->set('zapmizer.connect.webhook', false);
+
+        $result = $this->checkJson();
+
+        $this->assertSame(0, $result['exit']);
+        $this->assertSame('ok', $result['checks']['webhook_routes']['status']);
+        $this->assertSame('rota do webhook registrada para receber entregas (o webhook do time, verify_number.*); o connect não pede webhook para as conexões (ZAPMIZER_CONNECT_WEBHOOK=false): elas enviam, mas não recebem', $result['checks']['webhook_routes']['message']);
+    }
+
+    public function testTheRouteOnWithTheConnectNotAskingStillFailsWhenTheRoutesAreMissing()
+    {
+        $this->partnerAnswers(404);
+        config()->set('zapmizer.connect.webhook', false);
+        $this->app['router']->setRoutes(new RouteCollection());
+        $this->app['router']->getRoutes()->refreshNameLookups();
+
+        $result = $this->checkJson();
+
+        $this->assertSame('fail', $result['checks']['webhook_routes']['status']);
+        $this->assertStringContainsString('rotas ausentes: zapmizer.webhook', $result['checks']['webhook_routes']['message']);
+    }
+
+    public function testTheWebhookAloneIgnoresTheConnectSwitch()
+    {
+        $this->sendOnly();
+        config()->set('zapmizer.routes.webhook', true);
+        config()->set('zapmizer.connect.webhook', false);
+        $this->reloadPackageRoutes();
+        $this->instancesAnswer(200);
+
+        $result = $this->checkJson();
+
+        $this->assertSame('ok', $result['checks']['webhook_routes']['status']);
+        $this->assertSame('rota do webhook registrada', $result['checks']['webhook_routes']['message']);
+    }
+
+    public function testBothTheWebhookAndTheConnectOffWithTheSwitchFalseIsOff()
+    {
+        $this->partnerAnswers(404);
+        config()->set('zapmizer.routes.webhook', false);
+        config()->set('zapmizer.connect.webhook', false);
+        $this->reloadPackageRoutes();
+
+        $result = $this->checkJson();
+
+        $this->assertSame(0, $result['exit']);
+        $this->assertSame('off', $result['checks']['webhook_routes']['status']);
+        $this->assertSame('o connect não pede webhook (ZAPMIZER_CONNECT_WEBHOOK=false) e o webhook da lib está desligado (ZAPMIZER_ROUTES_WEBHOOK)', $result['checks']['webhook_routes']['message']);
+        $this->assertStringContainsString('ZAPMIZER_ROUTES_WEBHOOK=true', $result['checks']['webhook_routes']['hint']);
+    }
+
+    public function testTheConnectAskingForTheAppsOwnWebhookRouteIsOk()
+    {
+        $this->partnerAnswers(404);
+        config()->set('zapmizer.routes.webhook', false);
+        config()->set('zapmizer.connect.webhook', true);
+        $this->reloadPackageRoutes();
+        Route::post('zapmizer/webhook', [WebhookController::class, 'handleWebhook'])->name('zapmizer.webhook');
+        Route::getRoutes()->refreshNameLookups();
+
+        $result = $this->checkJson();
+
+        $this->assertSame(0, $result['exit']);
+        $this->assertSame('ok', $result['checks']['webhook_routes']['status']);
+        $this->assertSame('o connect pede webhook (ZAPMIZER_CONNECT_WEBHOOK=true) na rota zapmizer.webhook montada pelo app', $result['checks']['webhook_routes']['message']);
+    }
+
+    public function testTheConnectAskingForAWebhookRouteThatDoesNotExistFails()
+    {
+        $this->partnerAnswers(404);
+        config()->set('zapmizer.routes.webhook', false);
+        config()->set('zapmizer.connect.webhook', true);
+        $this->reloadPackageRoutes();
+
+        $result = $this->checkJson();
+
+        $this->assertSame(1, $result['exit']);
+        $this->assertSame('fail', $result['checks']['webhook_routes']['status']);
+        $this->assertSame('o connect pede webhook (ZAPMIZER_CONNECT_WEBHOOK=true), mas a rota do webhook não existe: zapmizer.webhook', $result['checks']['webhook_routes']['message']);
+        $this->assertSame('Ligue ZAPMIZER_ROUTES_WEBHOOK=true, monte a rota zapmizer.webhook no app ou tire ZAPMIZER_CONNECT_WEBHOOK.', $result['checks']['webhook_routes']['hint']);
+    }
+
+    public function testTheConnectNeitherAskingNorReceivingKeepsTheOffOfTheConnectOff()
+    {
+        $this->sendOnly();
+        config()->set('zapmizer.connect.webhook', true);
+        $this->instancesAnswer(200);
+
+        $result = $this->checkJson();
+
+        $this->assertSame('off', $result['checks']['webhook_routes']['status']);
+        $this->assertSame('webhook da lib desligado (ZAPMIZER_ROUTES_WEBHOOK)', $result['checks']['webhook_routes']['message']);
     }
 
     public function testTheInboxWithoutTheConnectFails()

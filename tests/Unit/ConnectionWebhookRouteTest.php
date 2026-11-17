@@ -5,9 +5,11 @@ namespace NotificationChannels\Zapmizer\Test\Unit;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
 use LogicException;
+use NotificationChannels\Zapmizer\Http\Controllers\ConnectController;
 use NotificationChannels\Zapmizer\Http\Controllers\WebhookController;
 use NotificationChannels\Zapmizer\Http\Middleware\VerifyConnectionWebhookSignature;
 use NotificationChannels\Zapmizer\Support\ConnectionWebhook;
@@ -17,6 +19,7 @@ use NotificationChannels\Zapmizer\Test\Concerns\FakesZapmizerHttp;
 use NotificationChannels\Zapmizer\Test\Concerns\TogglesConnectionWebhook;
 use NotificationChannels\Zapmizer\Test\Fixtures\CreatesConnectionTables;
 use NotificationChannels\Zapmizer\Test\Fixtures\ResolvesFirstTeam;
+use NotificationChannels\Zapmizer\Test\Fixtures\Team;
 use NotificationChannels\Zapmizer\Test\Fixtures\SignsWebhookDeliveries;
 use NotificationChannels\Zapmizer\Test\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -287,5 +290,132 @@ class ConnectionWebhookRouteTest extends TestCase
 
         $this->assertSame('http://localhost/hooks?zapmizerWebhookKey=' . $key, $this->sentBody(0)['webhook_url']);
         $this->deliverSigned($this->messageEnvelope(wid: '5581911110000@c.us'), 'whsec_1', path: '/hooks?zapmizerWebhookKey=' . $key)->assertUnauthorized();
+    }
+
+    /**
+     * @return array<string, array{0: bool}>
+     */
+    public static function perConnectionOnOff(): array
+    {
+        return ['single webhook' => [false], 'per connection' => [true]];
+    }
+
+    /** @dataProvider perConnectionOnOff */
+    #[DataProvider('perConnectionOnOff')]
+    public function testT1ConnectWebhookNullKeepsThePre21Behaviour(bool $perConnection)
+    {
+        $this->addWebhookKeyColumn();
+        config()->set('zapmizer.connect.webhook', null);
+        config()->set('zapmizer.webhook.per_connection', $perConnection);
+        $this->reloadPackageRoutes();
+        $this->actingAsUser();
+        $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer());
+
+        $this->connect()->assertSee('status: "ok"', false);
+
+        $this->assertSame('2026-10-20', $this->sentBody(0)['webhook_version']);
+
+        if ($perConnection) {
+            $key = DB::table('zapmizer_connections')->value('webhook_key');
+            $this->assertSame('http://localhost/zapmizer/webhook/' . $key, $this->sentBody(0)['webhook_url']);
+        } else {
+            $this->assertSame('http://localhost/zapmizer/webhook', $this->sentBody(0)['webhook_url']);
+        }
+    }
+
+    public function testT1ConnectWebhookNullWithTheRouteOffAsksForNothing()
+    {
+        config()->set('zapmizer.connect.webhook', null);
+        config()->set('zapmizer.routes.webhook', false);
+        $this->reloadPackageRoutes();
+        $this->actingAsUser();
+        $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer(['webhook_id' => null, 'webhook_secret' => null]));
+
+        $this->connect()->assertSee('status: "ok"', false);
+
+        $this->assertArrayNotHasKey('webhook_url', $this->sentBody(0));
+    }
+
+    /**
+     * @return array<string, array{0: mixed, 1: bool}>
+     */
+    public static function connectWebhookOff(): array
+    {
+        return [
+            'false word' => ['false', false],
+            'zero' => ['0', false],
+            'false' => [false, false],
+            'false, per connection' => ['false', true],
+        ];
+    }
+
+    /** @dataProvider connectWebhookOff */
+    #[DataProvider('connectWebhookOff')]
+    public function testT2ConnectWebhookFalseKeepsTheRouteButAsksForNothing(mixed $value, bool $perConnection)
+    {
+        $this->addWebhookKeyColumn();
+        config()->set('zapmizer.connect.webhook', $value);
+        config()->set('zapmizer.webhook.per_connection', $perConnection);
+        $this->reloadPackageRoutes();
+        $this->actingAsUser();
+        $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer(['webhook_id' => null, 'webhook_secret' => null]));
+
+        $this->connect()->assertSee('status: "ok"', false);
+
+        $this->assertArrayNotHasKey('webhook_url', $this->sentBody(0));
+        $this->assertArrayNotHasKey('webhook_version', $this->sentBody(0));
+        $this->assertTrue($this->team()->fresh()->hasActiveZapmizer());
+        $this->assertNull(DB::table('zapmizer_connections')->value('webhook_key'));
+        $this->assertTrue(Route::has('zapmizer.webhook'));
+        $this->deliverUnsigned(['name' => 'verify_number.verified', 'data' => ['number' => '5599888887777']])->assertOk();
+    }
+
+    public function testT3ADefensiveTokenWebhookIsDroppedWhenTheConnectAskedForNone()
+    {
+        Log::spy();
+        config()->set('zapmizer.connect.webhook', false);
+        $this->actingAsUser();
+        $this->fakeHttp($this->sessionCreated(), $this->tokenAnswer(['webhook_id' => 42, 'webhook_secret' => null]));
+
+        $this->connect()->assertSee('status: "ok"', false);
+
+        $connection = $this->team()->zapmizerConnection;
+        $this->assertNull($connection->webhook_id);
+        $this->assertNull($connection->webhook_secret);
+        $this->assertNull($connection->webhook_previous_secret);
+        Log::shouldNotHaveReceived('warning', ['zapmizer: connected without a webhook secret.', \Mockery::any()]);
+    }
+
+    public function testT4ConnectWebhookTrueWithTheRouteOffAsksForTheAppsOwnRoute()
+    {
+        config()->set('zapmizer.connect.webhook', true);
+        config()->set('zapmizer.routes.webhook', false);
+        $this->reloadPackageRoutes();
+        $this->assertFalse(Route::has('zapmizer.webhook'));
+
+        Route::post('zapmizer/webhook', [WebhookController::class, 'handleWebhook'])->name('zapmizer.webhook');
+        Route::getRoutes()->refreshNameLookups();
+        $this->actingAsUser();
+        $this->fakeHttp($this->sessionCreated());
+
+        $this->startConnect()->assertOk();
+
+        $this->assertSame('http://localhost/zapmizer/webhook', $this->sentBody(0)['webhook_url']);
+    }
+
+    public function testT5APendingSessionFromBeforeTheDeployStillFailsWithoutASecret()
+    {
+        Log::spy();
+        config()->set('zapmizer.connect.webhook', false);
+        $this->actingAsUser();
+        $this->fakeHttp($this->tokenAnswer(['webhook_id' => 42, 'webhook_secret' => null]));
+
+        // No `webhook` key in the state: a session opened before 2.1.
+        $this->withSession([ConnectController::SESSION_KEY => [
+            'state' => 's', 'connectable' => Team::class . ':' . $this->team()->id, 'expires_at' => now()->addMinutes(5)->toIso8601String(),
+        ]])->get(route('zapmizer.connect.callback', ['code' => 'c', 'state' => 's']))
+            ->assertSee('status: "webhook_failed"', false);
+
+        $this->assertSame(42, $this->team()->zapmizerConnection->webhook_id);
     }
 }

@@ -83,7 +83,8 @@ import InboxScreen from '@/zapmizer/InboxScreen.vue';
 ```
 
    Without a connection it shows the connect button; once connected, the inbox opens. Do not pass `person`: the screen gets it from the server (`person` of `GET zapmizer.connect.show`, built from the logged-in user's `getAuthIdentifier()` and the model the resolver returns), so it never depends on how the app shares its user (`id`, `user_id`, ...).
-3. Logout (Inertia 1+/2; with Inertia 0.x use `import { Inertia } from '@inertiajs/inertia'` and `Inertia.on('before', ...)`): call `listenToZapmizerLogout()` once at app boot and `endZapmizerEmbeds()` before the logout request (both in `resources/js/zapmizer/zapmizerEmbed.ts`). With Inertia:
+3. The components are unstyled: no design-system class and no CSS, only `zapmizer-*` hook classes (listed in docs/instalar.md, step 4). Adapt them to the app's look with its own design system or UI kit (Vuetify, the app's Tailwind components, ...), editing the files in `resources/js/zapmizer/` freely; keep the props, emits and `role`/`aria-*`. `zapmizer:install --force` overwrites them.
+4. Logout (Inertia 1+/2; with Inertia 0.x use `import { Inertia } from '@inertiajs/inertia'` and `Inertia.on('before', ...)`): call `listenToZapmizerLogout()` once at app boot and `endZapmizerEmbeds()` before the logout request (both in `resources/js/zapmizer/zapmizerEmbed.ts`). With Inertia:
 
 ```ts
 import { router } from '@inertiajs/vue3';
@@ -97,7 +98,7 @@ router.on('before', (event) => {
 });
 ```
 
-4. Build the front (`npm run build` or the app's equivalent) to make sure it compiles. The build bakes in `VITE_ZAPMIZER_BRAND` from `.env`.
+5. Build the front (`npm run build` or the app's equivalent) to make sure it compiles. The build bakes in `VITE_ZAPMIZER_BRAND` from `.env`.
 
 ### The embed brand
 

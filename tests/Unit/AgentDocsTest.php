@@ -81,4 +81,28 @@ class AgentDocsTest extends TestCase
             }
         }
     }
+
+    public function testTheDocsSayTheAppStylesTheComponents()
+    {
+        $files = [
+            'README.md' => '/components .*unstyled/i',
+            'llms.txt' => '/componentes .*sem estilo/i',
+            'docs/instalar.md' => '/componentes .*sem estilo/i',
+            'resources/boost/guidelines/core.md' => '/components .*unstyled/i',
+            'resources/boost/skills/zapmizer-whatsapp/SKILL.md' => '/components .*unstyled/i',
+        ];
+
+        foreach ($files as $file => $warning) {
+            $doc = file_get_contents(self::ROOT . '/' . $file);
+
+            $this->assertMatchesRegularExpression($warning, $doc, $file);
+            $this->assertStringNotContainsString('gp-', $doc, $file);
+        }
+
+        $guide = file_get_contents(self::ROOT . '/docs/instalar.md');
+
+        $this->assertStringContainsString('zapmizer:install --force', $guide, 'the guide says --force overwrites the edited components');
+        $this->assertStringContainsString('zapmizer-connect__button', $guide, 'the guide lists the hook classes');
+        $this->assertStringNotContainsString('gp-', file_get_contents(self::ROOT . '/docs/connect.md'));
+    }
 }

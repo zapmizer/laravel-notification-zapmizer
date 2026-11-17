@@ -7,30 +7,30 @@
 const PREFIX = '/zapmizer';
 
 const PATHS: Record<string, string> = {
-  'zapmizer.connect.show': 'connect',
-  'zapmizer.connect.start': 'connect/start',
-  'zapmizer.connect.destroy': 'connect',
-  'zapmizer.connect.reconnect': 'connect/reconnect',
-  'zapmizer.inbox.session': 'inbox/session',
-  'zapmizer.inbox.keepalive': 'inbox/keepalive',
+    'zapmizer.connect.show': 'connect',
+    'zapmizer.connect.start': 'connect/start',
+    'zapmizer.connect.destroy': 'connect',
+    'zapmizer.connect.reconnect': 'connect/reconnect',
+    'zapmizer.inbox.session': 'inbox/session',
+    'zapmizer.inbox.keepalive': 'inbox/keepalive',
 };
 
 type ZiggyRoute = (name: string, params?: Record<string, unknown>) => string;
 
 export function zapmizerRoute(name: string, params: Record<string, string | number> = {}): string {
-  const ziggy = (globalThis as { route?: ZiggyRoute }).route;
+    const ziggy = (globalThis as { route?: ZiggyRoute }).route;
 
-  if (typeof ziggy === 'function') {
-    return ziggy(name, params);
-  }
+    if (typeof ziggy === 'function') {
+        return ziggy(name, params);
+    }
 
-  const path = PATHS[name];
+    const path = PATHS[name];
 
-  if (path === undefined) {
-    throw new Error(`zapmizerRoute: rota desconhecida "${name}".`);
-  }
+    if (path === undefined) {
+        throw new Error(`zapmizerRoute: rota desconhecida "${name}".`);
+    }
 
-  const query = new URLSearchParams(Object.entries(params).map(([key, value]) => [key, String(value)])).toString();
+    const query = new URLSearchParams(Object.entries(params).map(([key, value]) => [key, String(value)])).toString();
 
-  return `${PREFIX}/${path}${query === '' ? '' : `?${query}`}`;
+    return `${PREFIX}/${path}${query === '' ? '' : `?${query}`}`;
 }

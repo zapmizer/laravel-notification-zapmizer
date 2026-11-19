@@ -209,6 +209,7 @@ class VerifyNumberSignatureTest extends TestCase
         ];
     }
 
+    /** @dataProvider nearMissNames */
     #[DataProvider('nearMissNames')]
     public function testANearMissNameSignedWithAnotherSecretIsRefused(string $name)
     {
@@ -221,6 +222,7 @@ class VerifyNumberSignatureTest extends TestCase
         $this->assertFalse($user->fresh()->hasVerifiedWhatsapp());
     }
 
+    /** @dataProvider nearMissNames */
     #[DataProvider('nearMissNames')]
     public function testANearMissNameSignedWithTheVerifySecretIsInTheVerifyScope(string $name)
     {

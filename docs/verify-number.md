@@ -150,7 +150,25 @@ Event::listen(function (WhatsappVerified $event) {
 });
 ```
 
-> **Security note:** `verify_number.*` events are delivered **unsigned** — Zapmizer sends them outside the bot, without the `X-Zapmizer-Signature` every bot event carries (see [connect.md](connect.md#6-receiving-messages-the-signed-webhook)). The package accepts them without a signature — they are the *only* events it does that for — so anyone who knows the URL can POST a `verify_number.verified` for a number. The handlers only ever upgrade state idempotently, but do harden the endpoint: a throttle/IP allowlist via `zapmizer.routes.webhook_middleware`, or disable the package routes and mount the controller behind your own protection (e.g. an unguessable URL prefix).
+### Signing the verify_number deliveries
+
+The verify_number webhook has its own secret, separate from `ZAPMIZER_WEBHOOK_SECRET` and from the connections' secrets. Until it exists, `verify_number.*` events arrive **unsigned** and the package accepts them that way (the only events it does): anyone who knows the webhook URL can POST a `verify_number.verified` for a number. Once it exists, Zapmizer signs each delivery like the bot events (`X-Zapmizer-Timestamp` and `X-Zapmizer-Signature: v1=<HMAC-SHA256 of "timestamp.body">`, two comma-separated signatures while a secret is being rotated) and the package only accepts signed ones.
+
+1. On Zapmizer, open the verify_number webhook under Desenvolvedores → Webhooks and click "Gerar segredo". The value is shown once.
+2. Put it in the app's `.env`: `ZAPMIZER_VERIFY_NUMBER_WEBHOOK_SECRET=...` (`zapmizer.verify_number.webhook_secret`).
+3. Deploy. Between step 1 and the deploy, deliveries arrive signed while the app does not have the secret yet: they get 401 (the log says `zapmizer.verify_number.webhook_secret ... is not configured`).
+4. Under Desenvolvedores → Requisições, resend the deliveries that got 401 in that window. A resend carries the same `id`, and Zapmizer does not retry a 4xx on its own.
+
+With the secret set:
+
+- only the verify_number secret signs a `verify_number.*`: neither `ZAPMIZER_WEBHOOK_SECRET` nor a connection's secret is accepted for it, and the verify_number secret signs no other event. This holds for any name that would reach a `handleVerifyNumber*` method (`Verify_Number.verified`, `verify-number.verified`...), not only the exact prefix;
+- an unsigned `verify_number.*` gets 401 (logged);
+- a signature that does not match, or a timestamp outside the tolerance (`zapmizer.webhook.tolerance`), gets 401. If you rotated the secret on Zapmizer and did not deploy the `.env`, the refusal's log says the signature does not match `zapmizer.verify_number.webhook_secret`;
+- with `zapmizer.webhook.deduplicate` on ([webhook.md](webhook.md)), the signed delivery is deduplicated by `id`, like the others.
+
+The per-connection webhook URL (`{prefix}/webhook/{key}`) refuses `verify_number.*` with 401, secret or not: Zapmizer only delivers them to the team's webhook.
+
+Without the secret nothing changes: unsigned deliveries keep being accepted, and `php artisan zapmizer:check` warns about it. A `config/zapmizer.php` published before 2.2 needs no edit: the config merge fills in the missing `verify_number` section, which reads the `.env`. Until you set it, harden the route another way: a throttle or an IP allowlist in `zapmizer.routes.webhook_middleware`, or turn the package routes off and mount the controller behind your own protection (a hard-to-guess URL prefix, for instance). The handlers only move the state forward, idempotently.
 
 Payload shapes, for reference:
 

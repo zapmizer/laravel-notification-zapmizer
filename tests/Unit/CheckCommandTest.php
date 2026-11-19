@@ -753,6 +753,31 @@ class CheckCommandTest extends TestCase
         $this->assertStringContainsString('MustVerifyWhatsapp', $result['checks']['verify_number_routes']['message']);
     }
 
+    public function testTheVerifyNumberWarnsWhenItAcceptsDeliveriesUnsigned()
+    {
+        $this->sendOnly();
+        config()->set('zapmizer.routes.verify_number', true);
+        config()->set('zapmizer.routes.webhook', true);
+        config()->set('zapmizer.verify_number.webhook_secret', null);
+        $this->reloadPackageRoutes();
+        $this->instancesAnswer(200);
+
+        $result = $this->checkJson();
+
+        $this->assertSame('warn', $result['checks']['verify_number_routes']['status']);
+        $this->assertStringContainsString('sem assinatura', $result['checks']['verify_number_routes']['message']);
+        $this->assertStringContainsString('ZAPMIZER_VERIFY_NUMBER_WEBHOOK_SECRET', $result['checks']['verify_number_routes']['hint']);
+        $this->assertStringContainsString('Gerar segredo', $result['checks']['verify_number_routes']['hint']);
+        $this->assertSame(0, $result['exit']);
+
+        config()->set('zapmizer.verify_number.webhook_secret', 'verify-secret');
+
+        $result = $this->checkJson();
+
+        $this->assertSame('ok', $result['checks']['verify_number_routes']['status']);
+        $this->assertStringContainsString('assinad', $result['checks']['verify_number_routes']['message']);
+    }
+
     public function testTheVerifyNumberNeedsItsTable()
     {
         $this->sendOnly();

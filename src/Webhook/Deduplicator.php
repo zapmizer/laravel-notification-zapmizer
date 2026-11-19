@@ -4,7 +4,7 @@ namespace NotificationChannels\Zapmizer\Webhook;
 
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Str;
+use NotificationChannels\Zapmizer\Http\Middleware\VerifyWebhookSignature;
 use Throwable;
 
 /**
@@ -22,7 +22,10 @@ use Throwable;
  *
  * A delivery without an `id` is always processed, and so are the unsigned
  * `verify_number.*` events: anyone can POST one, and its id must not burn
- * the id of a real event.
+ * the id of a real event. A `verify_number.*` that arrived SIGNED (with
+ * `zapmizer.verify_number.webhook_secret`, see VerifyWebhookSignature)
+ * cannot be forged, so it is deduplicated like any other; the middleware
+ * marks it on the request (VERIFY_NUMBER_SIGNED_ATTRIBUTE).
  *
  * Best effort: with the cache down (or a store that is not configured) the
  * delivery is processed and a warning is logged — answering 5xx would only
@@ -53,7 +56,7 @@ class Deduplicator
      */
     public function claim(array $payload): bool
     {
-        $id = $this->idOf($payload);
+        $id = $this->deliveryId($payload);
 
         if ($id === null) {
             return true;
@@ -76,7 +79,7 @@ class Deduplicator
      */
     public function confirm(array $payload): void
     {
-        $id = $this->idOf($payload);
+        $id = $this->deliveryId($payload);
 
         if ($id === null || $this->unavailable) {
             return;
@@ -96,7 +99,7 @@ class Deduplicator
      */
     public function release(array $payload): void
     {
-        $id = $this->idOf($payload);
+        $id = $this->deliveryId($payload);
 
         if ($id === null || $this->unavailable) {
             return;
@@ -110,17 +113,51 @@ class Deduplicator
     }
 
     /**
+     * The id to deduplicate by: `idOf()`, except for a verify_number.* that
+     * did not arrive signed — anyone can POST one.
+     *
+     * @param array<string, mixed> $payload
+     */
+    protected function deliveryId(array $payload): ?string
+    {
+        $id = $this->idOf($payload);
+
+        if ($id !== null && $this->isVerifyNumber($payload) && !$this->verifyNumberSigned()) {
+            return null;
+        }
+
+        return $id;
+    }
+
+    /**
+     * Whether the current request is a verify_number.* the middleware
+     * verified against `zapmizer.verify_number.webhook_secret`. Read from the
+     * request (not passed by the caller) so claim/confirm/release keep their
+     * signatures for subclasses bound in the container.
+     */
+    protected function verifyNumberSigned(): bool
+    {
+        if (!app()->bound('request')) {
+            return false;
+        }
+
+        return app('request')->attributes->get(VerifyWebhookSignature::VERIFY_NUMBER_SIGNED_ATTRIBUTE) === true;
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     */
+    protected function isVerifyNumber(array $payload): bool
+    {
+        return VerifyWebhookSignature::isVerifyNumberName($payload['name'] ?? null);
+    }
+
+    /**
      * @param array<string, mixed> $payload
      */
     protected function idOf(array $payload): ?string
     {
         if (!config('zapmizer.webhook.deduplicate', false)) {
-            return null;
-        }
-
-        $name = $payload['name'] ?? null;
-
-        if (is_string($name) && Str::startsWith($name, 'verify_number.')) {
             return null;
         }
 

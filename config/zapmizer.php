@@ -73,9 +73,9 @@ return [
         // registered by hand for the single-tenant setup (the "Webhooks"
         // screen shows it once, on creation). Connections made through the
         // connect flow store their own secret; both are tested on delivery.
-        // Only `verify_number.*` events arrive unsigned — Zapmizer sends
-        // those outside the bot, without a signature — and only those are
-        // accepted without one.
+        // `verify_number.*` events have their own secret (`verify_number`
+        // below): this one never signs them. Until that one is set, they are
+        // the only events accepted without a signature.
         'secret' => env('ZAPMIZER_WEBHOOK_SECRET'),
         // Accepted drift between X-Zapmizer-Timestamp and now, in seconds.
         // Closes replay of an old delivery without breaking legitimate retries.
@@ -101,6 +101,18 @@ return [
         'deduplicate' => env('ZAPMIZER_WEBHOOK_DEDUPLICATE', false),
         'deduplicate_ttl' => (int) env('ZAPMIZER_WEBHOOK_DEDUPLICATE_TTL', 21600),
         'deduplicate_store' => env('ZAPMIZER_WEBHOOK_DEDUPLICATE_STORE'),
+    ],
+
+    // The verify_number webhook (`verify_number.*` events) has its own secret,
+    // separate from `webhook.secret` and from each connection's. Generate it
+    // in Zapmizer (Desenvolvedores -> Webhooks, "Gerar segredo"). Set, those
+    // deliveries must be signed with it (and only it signs them: a rotation
+    // sends both signatures, so one value is enough), and an unsigned
+    // `verify_number.*` gets 401. Empty (the default): they are accepted
+    // unsigned, as before, and `zapmizer:check` warns about it. A published
+    // config/zapmizer.php without this section still gets it (top-level merge).
+    'verify_number' => [
+        'webhook_secret' => env('ZAPMIZER_VERIFY_NUMBER_WEBHOOK_SECRET'),
     ],
 
     'models' => [
@@ -131,8 +143,9 @@ return [
         'middleware' => ['web', 'auth'],
         // The webhook route is public and stateless. The package verifies the
         // delivery signature itself; add e.g. a throttle here. If you rely on
-        // `verify_number.*` (unsigned by construction), an IP allowlist here
-        // is the only thing that stops a forged confirmation.
+        // `verify_number.*` without `verify_number.webhook_secret` set
+        // (unsigned), an IP allowlist here is the only thing that stops a
+        // forged confirmation: set the secret.
         'webhook_middleware' => [],
     ],
 

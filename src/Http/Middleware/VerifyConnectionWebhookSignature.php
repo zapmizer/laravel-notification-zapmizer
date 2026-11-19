@@ -47,6 +47,14 @@ class VerifyConnectionWebhookSignature extends VerifyWebhookSignature
             $this->refuse($request, 'no v1 signature offered');
         }
 
+        // Zapmizer delivers verify_number.* only to the team's own webhook,
+        // signed with its own secret — never to a connection's URL. Accepting
+        // one here would let whoever holds a connection's secret mark any
+        // number as verified.
+        if ($this->isVerifyNumber($request)) {
+            $this->refuse($request, 'verify_number delivery on a connection URL');
+        }
+
         $key = $request->route('zapmizerWebhookKey');
 
         if (!(is_string($key) && preg_match(static::KEY_PATTERN, $key) === 1)) {

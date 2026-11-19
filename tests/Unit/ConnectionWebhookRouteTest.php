@@ -136,6 +136,22 @@ class ConnectionWebhookRouteTest extends TestCase
         $this->assertSame([], $this->connectionQueries());
     }
 
+    public function testAVerifyNumberDeliveryOnAConnectionUrlIsRefused()
+    {
+        $this->addWebhookKeyColumn();
+        $this->connectedTeam('whsec_a', '5581911110000', ['webhook_key' => self::KEY]);
+        $this->enablePerConnection();
+
+        $envelope = $this->messageEnvelope();
+        $envelope['name'] = 'verify_number.verified';
+        $envelope['data'] = ['number' => '5511999999999', 'from' => '5581911110000'];
+
+        $this->deliverSigned($envelope, 'whsec_a', path: '/zapmizer/webhook/' . self::KEY)->assertStatus(401);
+
+        $envelope['name'] = 'Verify_Number.verified';
+        $this->deliverSigned($envelope, 'whsec_a', path: '/zapmizer/webhook/' . self::KEY)->assertStatus(401);
+    }
+
     /**
      * @return array<string, array{0: bool}>
      */

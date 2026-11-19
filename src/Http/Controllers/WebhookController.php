@@ -62,9 +62,10 @@ use Throwable;
  * middleware — applied to the route by the package — checks it against the
  * application secret (`zapmizer.webhook.secret`) and every
  * ZapmizerConnection, and hands the matching connection (null for the
- * application secret) to the handlers. `verify_number.*` events are the
- * only ones Zapmizer delivers unsigned, and the only ones accepted so;
- * their correlation uses the (canonical) phone number from the payload,
+ * application secret) to the handlers. `verify_number.*` events have their
+ * own secret (`zapmizer.verify_number.webhook_secret`): with it set they must
+ * arrive signed with it, without it they are accepted unsigned (the only
+ * events that are). Their correlation uses the (canonical) phone number from the payload,
  * matched against the state records with the Brazilian extra-9 tolerance.
  */
 class WebhookController extends Controller
@@ -342,8 +343,8 @@ class WebhookController extends Controller
     /**
      * Find the verification the payload refers to, by phone number. An
      * application that never published the verify migration (connect only)
-     * has nothing to find — and, `verify_number.*` being accepted unsigned,
-     * a forged delivery must not turn into a 500 on a missing table.
+     * has nothing to find — and, `verify_number.*` being accepted unsigned
+     * while its secret is not configured, a forged delivery must not turn into a 500 on a missing table.
      */
     protected function findVerification(array $payload): ?WhatsappVerified
     {
@@ -384,7 +385,7 @@ class WebhookController extends Controller
     /**
      * The connection whose secret signed the current delivery. Null for a
      * delivery signed with `zapmizer.webhook.secret` (single-tenant) and for
-     * the unsigned `verify_number.*` events.
+     * the `verify_number.*` events (signed with their own secret, or unsigned).
      */
     protected function connection(): ?ZapmizerConnection
     {

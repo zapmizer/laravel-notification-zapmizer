@@ -367,7 +367,7 @@ The package applies `VerifyWebhookSignature` to `POST /zapmizer/webhook` itself.
 
 It accepts a 5-minute clock drift (`zapmizer.webhook.tolerance`), refuses with **401 and a log line** (reason, wid, timestamp, ip — never the signature), and refuses an inactive connection with 403. A credential that no longer decrypts (`APP_KEY` changed) only takes its own connection out of the matching.
 
-**Unsigned deliveries** are accepted for **`verify_number.*` only** — Zapmizer sends those outside the bot, without a signature, by construction. A `message_received` (or any other event) without the signature headers is refused with 401: it was not sent by Zapmizer. There is no flag to turn this off. If you rely on `verify_number.*`, note that anyone can POST one — harden `zapmizer.routes.webhook_middleware` with an IP allowlist or a throttle (see [verify-number.md](verify-number.md#6-the-webhook)).
+**Unsigned deliveries** are accepted for **`verify_number.*` only**, and only while `zapmizer.verify_number.webhook_secret` (`ZAPMIZER_VERIFY_NUMBER_WEBHOOK_SECRET`) is empty: the verify_number webhook arrives unsigned until the team clicks "Gerar segredo" on it (Desenvolvedores → Webhooks). With the secret set, `verify_number.*` must be signed with it — and only with it — and an unsigned one gets 401 (see [verify-number.md](verify-number.md#signing-the-verify_number-deliveries)). A `message_received` (or any other event) without the signature headers is always refused with 401: it was not sent by Zapmizer. While the secret is empty, anyone can POST a `verify_number.*`.
 
 ### The `MessageReceived` and `MessageSent` events
 
@@ -951,8 +951,8 @@ The webhook route changed behaviour. Read this even if you never touch the conne
 What changed on `POST /zapmizer/webhook`:
 
 - **Breaking — bot events must be signed.** `message` and every other bot event are only accepted with a valid `X-Zapmizer-Signature`. Zapmizer signs every webhook it has (every webhook there has a secret, backfilled for the old ones), so this only breaks a webhook that Zapmizer is *not* the sender of. To keep receiving them: copy the webhook's secret from Zapmizer's "Webhooks" screen into `ZAPMIZER_WEBHOOK_SECRET`. Without it, every bot event is a 401 with a log line — you will see it.
-- **Not breaking — `verify_number.*` keeps arriving unsigned** and keeps being accepted, exactly as before. Zapmizer sends those outside the bot, without a signature.
-- There is no flag to accept unsigned bot events: nothing on Zapmizer's side is unsigned except `verify_number.*`, so a flag would only open the route to forged messages.
+- **Not breaking — `verify_number.*` keeps being accepted unsigned** until its own secret is set (`zapmizer.verify_number.webhook_secret`, 2.2; see [verify-number.md](verify-number.md)); with it, those deliveries must be signed with it.
+- There is no flag to accept unsigned bot events: nothing on Zapmizer's side is unsigned except `verify_number.*` (until its secret is generated), so a flag would only open the route to forged messages.
 - `WebhookReceived` / `WebhookHandled` gained a second, optional constructor argument (`$connection`). Listeners are unaffected; a subclass overriding the constructor is not.
 - A body that is not JSON now answers 401 (unsigned, unverifiable) instead of 400.
 

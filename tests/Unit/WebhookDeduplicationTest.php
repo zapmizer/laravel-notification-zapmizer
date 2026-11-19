@@ -149,6 +149,25 @@ class WebhookDeduplicationTest extends TestCase
         Event::assertDispatchedTimes(MessageStatusUpdated::class, 1);
     }
 
+    public function testSignedVerifyNumberEventsAreDeduplicated()
+    {
+        $this->enable();
+        config()->set('zapmizer.verify_number.webhook_secret', 'verify-secret');
+        Event::fake(self::EVENTS);
+        $user = User::create(['name' => 'Test', 'whatsapp_number' => '5511999999999']);
+        $user->whatsappVerification()->create(['number' => '5511999999999', 'status' => WhatsappVerified::STATUS_AWAITING]);
+        $envelope = [
+            'id' => '0199a3c2-7f1e-7b6a-9d2e-123456789012', 'wid' => '5581911110000@c.us', 'name' => 'verify_number.verified',
+            'version' => '2026-10-20', 'data' => ['number' => '5511999999999', 'from' => '5581999999999'],
+        ];
+
+        $this->deliverSigned($envelope, 'verify-secret')->assertOk()->assertSeeText('Webhook Handled');
+        $this->deliverSigned($envelope, 'verify-secret')->assertOk()->assertSeeText('Webhook Received');
+
+        Event::assertDispatchedTimes(WebhookReceived::class, 1);
+        Event::assertDispatchedTimes(WebhookHandled::class, 1);
+    }
+
     public function testAFailedFirstAttemptLetsTheRetryThrough()
     {
         $this->enable();

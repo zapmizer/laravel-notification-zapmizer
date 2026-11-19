@@ -574,9 +574,25 @@ class CheckCommand extends Command
             return;
         }
 
-        $exists
-            ? $this->record('verify_number_routes', self::OK, "verify-number registrado ({$user} é MustVerifyWhatsapp, tabela {$table} criada)")
-            : $this->record('verify_number_routes', self::FAIL, "tabela {$table} não existe (estado da verificação de número)", 'php artisan vendor:publish --tag=zapmizer-migrations-verify e php artisan migrate');
+        if (!$exists) {
+            $this->record('verify_number_routes', self::FAIL, "tabela {$table} não existe (estado da verificação de número)", 'php artisan vendor:publish --tag=zapmizer-migrations-verify e php artisan migrate');
+
+            return;
+        }
+
+        $registered = "verify-number registrado ({$user} é MustVerifyWhatsapp, tabela {$table} criada)";
+        $secret = config('zapmizer.verify_number.webhook_secret');
+
+        if (is_string($secret) && $secret !== '') {
+            $this->record('verify_number_routes', self::OK, $registered . '; as entregas verify_number.* só valem assinadas com ZAPMIZER_VERIFY_NUMBER_WEBHOOK_SECRET');
+
+            return;
+        }
+
+        // Deliveries only arrive through the webhook route.
+        Route::has('zapmizer.webhook')
+            ? $this->record('verify_number_routes', self::WARN, $registered . ', mas o app aceita as entregas verify_number.* sem assinatura: qualquer um que saiba a URL do webhook confirma um número', 'Em Desenvolvedores → Webhooks da Zapmizer, clique em "Gerar segredo" no webhook do verify_number e ponha o valor em ZAPMIZER_VERIFY_NUMBER_WEBHOOK_SECRET no .env (docs/verify-number.md).')
+            : $this->record('verify_number_routes', self::OK, $registered);
     }
 
     /**

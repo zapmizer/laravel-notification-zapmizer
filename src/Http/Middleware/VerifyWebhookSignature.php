@@ -22,18 +22,29 @@ use Throwable;
  * signature or a timestamp outside the tolerance window → 401, and nothing
  * is read from the body.
  *
- * Two kinds of secret can sign a delivery: the application's own
+ * Three kinds of secret can sign a delivery: the application's own
  * (`zapmizer.webhook.secret`, the webhook registered by hand for the
- * single-tenant setup) and the one of each ZapmizerConnection made through
- * the connect flow. Webhooks are registered per Zapmizer team but all land
- * on the same route: the connection is discovered here, by testing the
- * known secrets, and rides along on the request for the controller. A
- * delivery signed with the application secret carries no connection.
+ * single-tenant setup), the one of each ZapmizerConnection made through
+ * the connect flow, and the one of the verify_number webhook
+ * (`zapmizer.verify_number.webhook_secret`). Webhooks are registered per
+ * Zapmizer team but all land on the same route: the connection is
+ * discovered here, by testing the known secrets, and rides along on the
+ * request for the controller. A delivery signed with the application
+ * secret carries no connection.
  *
- * The only deliveries accepted WITHOUT a signature are `verify_number.*`:
- * Zapmizer sends those outside the bot, unsigned, by construction. Every
- * other event is signed on Zapmizer's side (every webhook over there has a
- * secret), so an unsigned `message` is a forgery and gets 401.
+ * The `verify_number.*` events have their own scope, both ways. A signed
+ * delivery whose body `name` starts with `verify_number.` is checked ONLY
+ * against the verify_number secret (no other secret, no connection query),
+ * and that secret signs nothing else. The name is peeked from the body only
+ * to choose the secret; the HMAC is the proof. Accepted, it sets
+ * VERIFY_NUMBER_SIGNED_ATTRIBUTE on the request.
+ *
+ * The only deliveries accepted WITHOUT a signature are `verify_number.*`,
+ * and only while the verify_number secret is not configured: until the team
+ * generates it on Zapmizer's side those events arrive unsigned. Once it is
+ * configured here, an unsigned `verify_number.*` is a forgery and gets 401.
+ * Every other event is signed on Zapmizer's side (every webhook over there
+ * has a secret), so an unsigned `message` is a forgery too.
  *
  * Every refusal is logged. A silent 401 is indistinguishable from "nobody
  * sent anything": if the secret rotates on Zapmizer's side, if the
@@ -46,7 +57,14 @@ class VerifyWebhookSignature
     public const CONNECTION_ATTRIBUTE = 'zapmizer_connection';
 
     /**
-     * Event name prefixes Zapmizer delivers without a signature.
+     * Set to true on the request of an accepted verify_number.* delivery
+     * that carried a valid signature (never set for an unsigned one).
+     */
+    public const VERIFY_NUMBER_SIGNED_ATTRIBUTE = 'zapmizer_verify_number_signed';
+
+    /**
+     * Event name prefixes of the verify_number webhook: signed with its own
+     * secret when one is configured, unsigned otherwise.
      *
      * @var array<int, string>
      */
@@ -82,6 +100,10 @@ class VerifyWebhookSignature
             $this->refuse($request, 'no v1 signature offered');
         }
 
+        if ($this->isVerifyNumber($request)) {
+            return $this->handleVerifyNumber($request, $next, $payload, $offered);
+        }
+
         // The application's own secret first: no query, no decryption.
         if ($this->signedWith([(string) config('zapmizer.webhook.secret')], $payload, $offered)) {
             return $next($request);
@@ -110,17 +132,78 @@ class VerifyWebhookSignature
     }
 
     /**
-     * Unsigned deliveries are accepted for the events Zapmizer never signs
-     * — the name is peeked from the body for that decision only. Anything
-     * else without a signature is refused, including a body that is not
-     * JSON.
+     * A signed verify_number.* delivery: only its own secret is tried — not
+     * the application's, not the connections' (no query) — and a missing or
+     * wrong secret is refused saying which one, so an operator who rotated
+     * it on Zapmizer's side without deploying the env finds out.
+     *
+     * @param array<int, string> $offered
+     */
+    protected function handleVerifyNumber(Request $request, Closure $next, string $payload, array $offered): Response
+    {
+        $secret = $this->verifyNumberSecret();
+
+        if ($secret === null) {
+            $this->refuse($request, 'verify_number delivery is signed, but zapmizer.verify_number.webhook_secret (ZAPMIZER_VERIFY_NUMBER_WEBHOOK_SECRET) is not configured');
+        }
+
+        if (!$this->signedWith([$secret], $payload, $offered)) {
+            $this->refuse($request, 'verify_number signature does not match zapmizer.verify_number.webhook_secret (ZAPMIZER_VERIFY_NUMBER_WEBHOOK_SECRET): was the secret rotated on Zapmizer and not deployed here?');
+        }
+
+        $request->attributes->set(self::VERIFY_NUMBER_SIGNED_ATTRIBUTE, true);
+
+        return $next($request);
+    }
+
+    /**
+     * Unsigned deliveries are accepted for the verify_number.* events while
+     * their secret is not configured — the name is peeked from the body for
+     * that decision only. With the secret configured, or for anything else
+     * (including a body that is not JSON), an unsigned delivery is refused.
      */
     protected function acceptsUnsigned(Request $request): bool
     {
-        $payload = json_decode($request->getContent(), true);
-        $name = is_array($payload) ? $payload['name'] ?? null : null;
+        return $this->isVerifyNumber($request) && $this->verifyNumberSecret() === null;
+    }
 
-        return is_string($name) && Str::startsWith($name, static::UNSIGNED_EVENT_PREFIXES);
+    /**
+     * Whether the body `name` is a verify_number.* event. Peeked to choose
+     * the secret (or to tell whether unsigned is acceptable); never trusted
+     * for anything else.
+     */
+    protected function isVerifyNumber(Request $request): bool
+    {
+        $payload = json_decode($request->getContent(), true);
+
+        return static::isVerifyNumberName(is_array($payload) ? $payload['name'] ?? null : null);
+    }
+
+    /**
+     * Whether an event name reaches the verify_number handlers. Besides the
+     * exact prefix, any name the WebhookController would dispatch to a
+     * `handleVerifyNumber*` method counts (`Verify_Number.verified`,
+     * `verify-number.verified`, ` verify_number.verified`...): otherwise a
+     * near-miss name signed with another secret would skip the verify_number
+     * scope and still mark a number verified.
+     *
+     * @param mixed $name
+     */
+    public static function isVerifyNumberName($name): bool
+    {
+        if (!is_string($name)) {
+            return false;
+        }
+
+        return Str::startsWith($name, static::UNSIGNED_EVENT_PREFIXES)
+            || Str::startsWith(Str::studly(str_replace('.', '_', $name)), 'VerifyNumber');
+    }
+
+    protected function verifyNumberSecret(): ?string
+    {
+        $secret = config('zapmizer.verify_number.webhook_secret');
+
+        return is_string($secret) && $secret !== '' ? $secret : null;
     }
 
     /**

@@ -2,6 +2,8 @@
 
 namespace NotificationChannels\Zapmizer;
 
+use Composer\InstalledVersions;
+use Illuminate\Foundation\Console\AboutCommand;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 use GuzzleHttp\Client as HttpClient;
@@ -109,6 +111,45 @@ class ZapmizerServiceProvider extends ServiceProvider
         $this->loadViewsFrom(__DIR__ . '/../resources/views', 'zapmizer');
 
         $this->registerRoutes();
+
+        if ($this->app->runningInConsole()) {
+            $this->registerAboutSection();
+        }
+    }
+
+    /**
+     * The "Zapmizer" section of `php artisan about` (Laravel 9.21+): the
+     * version, where the API points and which pieces are switched on.
+     * Secrets show only whether they are set.
+     *
+     * @return void
+     */
+    public function registerAboutSection()
+    {
+        if (!class_exists(AboutCommand::class)) {
+            return;
+        }
+
+        $isSet = fn (bool $isSet) => AboutCommand::format(
+            $isSet,
+            console: fn ($value) => $value ? '<fg=green;options=bold>SET</>' : '<fg=yellow;options=bold>NOT SET</>',
+        );
+
+        AboutCommand::add('Zapmizer', fn () => [
+            'Version' => class_exists(InstalledVersions::class) && InstalledVersions::isInstalled('zapmizer/laravel-notification-zapmizer')
+                ? InstalledVersions::getPrettyVersion('zapmizer/laravel-notification-zapmizer')
+                : null,
+            'Base URI' => config('zapmizer.base_uri'),
+            'API version' => config('zapmizer.api_version') ?: 'legacy',
+            'API token' => $isSet(filled(config('zapmizer.api_token'))),
+            'Partner' => $isSet(filled(config('zapmizer.partner.id')) && filled(config('zapmizer.partner.secret'))),
+            'Routes' => RouteGroups::routesEnabled()
+                ? (implode(', ', array_filter(RouteGroups::ALL, fn ($group) => RouteGroups::enabled($group))) ?: 'none')
+                : 'off',
+            'Webhook secret' => $isSet(filled(config('zapmizer.webhook.secret'))),
+            'Verify number webhook secret' => $isSet(filled(config('zapmizer.verify_number.webhook_secret'))),
+            'Transport' => config('zapmizer.http.transport') ?: LaravelHttpTransport::class,
+        ]);
     }
 
     /**

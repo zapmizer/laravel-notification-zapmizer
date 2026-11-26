@@ -228,6 +228,8 @@ php artisan zapmizer:check --json   # para agentes
 php artisan zapmizer:check --offline
 ```
 
+Para um resumo rápido, sem chamar a API, o `php artisan about --only=zapmizer` (Laravel 9.21 ou mais novo) mostra a versão da lib, a `base_uri`, a `api_version`, os grupos de rota ligados e o transporte. Dos segredos (token, parceiro, webhook e verify_number), mostra só se estão configurados.
+
 O check confere **só o que está ligado**: o envio sempre; o connect, o webhook, a caixa de entrada e o verify-number só com o grupo ligado (`ZAPMIZER_ROUTES_*`). Um grupo desligado aparece como `off` (○), com a dica de como ligar, e não conta como falha nem como aviso: um app que só envia passa com todos os grupos em `off`. As dependências entre os grupos continuam valendo: a caixa ligada sem o connect falha, e o connect ligado sem o webhook avisa.
 
 Sai com código diferente de zero só quando algo crítico falha (`fail`); `ok`, `warn`, `skip` e `off` saem com 0. As chamadas externas só leem:

@@ -1,5 +1,10 @@
 # Changelog
 
+# 2.3.0
+
+- **A lib aparece no `php artisan about`.** A seção "Zapmizer" (`php artisan about --only=zapmizer`, Laravel 9.21 ou mais novo) mostra a versão da lib, a `base_uri`, a `api_version` (`legacy` quando vazia), os grupos de rota ligados (`none` sem nenhum, `off` com `ZAPMIZER_ROUTES_ENABLED=false`) e o transporte. Dos segredos (token da API, credenciais de parceiro, `webhook.secret` e `verify_number.webhook_secret`) mostra só se estão configurados, nunca o valor. Também sai no `--json`. Não chama a API: para conferir a integração, siga com o `zapmizer:check`.
+- Sem breaking: no Laravel 8 a seção não é registrada.
+
 # 2.2.0
 
 - **O webhook do verify_number passa a ser assinado, com um segredo próprio.** Até aqui os eventos `verify_number.*` chegavam sem assinatura e a lib os aceitava assim, então qualquer um que soubesse a URL do webhook podia postar um `verify_number.verified` e confirmar um número. A Zapmizer agora gera um segredo para esse webhook (Desenvolvedores → Webhooks, "Gerar segredo"), separado do `zapmizer.webhook.secret` e dos segredos das conexões; com ele, as entregas vêm assinadas como as do bot. A nova chave é `zapmizer.verify_number.webhook_secret` (`ZAPMIZER_VERIFY_NUMBER_WEBHOOK_SECRET`). Preenchida: um `verify_number.*` assinado é conferido só contra ela (nenhum outro segredo e nenhuma consulta às conexões), e ela não assina nenhum outro evento; um `verify_number.*` sem assinatura leva 401; uma assinatura errada, ou sem o segredo configurado, também, e o log diz qual segredo falta ou não bate. Vazia: as entregas sem assinatura seguem aceitas, como na 2.1. A troca do segredo (duas assinaturas na entrega) funciona sem mudança.
